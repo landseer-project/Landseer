@@ -1,0 +1,64 @@
+ {
+  "dataset": {
+    "name": "cardio",
+    "train_path": "/home/dhr33ti/MLProject/landseer/dataset/cardio.mat",
+    "test_path": "/home/dhr33ti/MLProject/landseer/dataset/cardio.mat"
+  },
+  "pipeline": {
+    "pre_processing": {
+      "tool": "xgbod",
+      "docker_image": "xgbod:latest",
+      "command": "python tool1.py",
+      "input": {
+        "type": "dataset",
+        "path": "${dataset.test_path}"
+      },
+      "output": {
+        "type": "labels",
+        "path": "dataset/"
+      }
+    },
+    "processing": {
+      "tool": "filter_normal",
+      "script": "filter_dataset.py",
+      "input": {
+        "type": "stdin",
+        "source": "pre_processing.output"
+      },
+      "output": {
+        "type": "dataset",
+        "path": "./filtered_data"
+      }
+    },
+    "post_processing": {
+      "tool": "model_trainer",
+      "docker_image": "tool2_image:latest",
+      "command": "python tool2.py",
+      "parameters": {
+        "train_db_path": "${processing.output.path}",
+        "test_db_path": "${processing.output.path}",
+        "dataset": "${dataset.name}",
+        "batch_size": "${dataset.batch_size}",
+        "max_epochs": 60
+      }
+    }
+  },
+  "logging": {
+    "level": "INFO",
+    "path": "./logs",
+    "filename": "pipeline.log"
+  },
+  "docker": {
+    "volumes": {
+      "data": {
+        "host_path": "./data",
+        "container_path": "/app/data"
+      },
+      "filtered_data": {
+        "host_path": "./filtered_data",
+        "container_path": "/app/filtered_data"
+      }
+    },
+    "network": "pipeline_network"
+  }
+}
