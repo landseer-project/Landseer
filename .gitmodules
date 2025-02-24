@@ -1,0 +1,9 @@
+[submodule "tools/xgbod"]
+	path = tools/xgbod
+	url = https://github.com/landseer-project/XGBOD
+[submodule "tools/watermarknn"]
+	path = tools/watermarknn
+	url = https://github.com/landseer-project/WatermarkNN
+[submodule "tools/tcav"]
+	path = tools/tcav
+	url = https://github.com/landseer-project/tcav
