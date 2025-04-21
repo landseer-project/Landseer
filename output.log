@@ -1,0 +1,108 @@
+Loading and processing manually downloaded CelebA dataset...
+train data saved to /output/data.npy
+train labels saved to /output/labels.npy
+Successfully processed and saved CelebA data to /output
+Dataset statistics:
+  Training set: 162079 images, 78101 smiling (48.19%)
+  Test set:     40520 images, 19568 smiling (48.29%)
+Loading and processing manually downloaded CelebA dataset...
+train data saved to /output/data.npy
+train labels saved to /output/labels.npy
+Successfully processed and saved CelebA data to /output
+Dataset statistics:
+  Training set: 162079 images, 78101 smiling (48.19%)
+  Test set:     40520 images, 19568 smiling (48.29%)
+Loading and processing manually downloaded CelebA dataset...
+train data saved to /output/data.npy
+train labels saved to /output/labels.npy
+Successfully processed and saved CelebA data to /output
+Dataset statistics:
+  Training set: 162079 images, 78101 smiling (48.19%)
+  Test set:     40520 images, 19568 smiling (48.29%)
+/opt/conda/lib/python3.10/site-packages/torch/nn/_reduction.py:42: UserWarning: size_average and reduce args will be deprecated, please use reduction='sum' instead.
+  warnings.warn(warning.format(ret))
+Loading and processing manually downloaded CelebA dataset...
+train data saved to /output/data.npy
+train labels saved to /output/labels.npy
+Successfully processed and saved CelebA data to /output
+Dataset statistics:
+  Training set: 162079 images, 78101 smiling (48.19%)
+  Test set:     40520 images, 19568 smiling (48.29%)
+/opt/conda/lib/python3.10/site-packages/torch/nn/_reduction.py:42: UserWarning: size_average and reduce args will be deprecated, please use reduction='sum' instead.
+  warnings.warn(warning.format(ret))
+Loading CelebA with attribute 'Smiling'...
+Splitting dataset...
+Applying feature squeezing...
+Saving files...
+saved train data to /output/data.npy
+saved train labels to /output/labels.npy
+Results saved to /output:
+- train_data.npy: (162079, 3, 32, 32)
+- train_labels.npy: (162079,)
+- test_data.npy: (40520, 3, 32, 32)
+- test_labels.npy: (40520,)
+Done!
+Loading CelebA with attribute 'Smiling'...
+Splitting dataset...
+Applying feature squeezing...
+Saving files...
+saved train data to /output/data.npy
+saved train labels to /output/labels.npy
+Results saved to /output:
+- train_data.npy: (162079, 3, 32, 32)
+- train_labels.npy: (162079,)
+- test_data.npy: (40520, 3, 32, 32)
+- test_labels.npy: (40520,)
+Done!
+Loading CelebA with attribute 'Smiling'...
+Splitting dataset...
+Applying feature squeezing...
+Saving files...
+saved train data to /output/data.npy
+saved train labels to /output/labels.npy
+Results saved to /output:
+- train_data.npy: (162079, 3, 32, 32)
+- train_labels.npy: (162079,)
+- test_data.npy: (40520, 3, 32, 32)
+- test_labels.npy: (40520,)
+Done!
+/opt/conda/lib/python3.10/site-packages/torch/nn/_reduction.py:42: UserWarning: size_average and reduce args will be deprecated, please use reduction='sum' instead.
+  warnings.warn(warning.format(ret))
+Loading CelebA with attribute 'Smiling'...
+Splitting dataset...
+Applying feature squeezing...
+Saving files...
+saved train data to /output/data.npy
+saved train labels to /output/labels.npy
+Results saved to /output:
+- train_data.npy: (162079, 3, 32, 32)
+- train_labels.npy: (162079,)
+- test_data.npy: (40520, 3, 32, 32)
+- test_labels.npy: (40520,)
+Done!
+/opt/conda/lib/python3.10/site-packages/torch/nn/_reduction.py:42: UserWarning: size_average and reduce args will be deprecated, please use reduction='sum' instead.
+  warnings.warn(warning.format(ret))
+
+=== Running Pipeline: pre_noop_in_noop_post_noop ===
+Train Acc: 93.73% | Test Acc: 91.15% | PGD Acc: 0.00% | AUROC: 0.7412 | ASR: 53.21%
+
+=== Running Pipeline: pre_noop_in_noop_post_fineprune ===
+Train Acc: 89.37% | Test Acc: 88.75% | PGD Acc: 0.00% | AUROC: 0.7863 | ASR: 45.48%
+
+=== Running Pipeline: pre_noop_in_trades_post_noop ===
+Train Acc: 87.24% | Test Acc: 87.42% | PGD Acc: 59.53% | AUROC: 0.6597 | ASR: 57.56%
+
+=== Running Pipeline: pre_noop_in_trades_post_fineprune ===
+Train Acc: 84.39% | Test Acc: 84.63% | PGD Acc: 54.36% | AUROC: 0.5366 | ASR: 47.60%
+
+=== Running Pipeline: pre_celeba_in_noop_post_noop ===
+Train Acc: 93.24% | Test Acc: 90.82% | PGD Acc: 0.00% | AUROC: 0.6960 | ASR: 53.06%
+
+=== Running Pipeline: pre_celeba_in_noop_post_fineprune ===
+Train Acc: 90.09% | Test Acc: 89.16% | PGD Acc: 0.00% | AUROC: 0.7983 | ASR: 46.63%
+
+=== Running Pipeline: pre_celeba_in_trades_post_noop ===
+Train Acc: 87.19% | Test Acc: 87.42% | PGD Acc: 57.74% | AUROC: 0.5621 | ASR: 57.20%
+
+=== Running Pipeline: pre_celeba_in_trades_post_fineprune ===
+Train Acc: 84.39% | Test Acc: 84.59% | PGD Acc: 55.58% | AUROC: 0.4256 | ASR: 52.22%
