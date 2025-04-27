@@ -1,0 +1,44 @@
+Test Accuracy: 10.00%
+Test Accuracy: 10.00%
+Test Accuracy: 10.00%
+
+Final privacy cost: ε = 0.68, δ = 1e-05
+Saving to: /output/privacy_values.txt
+Test Accuracy: 10.00%
+
+Final privacy cost: ε = 0.68, δ = 1e-05
+Saving to: /output/privacy_values.txt
+Test Accuracy: 10.00%
+Test Accuracy: 10.00%
+Test Accuracy: 10.00%
+
+Final privacy cost: ε = 0.68, δ = 1e-05
+Saving to: /output/privacy_values.txt
+Test Accuracy: 9.93%
+
+Final privacy cost: ε = 0.68, δ = 1e-05
+Saving to: /output/privacy_values.txt
+
+=== Running Pipeline: pre_noop_in_noop_post_noop ===
+Train Acc: 9.05% | Test Acc: 9.06% | AUROC Outl: 8.03% | Epsilon: 0.00 - Delta: 0.0 | ASR: 0.00%
+
+=== Running Pipeline: pre_noop_in_noop_post_fineprune ===
+Train Acc: 10.54% | Test Acc: 10.60% | AUROC Outl: 1.81% | Epsilon: 0.00 - Delta: 0.0 | ASR: 0.04%
+
+=== Running Pipeline: pre_noop_in_dp_post_noop ===
+Train Acc: 10.34% | Test Acc: 10.30% | AUROC Outl: 62.19% | Epsilon: 0.68 - Delta: 1e-05 | ASR: 0.00%
+
+=== Running Pipeline: pre_noop_in_dp_post_fineprune ===
+Train Acc: 11.56% | Test Acc: 11.34% | AUROC Outl: 51.52% | Epsilon: 0.68 - Delta: 1e-05 | ASR: 10.51%
+
+=== Running Pipeline: pre_squeeze_in_noop_post_noop ===
+Train Acc: 10.07% | Test Acc: 10.08% | AUROC Outl: 12.24% | Epsilon: 0.00 - Delta: 0.0 | ASR: 0.00%
+
+=== Running Pipeline: pre_squeeze_in_noop_post_fineprune ===
+Train Acc: 10.00% | Test Acc: 10.00% | AUROC Outl: 6.40% | Epsilon: 0.00 - Delta: 0.0 | ASR: 0.00%
+
+=== Running Pipeline: pre_squeeze_in_dp_post_noop ===
+Train Acc: 9.65% | Test Acc: 9.65% | AUROC Outl: 54.24% | Epsilon: 0.68 - Delta: 1e-05 | ASR: 0.00%
+
+=== Running Pipeline: pre_squeeze_in_dp_post_fineprune ===
+Train Acc: 8.19% | Test Acc: 8.37% | AUROC Outl: 38.20% | Epsilon: 0.68 - Delta: 1e-05 | ASR: 0.00%

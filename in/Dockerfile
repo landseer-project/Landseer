@@ -1,5 +1,5 @@
-FROM pytorch/pytorch:2.0.0-cuda11.7-cudnn8-runtime
+FROM python:3.10-slim
 WORKDIR /app
-COPY defense.py trades.py /app/
-COPY normal.py /app/
-RUN pip install torchvision torchattacks
+COPY . /app/
+COPY defense.py /app/
+RUN pip install torch torchvision opacus pandas numpy tqdm scikit-learn

@@ -13,6 +13,24 @@ from config_model import config
 with open("./config.json", "r") as file:
     defense_args = json.load(file)
 
+
+def load_privacy_values(pipeline_id):
+    try:
+        # Construct the exact path where defense.py saves the file
+        file_path = f"./output/{pipeline_id}/privacy_values.txt"
+        
+        # print(f"[DEBUG] Attempting to read from: {os.path.abspath(file_path)}")  # Debug line
+        
+        with open(file_path, 'r') as f:
+            lines = f.readlines()
+            epsilon = float(lines[0].split('=')[1].strip())
+            delta = float(lines[1].split('=')[1].strip())
+            return epsilon, delta
+            
+    except Exception as e:
+        # print(f"[ERROR] Failed to read privacy values: {str(e)}")
+        return 0.0, 0.0
+
 def add_backdoor_trigger(images, target_label, trigger_value=1.0):
     images[:, :, -3:, -3:] = trigger_value
     labels = torch.full((images.size(0),), target_label, dtype=torch.long)
@@ -80,30 +98,30 @@ def run_containerized_pipeline(pre_def, in_def, post_def, output_path):
 
     # Pre-training
     pre_script = "defense.py" if pre_def != "noop" else "normal.py"
-    # pre_script = "feature_squeeze_celebA.py" if pre_def != "noop" else "normal.py"
     image = list(defense_args["pre"].keys())[0]
     args = defense_args["pre"].get(pre_def, [])
     subprocess.run([
         "docker", "run", "--rm",
         # "-v", f"{base_data_path}:/data",
         "-v", f"{output_path}:/output",
-        # "-v", "/share/landseer/img_align_celeba:/app/data/celeba/img_align_celeba",
-        # "-v", "/share/landseer/Improving-Fairness-in-Image-Classification-via-Sketching/face_image_classification(CelebA)/dataset/list_attr_celeba.csv:/app/data/celeba/list_attr_celeba.csv",
         f"pre_{image}",
         "python3", pre_script
     ] + args)
 
     # In-training
-    in_script = "defense.py" if in_def != "noop" else "normal.py"
+    in_script = "defense.py"
     image = list(defense_args["in"].keys())[0]
     args = defense_args["in"].get(in_def, [])
     subprocess.run([
         "docker", "run", "--rm", "--gpus", "all",
         "-v", f"{output_path}:/output",
         "-v", "./config_model.py:/app/config_model.py",
+        # "-v", "/share/landseer/img_align_celeba:/app/data/celeba/img_align_celeba",
+        # "-v", "/share/landseer/Improving-Fairness-in-Image-Classification-via-Sketching/face_image_classification(CelebA)/dataset/list_attr_celeba.csv:/app/data/celeba/list_attr_celeba.csv",
         f"in_{image}",
         "python3", in_script
     ] + args)
+
 
     # Post-training
     image = list(defense_args["post"].keys())[0]
@@ -121,7 +139,7 @@ def run_containerized_pipeline(pre_def, in_def, post_def, output_path):
 
 if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    combinations = list(itertools.product(['noop', 'squeeze'], ['noop', 'trades'], ['noop', 'fineprune']))
+    combinations = list(itertools.product(['noop', 'squeeze'], ['noop', 'dp'], ['noop', 'fineprune']))
     final_results = {}
 
     for pre_def, in_def, post_def in combinations:
@@ -142,7 +160,7 @@ if __name__ == '__main__':
             continue
 
         model = config().to(device)
-        model.load_state_dict(torch.load(model_path, map_location=device))
+        model.load_state_dict(torch.load(model_path, map_location=device), strict=False)
 
         train_X = torch.from_numpy(np.load(train_data_path)).float()
         train_y = torch.from_numpy(np.load(train_labels_path)).long()
@@ -154,35 +172,39 @@ if __name__ == '__main__':
 
         clean_acc_train = evaluate_clean(model, train_loader, device)
         clean_acc_test = evaluate_clean(model, test_loader, device)
-        pgd_acc = evaluate_pgd(model, test_loader, device)
+        # pgd_acc = evaluate_pgd(model, test_loader, device)
+        epsilon, delta = load_privacy_values(pipeline_id)
         outlier_score = evaluate_outlier(model, test_loader, DataLoader(TensorDataset(generate_ood_samples(test_X), test_y), batch_size=64), device)
         backdoor_success = evaluate_backdoor(model, DataLoader(TensorDataset(*add_backdoor_trigger(test_X.clone(), 0)), batch_size=64), 0, device)
 
         result = {
             'Clean Train Accuracy': clean_acc_train,
             'Clean Test Accuracy': clean_acc_test,
-            'PGD Accuracy': pgd_acc,
+            # 'PGD Accuracy': pgd_acc,
+            'Epsilon': epsilon,
+            'Delta': delta,
             'Outlier AUROC': outlier_score,
             'Backdoor ASR': backdoor_success
         }
 
         final_results[pipeline_id] = result
 
-        print(f"Train Acc: {clean_acc_train*100:.2f}% | Test Acc: {clean_acc_test*100:.2f}% | PGD Acc: {pgd_acc*100:.2f}% | AUROC: {outlier_score:.4f} | ASR: {backdoor_success*100:.2f}%")
+        print(f"Train Acc: {clean_acc_train*100:.2f}% | Test Acc: {clean_acc_test*100:.2f}% | AUROC Outl: {outlier_score*100:.2f}% | Epsilon: {epsilon:.2f} - Delta: {delta} | ASR: {backdoor_success*100:.2f}%")
 
         with open(os.path.join(output_dir, "metrics.json"), 'w') as f:
             json.dump(result, f, indent=2)
 
     with open("./output/summary.csv", 'w') as f:
-        headers = ["Pipeline", "Clean Train Accuracy", "Clean Test Accuracy", "PGD Accuracy", "Outlier AUROC", "Backdoor ASR"]
+        headers = ["Pipeline", "Clean Train Accuracy", "Clean Test Accuracy", "Outlier AUROC", "DP Epsilon and Delta", "Backdoor ASR"]
         f.write(",".join(headers) + "\n")
         for pipeline, metrics in final_results.items():
             row = [
                 pipeline,
                 f"{metrics['Clean Train Accuracy']:.4f}",
                 f"{metrics['Clean Test Accuracy']:.4f}",
-                f"{metrics['PGD Accuracy']:.4f}",
                 f"{metrics['Outlier AUROC']:.4f}",
+                # f"{metrics['PGD Accuracy']:.4f}",
+                f"{metrics['Epsilon']:.4f} - {metrics['Delta']:.4f}",
                 f"{metrics['Backdoor ASR']:.4f}"
             ]
             f.write(",".join(row) + "\n")
