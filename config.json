@@ -1,6 +1,6 @@
 {
     "pre": {
-        "celeba": ["--bit-depth", "4"],
+        "squeeze": ["--bit-depth", "4"],
         "noop": []
     },
     "in": {

@@ -79,16 +79,16 @@ def run_containerized_pipeline(pre_def, in_def, post_def, output_path):
     os.makedirs(output_path, exist_ok=True)
 
     # Pre-training
-    #pre_script = "defense.py" if pre_def != "noop" else "normal.py"
-    pre_script = "feature_squeeze_celebA.py" if pre_def != "noop" else "normal.py"
+    pre_script = "defense.py" if pre_def != "noop" else "normal.py"
+    # pre_script = "feature_squeeze_celebA.py" if pre_def != "noop" else "normal.py"
     image = list(defense_args["pre"].keys())[0]
     args = defense_args["pre"].get(pre_def, [])
     subprocess.run([
         "docker", "run", "--rm",
         # "-v", f"{base_data_path}:/data",
         "-v", f"{output_path}:/output",
-        "-v", "/share/landseer/img_align_celeba:/app/data/celeba/img_align_celeba",
-        "-v", "/share/landseer/Improving-Fairness-in-Image-Classification-via-Sketching/face_image_classification(CelebA)/dataset/list_attr_celeba.csv:/app/data/celeba/list_attr_celeba.csv",
+        # "-v", "/share/landseer/img_align_celeba:/app/data/celeba/img_align_celeba",
+        # "-v", "/share/landseer/Improving-Fairness-in-Image-Classification-via-Sketching/face_image_classification(CelebA)/dataset/list_attr_celeba.csv:/app/data/celeba/list_attr_celeba.csv",
         f"pre_{image}",
         "python3", pre_script
     ] + args)
@@ -121,7 +121,7 @@ def run_containerized_pipeline(pre_def, in_def, post_def, output_path):
 
 if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    combinations = list(itertools.product(['noop', 'celeba'], ['noop', 'trades'], ['noop', 'fineprune']))
+    combinations = list(itertools.product(['noop', 'squeeze'], ['noop', 'trades'], ['noop', 'fineprune']))
     final_results = {}
 
     for pre_def, in_def, post_def in combinations:
