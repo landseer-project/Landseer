@@ -1,0 +1,24 @@
+
+=== Running Pipeline: pre_noop_in_noop_post_noop ===
+Train Acc: 97.62% | Test Acc: 76.15% | PGD Acc: 0.30% | AUROC: 0.7190 | ASR: 9.27%
+
+=== Running Pipeline: pre_noop_in_noop_post_fineprune ===
+Train Acc: 78.81% | Test Acc: 59.54% | PGD Acc: 0.28% | AUROC: 0.7463 | ASR: 8.33%
+
+=== Running Pipeline: pre_noop_in_trades_post_noop ===
+Train Acc: 97.74% | Test Acc: 71.59% | PGD Acc: 21.71% | AUROC: 0.6270 | ASR: 8.45%
+
+=== Running Pipeline: pre_noop_in_trades_post_fineprune ===
+Train Acc: 85.00% | Test Acc: 64.66% | PGD Acc: 29.58% | AUROC: 0.8815 | ASR: 8.56%
+
+=== Running Pipeline: pre_squeeze_in_noop_post_noop ===
+Train Acc: 98.34% | Test Acc: 76.28% | PGD Acc: 0.33% | AUROC: 0.4724 | ASR: 10.22%
+
+=== Running Pipeline: pre_squeeze_in_noop_post_fineprune ===
+Train Acc: 89.69% | Test Acc: 69.44% | PGD Acc: 0.25% | AUROC: 0.2060 | ASR: 8.60%
+
+=== Running Pipeline: pre_squeeze_in_trades_post_noop ===
+Train Acc: 98.47% | Test Acc: 70.80% | PGD Acc: 20.41% | AUROC: 0.7704 | ASR: 8.96%
+
+=== Running Pipeline: pre_squeeze_in_trades_post_fineprune ===
+Train Acc: 91.43% | Test Acc: 64.99% | PGD Acc: 24.56% | AUROC: 0.5716 | ASR: 5.27%
