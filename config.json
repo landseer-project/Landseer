@@ -1,11 +1,11 @@
 {
     "pre": {
-        "squeeze": ["--bit-depth", "4"],
+        "celeba": ["--bit-depth", "4"],
         "noop": []
     },
     "in": {
-        "dp": ["--enable_dp"],
-        "noop": []
+        "trades": ["--epochs", "20", "--epsilon", "0.031"],
+        "noop": ["--epochs", "20"]
     },
     "post": {
         "fineprune": ["--prune-percentage", "0.1"],
