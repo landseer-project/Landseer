@@ -1,0 +1,91 @@
+ {
+  "dataset": {
+    "cifar-10": {
+      "link": "https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz",
+      "format": "pickle",
+      "shasum": "c58f30108f718f92721af3b95e74349a"
+    }
+  },
+  "pipeline": {
+    "pre_training": [
+        {
+            "tool_name": "feature-squeeze",
+            "description": "Pipeline-1 pre",
+            "input": ["dataset", "h5"],        
+            "output_path": "ir_dataset_clean.h5",  
+            "docker": {
+                "Dockerfile": "../../landseer-pipeline/pre",
+                "image": ""  
+            }
+        },
+        {
+            "tool_name": "XGBOD",
+            "description": "Applies data augmentation to increase dataset size/variety",
+            "input": ["dataset", "h5"],
+            "output_path": "ir_dataset_aug.h5",
+            "docker": {
+                "Dockerfile": "../../landseer-pipeline/in/xgbod_v2/Dockerfile-main", 
+                "image": ""  
+            }
+        }
+    ],
+    "during_training": [
+        {
+            "tool_name": "Trades",
+            "description": "Pipeline 1 - in",
+            "input": ["dataset", "h5"],
+            "output_path": "ir_model_defended.h5",  
+            "model_config": {
+                "model_name": "resnet18",
+                "pretrained": true,
+                "output_classes": 10
+            },
+            "docker": {
+                "Dockerfile": "../../landseer-pipeline/in/trades/Dockerfile",
+                "image": ""
+            }
+        },
+        {
+            "tool_name": "Pipeline 2 - in",
+            "description": "Trains model with differentially private SGD",
+            "input": ["dataset", "h5"],
+            "output_path": "ir_model_dp.h5",
+            "docker": {
+                "Dockerfile": "../../landseer-pipeline/post/Dockerfile", 
+                "image": ""  
+            }
+        }
+    ],
+    "post_training": [
+        {
+            "tool_name": "fine pruning",
+            "description": "Pipeline 1 - post",
+            "input": ["model", "h5"],          
+            "output_path": "ir_model_pruned.h5",
+            "docker": {
+                "Dockerfile": "../../landseer-pipeline/post/Dockerfile",
+                "image": ""
+            }
+        },
+        {
+            "tool_name": "Pipeline 2 - post",
+            "description": "Applies knowledge distillation to remove backdoors",
+            "input": ["model", "h5"],
+            "output_path": "ir_model_kd.h5",
+            "docker": {
+                "Dockerfile": "", 
+                "image": "myregistry/kd_defense:latest"
+            }
+        }
+    ]
+  },
+  "docker": {
+    "volumes": {
+      "data": {
+        "host_path": "./data",
+        "container_path": "/app/data"
+      } 
+    },
+    "network": "pipeline_network"
+  }
+}
