@@ -1,11 +1,11 @@
 {
     "pre": {
-        "celeba": ["--bit-depth", "4"],
-        "noop": []
+        "celeba": ["--bit-depth", "4", "--data_dir", "/app/data/celeba"],
+        "noop": ["--data_dir", "/app/data/celeba"]
     },
     "in": {
-        "trades": ["--epochs", "20", "--epsilon", "0.031"],
-        "noop": ["--epochs", "20"]
+        "dp": ["--enable_dp"],
+        "noop": []
     },
     "post": {
         "fineprune": ["--prune-percentage", "0.1"],

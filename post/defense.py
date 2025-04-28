@@ -6,6 +6,29 @@ import numpy as np
 from torch.utils.data import DataLoader, TensorDataset
 from config_model import config
 
+
+#Add by Rossemary
+def load_model_weights(model, model_path, device):
+    """Load weights into existing model, handling both DP and non-DP formats"""
+    state_dict = torch.load(model_path, map_location=device)
+    
+    # Try loading as non-DP model first
+    try:
+        model.load_state_dict(state_dict)
+        return model
+    except RuntimeError:
+        pass
+    
+    # If failed, try DP-wrapped format
+    try:
+        # Convert keys to DP format (add _module prefix)
+        dp_state_dict = {f'_module.{k}':v for k,v in state_dict.items()}
+        model.load_state_dict(dp_state_dict)
+        return model
+    except RuntimeError as e:
+        raise RuntimeError(f"Failed to load weights in either format. Error: {str(e)}")
+
+
 def neuron_activation_scores(model, loader, device):
     """
     Example function that returns average activation magnitude per neuron
@@ -103,9 +126,11 @@ def main():
     # 1. Load your trained model
     # This example is a placeholder. Replace with your actual architecture or
     # load the same definition used in the training script.
-    model = config()
-    model.load_state_dict(torch.load("/output/model.pt", map_location=device))
-    model.to(device)
+    model = config().to(device)
+    load_model_weights(model, "/output/model.pt", device)
+    # model = config()
+    # model.load_state_dict(torch.load("/output/model.pt", map_location=device))
+    # model.to(device)
 
     # 2. Load clean data for measuring neuron activation
     data_np = np.load("/output/data.npy")

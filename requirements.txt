@@ -3,3 +3,4 @@ numpy
 torchattacks
 scikit-learn
 pandas
+opacus

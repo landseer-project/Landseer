@@ -1,3 +1,14 @@
-docker build -t pre_celeba .
+docker build -t in_dp .
 
 
+Model Saving/Loading:
+DP models get wrapped with _module prefix
+Must handle this prefix when saving/loading
+Non-DP models work normally
+
+Loading:
+state_dict = torch.load("/output/model.pt")
+if args.enable_dp:
+    # Add '_module.' prefix if loading a DP-trained model
+    state_dict = {f'_module.{k}': v for k, v in state_dict.items()}
+model.load_state_dict(state_dict, strict=True)

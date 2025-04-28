@@ -74,7 +74,7 @@ def split_dataset(images, labels, train_ratio=0.8, random_seed=42):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Process CelebA dataset with feature squeezing")
-    parser.add_argument("--data-dir", default="./data/celeba",
+    parser.add_argument("--data_dir", default="./data/celeba",
                       help="Path to CelebA directory with img_align_celeba and list_attr_celeba.csv")
     parser.add_argument("--attribute", default="Smiling",
                       help="Attribute to use as label (default: Smiling)")
@@ -88,124 +88,35 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     # 1. Load dataset
-    print(f"Loading CelebA with attribute '{args.attribute}'...")
+    # print(f"Loading CelebA with attribute '{args.attribute}'...")
     X, Y = load_celeba(args.data_dir, args.attribute, (32, 32)) 
     
     # 2. Split dataset
-    print("Splitting dataset...")
+    # print("Splitting dataset...")
     X_train, Y_train, X_test, Y_test = split_dataset(X, Y, args.train_ratio)
     
     # 3. Apply feature squeezing
-    print("Applying feature squeezing...")
+    # print("Applying feature squeezing...")
     X_train_squeezed = feature_squeezing(X_train, args.bit_depth)
     X_test_squeezed = feature_squeezing(X_test, args.bit_depth)
     
     # 4. Save as .npy files
-    print("Saving files...")
+    # print("Saving files...")
     os.makedirs(args.output, exist_ok=True)
     
     # Save as .npy files
     np.save(args.output + '/data.npy', X_train_squeezed)
-    print(f"saved train data to {args.output}/data.npy")
+    # print(f"saved train data to {args.output}/data.npy")
     np.save(args.output + '/labels.npy', Y_train)
-    print(f"saved train labels to {args.output}/labels.npy")
+    # print(f"saved train labels to {args.output}/labels.npy")
     np.save(args.output + '/test_data.npy', X_test_squeezed)
     np.save(args.output + '/test_labels.npy', Y_test)
 
     
-    print(f"Results saved to {args.output}:")
-    print(f"- train_data.npy: {X_train_squeezed.shape}")
-    print(f"- train_labels.npy: {Y_train.shape}")
-    print(f"- test_data.npy: {X_test_squeezed.shape}")
-    print(f"- test_labels.npy: {Y_test.shape}")
-    print("Done!")
+    # print(f"Results saved to {args.output}:")
+    # print(f"- train_data.npy: {X_train_squeezed.shape}")
+    # print(f"- train_labels.npy: {Y_train.shape}")
+    # print(f"- test_data.npy: {X_test_squeezed.shape}")
+    # print(f"- test_labels.npy: {Y_test.shape}")
+    # print("Done!")
 
-
-# import numpy as np
-# import argparse
-# import os
-# import torch
-# import torchvision
-# import torchvision.transforms as transforms
-
-# def feature_squeezing(X, bit_depth=4):
-#     max_val = 2 ** bit_depth - 1
-#     return np.round(X * max_val) / max_val
-
-# if __name__ == '__main__':
-#     parser = argparse.ArgumentParser(description="Dynamically download + Feature Squeeze CelebA")
-#     parser.add_argument("--output", default="/app/output", help="Output directory for .npy files")
-#     parser.add_argument("--bit-depth", type=int, default=4, help="Bit depth for squeezing")
-#     parser.add_argument("--download-dir", default="/app/data", help="Directory to download CelebA")
-#     parser.add_argument("--image-size", type=int, default=32, help="Size to resize images to")
-#     parser.add_argument("--attribute", default="Smiling", help="Which attribute to use as labels")
-#     args = parser.parse_args()
-
-#     # Define transforms with resizing and normalization
-#     transform = transforms.Compose([
-#         transforms.Resize(args.image_size),
-#         transforms.CenterCrop(args.image_size),
-#         transforms.ToTensor(),
-#     ])
-
-#     # 1. Download CelebA (automatically splits into train/test)
-#     train_dataset = torchvision.datasets.CelebA(
-#         root=args.download_dir,
-#         split='train',
-#         target_type='attr',
-#         transform=transform,
-#         download=True
-#     )
-
-#     # val_dataset = torchvision.datasets.CelebA(
-#     #     root=args.download_dir,
-#     #     split='valid',
-#     #     target_type='attr',
-#     #     transform=transform,
-#     #     download=True
-#     # )
-
-#     test_dataset = torchvision.datasets.CelebA(
-#         root=args.download_dir,
-#         split='test',
-#         target_type='attr',
-#         transform=transform,
-#         download=True
-#     )
-
-#     # Function to process a dataset split
-#     def process_dataset(dataset, attribute):
-#         # Get index of the requested attribute
-#         attr_names = dataset.attr_names
-#         attr_idx = attr_names.index(attribute)
-        
-#         # Stack images and extract selected attribute
-#         X = np.stack([np.array(img) for img, _ in dataset])
-#         Y = np.array([attrs[attr_idx] for _, attrs in dataset])
-#         return X, Y
-
-#     # 2. Process each split
-#     X_train, Y_train = process_dataset(train_dataset, args.attribute)
-#    # X_val, Y_val = process_dataset(val_dataset, args.attribute)
-#     X_test, Y_test = process_dataset(test_dataset, args.attribute)
-
-#     # 3. Apply feature squeezing
-#     X_train_squeezed = feature_squeezing(X_train, args.bit_depth)
-#    # X_val_squeezed = feature_squeezing(X_val, args.bit_depth)
-#     X_test_squeezed = feature_squeezing(X_test, args.bit_depth)
-
-#     # 4. Save all splits
-#     os.makedirs(args.output, exist_ok=True)
-    
-#     np.save(os.path.join(args.output, '/data.npy'), X_train_squeezed)
-#     np.save(os.path.join(args.output, '/labels.npy'), Y_train)
-    
-#     # np.save(os.path.join(args.output, 'data.npy'), X_val_squeezed)
-#     # np.save(os.path.join(args.output, 'labels.npy'), Y_val)
-    
-#     np.save(os.path.join(args.output, '/test_data.npy'), X_test_squeezed)
-#     np.save(os.path.join(args.output, '/test_labels.npy'), Y_test)
-
-#     print(f"Saved processed CelebA data to {args.output}")
-#     print(f"Attribute used: {args.attribute}")
-#     print(f"Train shape: {X_train_squeezed.shape}, Test shape: {X_test_squeezed.shape}")
