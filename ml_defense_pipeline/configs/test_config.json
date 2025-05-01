@@ -15,7 +15,6 @@
             "output_path": "ir_dataset_clean.h5",  
             "docker": {
                 "Dockerfile": "./landseer-pipeline/pre/Dockerfile",
-                "image": "",
                 "command": "python /app/feature_squeeze.py --output /data/output.npy --labels-output /data/labels.npy --bit-depth 4 --download-dir /data --train"
             }
         },

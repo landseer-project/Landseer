@@ -7,7 +7,7 @@ import sys
 from pipeline import DefensePipeline
 
 def main():
-    parser = argparse.ArgumentParser(description="Modular ML Defense Pipeline")
+    parser = argparse.ArgumentParser(description="ML Defense Pipeline")
     parser.add_argument("--config", "-c", type=str, help="Path to configuration JSON for preconfigured mode")
     args = parser.parse_args()
     
