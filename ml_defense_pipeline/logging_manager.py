@@ -22,7 +22,7 @@ class LoggingManager:
         
         # File handler
         #TODO: create a unique pipeline ID for each run with a timestamp and use it in the log file name
-        file_handler = logging.FileHandler(logs_dir / "pipeline.log", mode='w')
+        file_handler = logging.FileHandler(logs_dir / "pipeline_debug.log", mode='w')
         file_handler.setLevel(logging.DEBUG)
         file_fmt = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
         file_handler.setFormatter(file_fmt)
