@@ -1,6 +1,10 @@
 torch
-numpy
+requests>=2.25.0
+numpy>=1.19.0
 torchattacks
 scikit-learn
 pandas
 opacus
+tqdm>=4.50.0
+# Docker management
+docker>=5.0.0

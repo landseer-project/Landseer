@@ -9,14 +9,12 @@ class LoggingManager:
     @staticmethod
     def setup_logging():
         """Configure logging to file and console"""
-        # Create logs directory
         logs_dir = Path("./logs")
         logs_dir.mkdir(exist_ok=True)
         
         logger = logging.getLogger("defense_pipeline")
         logger.setLevel(logging.DEBUG)
         
-        # Clear existing handlers
         for handler in logger.handlers[:]:
             logger.removeHandler(handler)
         
