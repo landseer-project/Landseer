@@ -99,7 +99,7 @@ class DockerManager:
 
                 logger.info(f"Successfully built image '{image_name}' for tool {tool_name}.")
 
-            elif docker_info.get("image"):
+            elif docker_info.get("image") != None and docker_info.get("image") != "":
                 image_name = docker_info["image"]
                 logger.info(f"Pulling Docker image for tool '{tool_name}': {image_name} ...")
 
