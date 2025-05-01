@@ -1,2 +1,6 @@
 # Ignore large directories
 output/
+
+logs/
+data/
+__pycache__/

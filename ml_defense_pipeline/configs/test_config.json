@@ -1,0 +1,74 @@
+ {
+  "dataset": {
+    "cifar-10": {
+      "link": "https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz",
+      "format": "pickle",
+      "shasum": "c58f30108f718f92721af3b95e74349a"
+    }
+  },
+  "pipeline": {
+    "pre_training": [
+        {
+            "tool_name": "feature-squeeze",
+            "description": "Pipeline-1 pre",
+            "input": ["dataset", "pickle"],        
+            "output_path": "ir_dataset_clean.h5",  
+            "docker": {
+                "Dockerfile": "./landseer-pipeline/pre/Dockerfile",
+                "command": "python /app/feature_squeeze.py --output /data/output.npy --labels-output /data/labels.npy --bit-depth 4 --download-dir /data --train"
+            }
+        },
+        {
+            "tool_name": "XGBOD",
+            "description": "Applies data augmentation to increase dataset size/variety",
+            "input": ["dataset", "h5"],
+            "output_path": "ir_dataset_aug.h5",
+            "docker": {
+                "Dockerfile": "./landseer-pipeline/in/xgbod_v2/Dockerfile-main", 
+                "image": "",
+                "command": "--output /data/output.npy --labels-output /data/labels.npy --bit-depth 4 --download-dir /data --train"
+            }
+        }
+    ],
+    "during_training": [
+        {
+            "tool_name": "Trades",
+            "description": "Pipeline 1 - in",
+            "input": ["dataset", "h5"],
+            "output_path": "ir_model_defended.h5",  
+            "model_config": {
+              "model_name": "resnet18",
+              "pretrained": true,
+              "output_classes": 10
+          },
+            "docker": {
+                "Dockerfile": "./landseer-pipeline/in/trades/Dockerfile",
+                "image": "",
+                "command": " --data-path /data/cifar10_squeezed.npy --labels-path /data/cifar10_labels.npy --epochs 20 --epsilon 0.031"
+            }
+        }
+    ],
+    "post_training": [
+        {
+            "tool_name": "fine pruning",
+            "description": "Pipeline 1 - post",
+            "input": ["model", "h5"],          
+            "output_path": "ir_model_pruned.h5",
+            "docker": {
+                "Dockerfile": "./landseer-pipeline/post/Dockerfile",
+                "image": "",
+                 "command": "--model-path /data/robust_model.pt --data-path /data/cifar10_squeezed.npy --labels-path /data/cifar10_labels.npy --output-model-path /data/pruned_model.pt --prune-percentage 0.2"
+            }
+        }
+    ]
+  },
+  "docker": {
+    "volumes": {
+      "data": {
+        "host_path": "./data",
+        "container_path": "/app/data"
+      } 
+    },
+    "network": "pipeline_network"
+  }
+}
