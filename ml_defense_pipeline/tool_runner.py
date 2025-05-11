@@ -5,116 +5,120 @@ import logging
 import os
 from pathlib import Path
 from typing import Dict
+import shutil
 
 from docker_manager import DockerManager
 
 logger = logging.getLogger("defense_pipeline")
 
+
 class ToolRunner:
-    """Handles the execution of defense tools"""
-    
+
     def __init__(self, docker_manager: DockerManager):
-        """
-        Initialize with a Docker manager
-        
-        Args:
-            docker_manager: Manager for Docker operations
-        """
         self.docker_manager = docker_manager
         self.scripts_dir = Path("./scripts")
         self.scripts_dir.mkdir(exist_ok=True)
-    
+
     def run_tool(self, tool: Dict, stage: str, dataset_dir: str, input_path: str) -> str:
-        """
-        Run a defense tool in a Docker container
-        
-        Args:
-            tool: Tool configuration
-            stage: Pipeline stage (pre_training, during_training, post_training)
-            dataset_dir: Directory containing dataset and intermediate files
-            input_path: Path to the input file for this tool
-            
-        Returns:
-            Path to the output file produced by the tool
-        """
         tool_name = tool["tool_name"]
-        output_path = tool["output_path"]
+        output_path = tool.get("output_path", f"output/{stage}/{tool_name}")
         command = tool["docker"]["command"]
         image_name = tool["docker"]["image"]
 
-        # image_name = self.docker_manager.build_image(tool)
-        # tool["_image"] = image_name
-        
-        # Determine pre/post-processor scripts
-        # input_type, input_format = tool.get("input", ["dataset", "h5"])
-        # pre_script = f"{stage}_{input_type}_h5_preprocessor.py"
-        # post_script = f"{stage}_{input_type}_h5_postprocessor.py"
-        
-        # Ensure scripts exist
-        # self._ensure_script_exists(pre_script)
-        # self._ensure_script_exists(post_script)
-        # print("Input Path:", input_path )
-        
-        # Set up environment variables
-        # env = {
-        #     "DATASET_DIR": "/data",
-        #     "INPUT_IR": f"/{input_path}",
-        #     "OUTPUT_IR": f"/data/{os.path.basename(output_path)}",
-        #     "TOOL_INPUT_TYPE": input_type,
-        #     "TOOL_INPUT_FORMAT": input_format
-        # }
-        
-        # Set up volume mounts
+        output_dir_path = os.path.join(
+            os.path.join(os.path.abspath("data"), output_path))
+        if not os.path.exists(output_dir_path):
+            os.makedirs(output_dir_path, exist_ok=True)
+        print("Output directory:", output_dir_path)
+
+        env = {}
+
+        data_dir = self.merge_directories(input_path, dataset_dir)
+
         tool_args = tool["docker"].get("command", "")
-        if stage == "in_training":
-            config_script = tool["docker"].get("config_script", "config_model.py")
-            self._ensure_config_exists(config_script)
+        if stage != "pre_training":
+            config_script = tool["docker"].get(
+                "config_script", "config_model.py")
+            config_script_path = os.path.abspath(config_script)
+            self._ensure_config_exists(config_script_path)
             volumes = {
-                os.path.abspath("data"): {"bind": "/data", "mode": "rw"},
-                # also mount the config_model.py file if htis is a in-training tool from the config
-                os.path.abspath(str(self.scripts_dir / config_script)): {"bind": "/app/config_model.py", "mode": "ro"},
-                # os.path.abspath(str(self.scripts_dir)): {"bind": "/scripts", "mode": "ro"}
-                }
-            print("Mounting config file:", os.path.abspath(str(self.scripts_dir)))
-            print("Mounting dataset dir:", os.path.abspath(dataset_dir))
+                os.path.abspath(data_dir): {"bind": "/data", "mode": "ro"},
+                os.path.abspath(output_dir_path): {"bind": "/output", "mode": "rw"},
+                config_script_path: {"bind": "/app/config_model.py", "mode": "ro"},
+            }
+            print("Mounting config file to /app:",
+                  os.path.abspath(str(config_script)))
         else:
             volumes = {
-                os.path.abspath(dataset_dir): {"bind": "/data", "mode": "rw"},
-                # os.path.abspath(str(self.scripts_dir)): {"bind": "/scripts", "mode": "ro"}
+                os.path.abspath(data_dir): {"bind": "/data", "mode": "ro"},
+                os.path.abspath(output_dir_path): {"bind": "/output", "mode": "rw"},
             }
-            print("Mounting dataset dir:", os.path.abspath(dataset_dir))
-         
-        # command =  (f"python /scripts/{pre_script} && {tool_args} && python /scripts/{post_script}")
-        command =  (f"{tool_args}")
-        logger.info(f"Running tool '{tool_name}' in stage '{stage}' using image '{image_name}'... with command {command}")
-        
-        # Run the container
+        print("Mounting input dir:", os.path.abspath(data_dir))
+        print("Mounting output dir:", os.path.abspath(output_dir_path))
+
+        tool_args = (f"{tool_args} --output /output")
+
+        command = (f"{tool_args}")
+
+        logger.info(
+            f"Running tool '{tool_name}' in stage '{stage}' using image '{image_name}'... with command {command}")
+
         exit_code, logs = self.docker_manager.run_container(
             image_name=image_name,
             command=command,
-            # environment=env,
+            environment=env,
             volumes=volumes
         )
-        print(logs)
-        
+
+        shutil.rmtree(data_dir, ignore_errors=True)
         if exit_code != 0:
-            logger.error(f"Tool {tool_name} failed with exit code {exit_code}. Logs:\n{logs}")
-            raise RuntimeError(f"Tool {tool_name} failed with exit code {exit_code}")
+            logger.error(
+                f"Tool {tool_name} failed with exit code {exit_code}. Logs:\n{logs}")
+            raise RuntimeError(
+                f"Tool {tool_name} failed with exit code {exit_code}")
         else:
-            logger.info(f"Tool {tool_name} completed successfully.")
+            logger.info(
+                f"Tool {tool_name} completed successfully and output saved to {output_dir_path}")
             logger.debug(f"Tool logs:\n{logs}")
-        
-        return os.path.join(dataset_dir, output_path)
-    
-    def _ensure_config_exists(self, script_name: str):
+        return output_dir_path
+
+    def _ensure_config_exists(self, script_path: str):
         """
         Ensure the required script exists, creating a template if needed
-        
+
         Args:
             script_name: Name of the script file
         """
-        script_path = self.scripts_dir / script_name
-        
-        if not script_path.exists():
-            logger.error(f"Script {script_name} not found, cannot continue")
+
+        if not os.path.exists(script_path):
+            logger.error(f"Script {script_path} not found, cannot continue")
             exit(1)
+
+    def merge_directories(self, input_path: str, dataset_dir: str) -> str:
+        # check if input_path and dataset_dir is same path
+
+        input_dir = os.path.abspath("data") + "/" + "temp_input"
+        print("Merging directories:", input_path, dataset_dir)
+
+        if not os.path.exists(input_dir):
+            os.makedirs(input_dir, exist_ok=True)
+        input_path = os.path.abspath(input_path)
+        dataset_dir = os.path.abspath(dataset_dir)
+        if os.path.isdir(input_path) and os.path.exists(dataset_dir):
+            for file in os.listdir(input_path):
+                file_path = os.path.join(input_path, file)
+                if os.path.isfile(file_path):
+                    shutil.copy(file_path, input_dir)
+            print(f"Copying file from {dataset_dir} to {input_dir}")
+            if os.path.abspath(dataset_dir) == os.path.abspath(input_path):
+                print("Input path and dataset path are same")
+                return os.path.abspath(input_dir)
+            for file in os.listdir(dataset_dir):
+                file_path = os.path.join(dataset_dir, file)
+                if os.path.isfile(file_path):
+                    shutil.copy(file_path, input_dir)
+        else:
+            shutil.copy(input_path, input_dir)
+            shutil.copy(dataset_dir, input_dir)
+        # exit(0)
+        return os.path.abspath(input_dir)

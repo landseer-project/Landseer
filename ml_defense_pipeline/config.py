@@ -3,7 +3,9 @@ Configuration management for ML Defense Pipeline
 """
 import json
 import logging
+import torch
 import os
+import combinations
 from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger("defense_pipeline")
@@ -15,12 +17,12 @@ class PipelineConfig:
         """Initialize configuration from file or interactive input"""
         self.config = {}
         self.tools_db = {}
+        self.combinations = dict()
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self._load_tools_db()
         
         if config_path:
             self._load_from_file(config_path)
-        else:
-            self._interactive_setup()
     
     def _load_tools_db(self):
         """Load the database of available tools"""
@@ -36,16 +38,17 @@ class PipelineConfig:
         try:
             with open(config_path, "r") as f:
                 self.config = json.load(f)
+            if not self.config:
+                raise ValueError("Configuration file is empty.")
+            # TODO: now verify the config file structure
+            #verify config
+
+            # TODO: Make various combinations
+            # self.combinations = combinations.make_combinations(self.config)     
             logger.info(f"Loaded configuration from {config_path}")
         except Exception as e:
             logger.error(f"Failed to load configuration from {config_path}: {e}")
             raise
-    
-    def _interactive_setup(self):
-        """Build configuration through interactive user prompts"""
-        return
-
-    from typing import Dict, Any
 
     def get_dataset_info(self) -> Dict[str, Any]:
         """Get information about all selected datasets"""
