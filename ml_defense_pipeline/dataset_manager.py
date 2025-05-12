@@ -1,6 +1,3 @@
-"""
-Dataset management for ML Defense Pipeline
-"""
 import logging
 import os
 from pathlib import Path
@@ -10,27 +7,28 @@ import requests
 import pickle
 import numpy as np
 import scipy.io
-
+import importlib
 
 logger = logging.getLogger("defense_pipeline")
 
-
 class DatasetManager:
     """Handles dataset preparation and format conversion"""
-
     def __init__(self, data_dir: str = "./data"):
-        """
-        Initialize with the path to store datasets
-
-        Args:
-            data_dir: Directory to store datasets
-        """
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(exist_ok=True)
+        self.convert_pickle_to_numpy_files = None
+        self.convert_mat_to_numpy_files = None
 
     def prepare_dataset(self, dataset_name: str, dataset_info: Dict) -> str:
         logger.info(f"Preparing dataset '{dataset_name}'...")
         dataset_dir = self.data_dir / dataset_name
+        module_name = f"dataset_preprocess.{dataset_name.lower()}_loader"
+        try:
+            module = importlib.import_module(module_name)
+            self.convert_pickle_to_numpy_files = getattr(module, "convert_pickle_to_numpy_files")
+            self.convert_mat_to_numpy_files = getattr(module, "convert_mat_to_numpy_files")
+        except (ModuleNotFoundError, AttributeError) as e:
+            raise ImportError(f"Could not find loader for dataset '{dataset_name}': {e}")
         dataset_dir.mkdir(exist_ok=True)
         print(f"Dataset info: {dataset_info}")
         print(f"Dataset name: {dataset_name}")
@@ -62,10 +60,8 @@ class DatasetManager:
 
     def detect_dataset_type_by_magic(self, dataset_dir: Path):
         file_types = {}
-
         logger.info(
             "Scanning dataset directory for file types: %s", dataset_dir)
-
         for file in dataset_dir.iterdir():
             if file.is_file():
                 try:
@@ -102,23 +98,13 @@ class DatasetManager:
             return "unknown", []
 
     def _download_dataset(self, url: str, target_dir: Path):
-        """
-        Download a dataset from the given URL
-
-        Args:
-            url: URL to download from
-            target_dir: Directory to save the downloaded file
-        """
         logger.info(f"Downloading dataset from {url}...")
 
         try:
-            import requests
             from tqdm import tqdm
-
             response = requests.get(url, stream=True)
             response.raise_for_status()
 
-            # Extract filename from URL
             filename = url.split("/")[-1]
             target_file = target_dir / filename
             if not target_file.exists():
@@ -130,7 +116,6 @@ class DatasetManager:
 
                 logger.info(f"Downloaded dataset to {target_file}")
 
-            # Handle compressed files
             extracted_dir = filename
             if filename.endswith((".tar.gz", ".tgz")):
                 extracted_dir = self._extract_tar_gz(target_file, target_dir)
@@ -143,13 +128,6 @@ class DatasetManager:
             raise
 
     def _extract_tar_gz(self, archive_path: Path, target_dir: Path):
-        """
-        Extract a tar.gz file
-
-        Args:
-            archive_path: Path to the archive
-            target_dir: Directory to extract to
-        """
         logger.info(f"Extracting {archive_path}...")
 
         try:
@@ -168,13 +146,6 @@ class DatasetManager:
             raise
 
     def _extract_zip(self, archive_path: Path, target_dir: Path):
-        """
-        Extract a zip file
-
-        Args:
-            archive_path: Path to the archive
-            target_dir: Directory to extract to
-        """
         logger.info(f"Extracting {archive_path}...")
 
         try:
@@ -200,9 +171,9 @@ class DatasetManager:
 
         try:
             if source_format == "pickle":
-                self._convert_pickle_to_numpy_files(target_path, files)
+                self.convert_pickle_to_numpy_files(target_path, files)
             elif source_format == "mat":
-                self._convert_mat_to_numpy_files(target_path, files)
+                self.convert_mat_to_numpy_files(target_path, files)
             else:
                 logger.warning(
                     f"Conversion from {source_format} to numpy not implemented")
@@ -211,117 +182,4 @@ class DatasetManager:
 
         except Exception as e:
             logger.error(f"Failed to convert dataset to IR format: {e}")
-            raise
-
-    def _convert_pickle_to_numpy_files(self, output_dir: str, files: List[str]) -> Dict[str, np.ndarray]:
-        """
-        Convert CIFAR-10 pickle batch files to .npy files and return arrays in NCHW format.
-
-        Args:
-            output_dir: Directory to store the .npy files
-            files: List of CIFAR-10 pickle batch file paths
-
-        Returns:
-            Dictionary containing X_train, y_train, X_test, y_test as NumPy arrays
-        """
-        try:
-            os.makedirs(output_dir, exist_ok=True)
-
-            X_train, y_train = [], []
-            X_test, y_test = [], []
-
-            for batch_file in files:
-                if "batches.meta" in batch_file:
-                    continue  # Skip metadata
-
-                with open(batch_file, "rb") as f:
-                    data = pickle.load(f, encoding="bytes")
-
-                if "test" in batch_file:
-                    X_test.append(data[b"data"])
-                    
-                    y_test.extend(data[b"labels"])
-                elif "data_batch" in batch_file:
-                    X_train.append(data[b"data"])
-                    y_train.extend(data[b"labels"])
-
-            # Reshape to NCHW format (no transpose needed after reshape)
-            X_train = np.vstack(X_train).reshape(-1, 3, 32, 32)
-            X_test = np.vstack(X_test).reshape(-1, 3, 32, 32)
-            y_train = np.array(y_train)
-            y_test = np.array(y_test)
-
-            # Save to .npy files
-            np.save(os.path.join(output_dir, "X_train.npy"), X_train)
-            np.save(os.path.join(output_dir, "y_train.npy"), y_train)
-            np.save(os.path.join(output_dir, "X_test.npy"), X_test)
-            np.save(os.path.join(output_dir, "y_test.npy"), y_test)
-
-            logger.info(f"Saved processed CIFAR-10 numpy arrays to {output_dir} in NCHW format")
-
-
-            return {
-                "X_train": X_train,
-                "y_train": y_train,
-                "X_test": X_test,
-                "y_test": y_test
-            }
-
-        except Exception as e:
-            logger.error(f"Failed to convert CIFAR-10 pickle to numpy: {e}")
-            raise
-
-    def _convert_mat_to_numpy_files(self, output_dir: str, files: List[str]) -> Dict[str, np.ndarray]:
-        """
-        Convert .mat file contents to .npy files and return them as NumPy arrays in NCHW format.
-
-        Args:
-            output_dir: Directory to store the .npy files
-            files: List of .mat file paths (only the first one is used)
-
-        Returns:
-            Dictionary mapping keys to NumPy arrays
-        """
-        try:
-            if not files:
-                raise FileNotFoundError("No .mat files provided.")
-
-            os.makedirs(output_dir, exist_ok=True)
-
-            mat_data = scipy.io.loadmat(files[0])
-            numpy_data = {}
-
-            for key in mat_data:
-                if key.startswith("__"):
-                    continue  # Skip metadata
-                array = mat_data[key]
-
-                # Convert HWC (N, 32, 32, 3) to NCHW if needed
-                if array.ndim == 4 and array.shape[3] == 3:
-                    array = array.transpose(0, 3, 1, 2)
-                elif array.ndim == 2 and array.shape[1] == 3072:
-                    array = array.reshape(-1, 3, 32, 32)  # Already NCHW
-                elif array.ndim == 2 and array.shape[1] == 1:
-                    array = array.flatten()
-
-                numpy_data[key] = array
-                npy_path = os.path.join(output_dir, f"{key}.npy")
-                np.save(npy_path, array)
-                logger.info(f"Saved {key} to {npy_path}")
-
-            # Rename keys if common naming is used
-            rename_map = {
-                "data": "X_train",
-                "labels": "y_train",
-                "test_data": "X_test",
-                "test_labels": "y_test"
-            }
-            for old_key, new_key in rename_map.items():
-                if old_key in numpy_data:
-                    numpy_data[new_key] = numpy_data.pop(old_key)
-
-            return numpy_data   
-
-        except Exception as e:
-            logger.error(f"Failed to convert .mat to .npy: {e}")
             raise
