@@ -1,5 +1,5 @@
 torch
-requests>=2.25.0
+requests>=2.26.0
 numpy>=1.19.0
 torchattacks
 scikit-learn

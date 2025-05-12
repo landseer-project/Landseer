@@ -7,58 +7,77 @@
     }
   },
   "pipeline": {
-    "pre_training": [
-      {
-        "tool_name": "feature-squeeze",
-        "description": "Pipeline-1 pre",
-        "input": [
-          "dataset",
-          "pickle"
-        ],
-        "docker": {
-          "image": "pre_squeeze",
-          "command": "python defense.py --bit-depth 4"
+    "pre_training": {
+      "tools": [
+        {
+          "tool_name": "feature-squeeze",
+          "description": "Pipeline-1 pre",
+          "input": [
+            "dataset",
+            "pickle"
+          ],
+          "docker": {
+            "image": "pre_squeeze",
+            "command": "python defense.py --bit-depth 4"
+          }
         }
-      }
-    ],
-    "during_training": [
-      {
-        "tool_name": "trades",
-        "description": "Pipeline 1 - in",
-        "input": [
-          "dataset",
-          "h5"
-        ],
+      ],
+      "noop": {
+        "tool_name": "noop",
+        "description": "Pipeline-1 pre baseline",
         "docker": {
-          "Dockerfile": "./landseer-pipeline/in/trades/Dockerfile",
-          "image": "in_trades",
-          "command": "python3 defense.py --epochs 20 --epsilon 0.031"
+          "image": "noop",
+          "command": "python defense.py --data_dir /app/data/cifar-10"
         }
-      }
-    ],
-    "post_training": [
-      {
-        "tool_name": "fine pruning",
-        "description": "Pipeline 1 - post",
-        "input": [
-          "model",
-          "h5"
-        ],
-        "docker": {
-          "Dockerfile": "./landseer-pipeline/post/Dockerfile",
-          "image": "post_fineprune",
-          "command": "python3 defense.py --prune-percentage 0.1"
-        }
-      }
-    ]
-  },
-  "docker": {
-    "volumes": {
-      "data": {
-        "host_path": "./data",
-        "container_path": "/app/data"
       }
     },
-    "network": "pipeline_network"
+    "during_training": {
+      "tools": [
+        {
+          "tool_name": "trades",
+          "description": "Pipeline-1 in",
+          "input": [
+            "dataset",
+            "h5"
+          ],
+          "docker": {
+            "image": "in_trades",
+            "command": "python3 defense.py --epochs 20 --epsilon 0.031"
+          }
+        }
+      ],
+      "noop": {
+        "tool_name": "noop",
+        "description": "Pipeline-1 in baseline",
+        "docker": {
+          "image": "noop",
+          "command": "python defense.py --data_dir /app/data/cifar-10"
+        }
+      }
+    },
+    "post_training": {
+      "tools": [
+        {
+          "tool_name": "fine pruning",
+          "description": "Pipeline 1 - post",
+          "input": [
+            "model",
+            "h5"
+          ],
+          "docker": {
+            "image": "post_fineprune",
+            "command": "python3 defense.py --prune-percentage 0.1"
+          }
+        }
+      ],
+      "noop": {
+        "tool_name": "noop",
+        "description": "Pipeline-1 post baseline",
+        "docker": {
+          "image": "noop",
+          "command": "python defense.py --data_dir /app/data/cifar-10"
+        }
+      }
+    }
   }
 }

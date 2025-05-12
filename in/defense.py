@@ -1,17 +1,24 @@
 import torch
 import numpy as np
+import os
 from torch import nn, optim
 from torch.utils.data import TensorDataset, DataLoader
-from trades import trades_loss  # Ensure this is your file with the TRADES implementation
+# Ensure this is your file with the TRADES implementation
+from trades import trades_loss
 import argparse
 from config_model import config
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="TRADES Robust Training for CIFAR-10 (CNN Version)")
+    parser = argparse.ArgumentParser(
+        description="TRADES Robust Training for CIFAR-10 (CNN Version)")
     parser.add_argument("--epochs", type=int, default=50,
                         help="Number of training epochs (increased from 10 to 50)")
     parser.add_argument("--epsilon", type=float, default=0.031,
                         help="Radius of adversarial perturbation for TRADES (lowered from 0.3)")
+    parser.add_argument("--output", default="/output",
+                        help="Output directory for model checkpoint")
+    parser.add_argument("--input-dir", default="/data",
+                        help="Directory with training data (not used in this script)")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -28,8 +35,10 @@ if __name__ == '__main__':
     # === Load feature-squeezed CIFAR-10 data from .npy ===
     # data_np: shape [N, 3, 32, 32]
     # labels_np: shape [N]
-    data_np = np.load("/output/data.npy")
-    labels_np = np.load("/output/labels.npy")
+    input_dir = os.path.abspath(args.input_dir)
+    print("Loading data from", input_dir)
+    data_np = np.load(os.path.join(input_dir, "data.npy"))
+    labels_np = np.load(os.path.join(input_dir, "labels.npy"))
 
     # Convert NumPy arrays -> Torch tensors
     data_tensor = torch.from_numpy(data_np).float()
@@ -38,6 +47,9 @@ if __name__ == '__main__':
     # Create a Dataset + DataLoader
     train_dataset = TensorDataset(data_tensor, labels_tensor)
     train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+    print(f"Loaded training data: {data_tensor.shape}")
+    print(f"Loaded training labels: {labels_tensor.shape}")
+    print("Data loaded successfully.")
 
     # === Training Loop with TRADES ===
     for epoch in range(args.epochs):
@@ -78,4 +90,7 @@ if __name__ == '__main__':
         #       f"Train Accuracy: {train_accuracy*100:.2f}%")
 
     # Save final model
-    torch.save(model.state_dict(), "/output/model.pt")
+    torch.save(model.state_dict(), os.path.join(
+        args.output, "model.pt"))
+    print("Model saved to", os.path.join(args.output, "model.pt"))
+    print("Training complete by TRADES.")

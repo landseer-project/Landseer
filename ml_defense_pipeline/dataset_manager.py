@@ -29,19 +29,11 @@ class DatasetManager:
         self.data_dir.mkdir(exist_ok=True)
 
     def prepare_dataset(self, dataset_name: str, dataset_info: Dict) -> str:
-        """
-        Prepare a dataset for the pipeline
-
-        Args:
-            dataset_name: Name of the dataset
-            dataset_info: Dataset metadata from configuration
-
-        Returns:
-            Path to the prepared dataset directory
-        """
         logger.info(f"Preparing dataset '{dataset_name}'...")
         dataset_dir = self.data_dir / dataset_name
         dataset_dir.mkdir(exist_ok=True)
+        print(f"Dataset info: {dataset_info}")
+        print(f"Dataset name: {dataset_name}")
 
         if "link" in dataset_info.get(dataset_name).keys():
             link = dataset_info.get(dataset_name).get("link")
@@ -50,7 +42,9 @@ class DatasetManager:
             # guess the format of downloaded dataset
             dataset_type, files = self.detect_dataset_type_by_magic(
                 dataset_dir)
+            print(f"Dataset_dir: {dataset_dir}")
             target_dir = os.path.join(str(dataset_dir)+".numpy")
+            print(f"Target_dir: {target_dir}")
             if dataset_type != "numpy":
                 self._convert_to_ir(dataset_dir, files,
                                     dataset_type, target_dir)
@@ -67,15 +61,6 @@ class DatasetManager:
             return False
 
     def detect_dataset_type_by_magic(self, dataset_dir: Path):
-        """
-        Detect the majority file type in a dataset directory using magic numbers.
-
-        Args:
-            dataset_dir: Path to the dataset directory
-
-        Returns:
-            A tuple of (majority file type as a string, list of filenames of that type)
-        """
         file_types = {}
 
         logger.info(
@@ -109,7 +94,7 @@ class DatasetManager:
             logger.info(
                 f"Detected file type distribution: {dict(type_counts)}")
             logger.info(f"Majority dataset type: {majority_type}")
-            logger.info(f"Files of majority type: {files_of_majority_type}")
+            logger.debug(f"Files of majority type: {files_of_majority_type}")
 
             return majority_type, files_of_majority_type
         else:

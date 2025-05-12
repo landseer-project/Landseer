@@ -3,30 +3,32 @@ import argparse
 import torch
 import torch.nn as nn
 import numpy as np
+import os
 from torch.utils.data import DataLoader, TensorDataset
 from config_model import config
 
 
-#Add by Rossemary
+# Add by Rossemary
 def load_model_weights(model, model_path, device):
     """Load weights into existing model, handling both DP and non-DP formats"""
     state_dict = torch.load(model_path, map_location=device)
-    
+
     # Try loading as non-DP model first
     try:
         model.load_state_dict(state_dict)
         return model
     except RuntimeError:
         pass
-    
+
     # If failed, try DP-wrapped format
     try:
         # Convert keys to DP format (add _module prefix)
-        dp_state_dict = {f'_module.{k}':v for k,v in state_dict.items()}
+        dp_state_dict = {f'_module.{k}': v for k, v in state_dict.items()}
         model.load_state_dict(dp_state_dict)
         return model
     except RuntimeError as e:
-        raise RuntimeError(f"Failed to load weights in either format. Error: {str(e)}")
+        raise RuntimeError(
+            f"Failed to load weights in either format. Error: {str(e)}")
 
 
 def neuron_activation_scores(model, loader, device):
@@ -77,6 +79,7 @@ def neuron_activation_scores(model, loader, device):
     activation_sum /= float(samples_count)
     return activation_sum
 
+
 def prune_neurons(model, keep_indices):
     """
     Zeroes out or removes neurons not in keep_indices.
@@ -86,7 +89,8 @@ def prune_neurons(model, keep_indices):
     # Example: prune the final linear layer’s in_features or the penultimate layer.
     # Adjust to your architecture.
     modules = list(model.modules())
-    layer_to_prune = modules[-1]  # Suppose this is the penultimate layer we measured
+    # Suppose this is the penultimate layer we measured
+    layer_to_prune = modules[-1]
 
     if isinstance(layer_to_prune, nn.Linear):
         with torch.no_grad():
@@ -114,11 +118,17 @@ def prune_neurons(model, keep_indices):
     else:
         print("Warning: chosen layer not a Linear or Conv2d. Adjust code as needed.")
 
+
 def main():
-    parser = argparse.ArgumentParser(description="Fine-Pruning for Backdoor Removal (Post-training)")
+    parser = argparse.ArgumentParser(
+        description="Fine-Pruning for Backdoor Removal (Post-training)")
     parser.add_argument("--prune-percentage", type=float, default=0.2,
                         help="Fraction of neurons to prune (0.2 = 20%)")
     parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--input-dir", default="/data",
+                        help="Directory with training data (not used in this script)")
+    parser.add_argument("--output", default="/output",
+                        help="Output directory for pruned model")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -127,14 +137,14 @@ def main():
     # This example is a placeholder. Replace with your actual architecture or
     # load the same definition used in the training script.
     model = config().to(device)
-    load_model_weights(model, "/output/model.pt", device)
+    load_model_weights(model, os.path.join(args.input_dir, "model.pt"), device)
     # model = config()
     # model.load_state_dict(torch.load("/output/model.pt", map_location=device))
     # model.to(device)
 
     # 2. Load clean data for measuring neuron activation
-    data_np = np.load("/output/data.npy")
-    labels_np = np.load("/output/labels.npy")
+    data_np = np.load(os.path.join(args.input_dir, "data.npy"))
+    labels_np = np.load(os.path.join(args.input_dir, "labels.npy"))
     data_tensor = torch.from_numpy(data_np).float()
     labels_tensor = torch.from_numpy(labels_np).long()
 
@@ -151,14 +161,11 @@ def main():
     k = int(num_neurons * (1 - args.prune_percentage))
     # Indices of neurons sorted by activation ascending => first part is least activated
     sorted_indices = torch.argsort(activation_scores)
-    keep_indices = sorted_indices[k:]  # keep the top (num_neurons-k) active neurons
-
-    # 6. Prune the model
+    # keep the top (num_neurons-k) active neurons
+    keep_indices = sorted_indices[k:]
     prune_neurons(model, keep_indices)
+    torch.save(model.state_dict(), os.path.join(args.output, "model.pt"))
 
-    # 8. Save the pruned model
-    torch.save(model.state_dict(), "/output/model.pt")
 
 if __name__ == "__main__":
     main()
-
