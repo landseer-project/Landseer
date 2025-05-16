@@ -4,7 +4,7 @@ ML Defense Pipeline - Entry Point
 """
 import argparse
 import sys
-from pipeline import DefensePipeline
+from main_pipeline import DefensePipeline
 
 
 def main():
@@ -13,13 +13,8 @@ def main():
                         help="Path to configuration JSON for preconfigured mode")
     args = parser.parse_args()
 
-    try:
-        pipeline = DefensePipeline(args.config)
-        pipeline.run()
-    except Exception as e:
-        print(f"Pipeline execution failed: {e}")
-        sys.exit(1)
-
+    pipeline = DefensePipeline(args.config)
+    pipeline.run()
 
 if __name__ == "__main__":
     main()

@@ -3,9 +3,10 @@ import pickle
 import logging
 import numpy as np
 import scipy.io
+import torch
 from typing import Dict, List
 
-def convert_pickle_to_numpy_files(output_dir: str, files: List[str]) -> Dict[str, np.ndarray]:
+def convert_pickle_to_numpy_files(output_dir: str, files: List[str], add_trigger=False) -> Dict[str, np.ndarray]:
         try:
             os.makedirs(output_dir, exist_ok=True)
 
@@ -21,7 +22,6 @@ def convert_pickle_to_numpy_files(output_dir: str, files: List[str]) -> Dict[str
 
                 if "test" in batch_file:
                     X_test.append(data[b"data"])
-                    
                     y_test.extend(data[b"labels"])
                 elif "data_batch" in batch_file:
                     X_train.append(data[b"data"])
@@ -31,6 +31,12 @@ def convert_pickle_to_numpy_files(output_dir: str, files: List[str]) -> Dict[str
             X_test = np.vstack(X_test).reshape(-1, 3, 32, 32)
             y_train = np.array(y_train)
             y_test = np.array(y_test)
+
+            if add_trigger:
+                #user select the target label
+                target_label = 1
+                X_train, y_train = add_backdoor_trigger(X_train, target_label)
+                X_test, y_test = add_backdoor_trigger(X_test, target_label)
 
             np.save(os.path.join(output_dir, "X_train.npy"), X_train)
             np.save(os.path.join(output_dir, "y_train.npy"), y_train)
@@ -50,7 +56,7 @@ def convert_pickle_to_numpy_files(output_dir: str, files: List[str]) -> Dict[str
             # logger.error(f"Failed to convert CIFAR-10 pickle to numpy: {e}")
             raise
 
-def convert_mat_to_numpy_files(output_dir: str, files: List[str]) -> Dict[str, np.ndarray]:
+def convert_mat_to_numpy_files(output_dir: str, files: List[str], add_trigger=False) -> Dict[str, np.ndarray]:
         try:
             if not files:
                 raise FileNotFoundError("No .mat files provided.")
@@ -92,3 +98,8 @@ def convert_mat_to_numpy_files(output_dir: str, files: List[str]) -> Dict[str, n
         except Exception as e:
             # logger.error(f"Failed to convert .mat to .npy: {e}")
             raise
+
+def add_backdoor_trigger(images, target_label, trigger_value=1.0):
+    images[:, :, -3:, -3:] = trigger_value
+    labels = torch.full((images.size(0),), target_label, dtype=torch.long)
+    return images, labels

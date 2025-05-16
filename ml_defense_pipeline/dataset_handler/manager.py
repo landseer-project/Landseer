@@ -11,41 +11,40 @@ import importlib
 
 logger = logging.getLogger("defense_pipeline")
 
+DATASET_LOADER_FOLDER = os.path.abspath("dataset_handler/loaders")
+
 class DatasetManager:
     """Handles dataset preparation and format conversion"""
-    def __init__(self, data_dir: str = "./data"):
-        self.data_dir = Path(data_dir)
+    def __init__(self, DefensePipeline):
+        self.data_dir = Path("./data")
         self.data_dir.mkdir(exist_ok=True)
         self.convert_pickle_to_numpy_files = None
         self.convert_mat_to_numpy_files = None
 
-    def prepare_dataset(self, dataset_name: str, dataset_info: Dict) -> str:
-        logger.info(f"Preparing dataset '{dataset_name}'...")
+    def prepare_dataset(self, dataset) -> str:
+        logger.info(f"Preparing dataset ...")
+        dataset_name = dataset.name
+        dataset_link = dataset.link
         dataset_dir = self.data_dir / dataset_name
-        module_name = f"dataset_preprocess.{dataset_name.lower()}_loader"
+        module_name = f"{DATASET_LOADER_FOLDER}.{dataset_name.lower()}_loader"
         try:
-            module = importlib.import_module(module_name)
+            module = dataset.loader_module
             self.convert_pickle_to_numpy_files = getattr(module, "convert_pickle_to_numpy_files")
             self.convert_mat_to_numpy_files = getattr(module, "convert_mat_to_numpy_files")
         except (ModuleNotFoundError, AttributeError) as e:
             raise ImportError(f"Could not find loader for dataset '{dataset_name}': {e}")
         dataset_dir.mkdir(exist_ok=True)
-        print(f"Dataset info: {dataset_info}")
-        print(f"Dataset name: {dataset_name}")
 
-        if "link" in dataset_info.get(dataset_name).keys():
-            link = dataset_info.get(dataset_name).get("link")
-            dataset_dir = self._download_dataset(link, dataset_dir)
-
-            # guess the format of downloaded dataset
-            dataset_type, files = self.detect_dataset_type_by_magic(
-                dataset_dir)
-            print(f"Dataset_dir: {dataset_dir}")
-            target_dir = os.path.join(str(dataset_dir)+".numpy")
-            print(f"Target_dir: {target_dir}")
-            if dataset_type != "numpy":
-                self._convert_to_ir(dataset_dir, files,
+        dataset_dir = self._download_dataset(dataset_link, dataset_dir)
+        dataset_type, files = self.detect_dataset_type_by_magic(dataset_dir)
+        target_dir = os.path.join(str(dataset_dir)+".numpy")
+        if dataset_type != "numpy":
+            self._convert_to_ir(dataset_dir, files,
                                     dataset_type, target_dir)
+        logger.debug(f"Dataset name: {dataset_name}")
+        logger.debug(f"Dataset link: {dataset_link}")
+        logger.debug(f"Dataset directory: {dataset_dir}")
+        logger.debug(f"Module name: {module_name}")
 
         logger.info(f"Dataset prepared at {target_dir}")
         return str(target_dir)
@@ -90,7 +89,7 @@ class DatasetManager:
             logger.info(
                 f"Detected file type distribution: {dict(type_counts)}")
             logger.info(f"Majority dataset type: {majority_type}")
-            logger.debug(f"Files of majority type: {files_of_majority_type}")
+            # logger.debug(f"Files of majority type: {files_of_majority_type}")
 
             return majority_type, files_of_majority_type
         else:
@@ -99,7 +98,6 @@ class DatasetManager:
 
     def _download_dataset(self, url: str, target_dir: Path):
         logger.info(f"Downloading dataset from {url}...")
-
         try:
             from tqdm import tqdm
             response = requests.get(url, stream=True)

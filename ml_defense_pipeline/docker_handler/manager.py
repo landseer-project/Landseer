@@ -5,8 +5,9 @@ import logging
 import torch
 import os
 import shutil
+import requests
 import subprocess
-from typing import Dict, Optional, Tuple, Union
+from typing import Dict, Optional, Tuple, Union, Annotated, Self
 
 logger = logging.getLogger("defense_pipeline")
 
@@ -19,11 +20,12 @@ except ImportError:
         "Docker SDK not available. Falling back to subprocess for Docker operations.")
 
 
-class DockerManager:
+class DockerRunner:
     """Manages Docker-related operations for the pipeline"""
 
-    def __init__(self):
+    def __init__(self, DefensePipeline):
         """Initialize Docker client if available"""
+        self.pipeline = DefensePipeline
         self.client = docker.from_env() if DOCKER_SDK_AVAILABLE else None
 
     def run_container(self, image_name: str, command: Optional[str],
@@ -92,7 +94,6 @@ class DockerManager:
                 for k, v in environment.items():
                     docker_cmd += ["-e", f"{k}={v}"]
 
-                # Add volume mounts
                 for host_path, mount in volumes.items():
                     bind_path = mount["bind"]
                     mode = mount.get("mode", "rw")
@@ -101,7 +102,6 @@ class DockerManager:
                 docker_cmd.append(image_name)
 
                 if command:
-                    # Use bash to run multiple commands
                     docker_cmd += ["bash", "-c", command]
 
                 logger.debug(f"Running subprocess: {' '.join(docker_cmd)}")
@@ -113,3 +113,7 @@ class DockerManager:
         except Exception as e:
             logger.error(f"Error running Docker container: {e}")
             raise
+
+    @property
+    def config(self) -> Dict[str, str]:
+        return self.pipeline.config

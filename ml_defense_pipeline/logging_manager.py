@@ -4,10 +4,9 @@ from pathlib import Path
 import colorlog
 import datetime
 
-
 class LoggingManager:
     @staticmethod
-    def setup_logging():
+    def setup_logging(pipeline_id: str):
         logs_dir = Path("./logs")
         logs_dir.mkdir(exist_ok=True)
 
@@ -18,8 +17,6 @@ class LoggingManager:
             logger.removeHandler(handler)
 
         # File handler with unique pipeline ID
-        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-        pipeline_id = f"pipeline_{timestamp}"
         file_handler = logging.FileHandler(
             logs_dir / f"{pipeline_id}_debug.log", mode='w')
         file_handler.setLevel(logging.DEBUG)
@@ -30,7 +27,7 @@ class LoggingManager:
 
         # Console handler with colors
         console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(logging.INFO)
+        console_handler.setLevel(logging.DEBUG)
 
         # Create a colorlog formatter directly
         color_formatter = colorlog.ColoredFormatter(

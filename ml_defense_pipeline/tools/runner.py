@@ -6,62 +6,67 @@ import os
 from pathlib import Path
 from typing import Dict
 import shutil
-
-from docker_manager import DockerManager
+from tools.schema import ToolConfig
 
 logger = logging.getLogger("defense_pipeline")
 
 
 class ToolRunner:
 
-    def __init__(self, docker_manager: DockerManager):
-        self.docker_manager = docker_manager
+    def __init__(self, DefensePipeline):
+        self.pipeline = DefensePipeline
         self.scripts_dir = Path("./scripts")
         self.scripts_dir.mkdir(exist_ok=True)
 
-    def run_tool(self, tool: Dict, stage: str, dataset_dir: str, input_path: str) -> str:
-        tool_name = tool["tool_name"]
-        output_path = tool.get("output_path", f"output/{stage}/{tool_name}")
-        command = tool["docker"]["command"]
-        image_name = tool["docker"]["image"]
+    @property
+    def docker_manager(self):
+        return self.pipeline.docker_manager
 
-        output_dir_path = os.path.join(
-            os.path.join(os.path.abspath("data"), output_path))
+    @property
+    def config(self):
+        return self.pipeline.config
+
+    def run_tool(self, tool: ToolConfig, stage: str, dataset_dir: str, input_path: str) -> str:
+        tool_name = tool.tool_name
+        output_path = f"output/{stage}/{tool_name}"
+        command = tool.docker.command
+        image_name = tool.docker.image_name
+        output_dir_path = os.path.join(os.path.join(os.path.abspath("data"), output_path))
         if not os.path.exists(output_dir_path):
             os.makedirs(output_dir_path, exist_ok=True)
-        print("Output directory:", output_dir_path)
+        
+        logger.debug(f"Tool name: {tool_name}")
+        logger.debug(f"Stage: {stage}")
+        logger.debug(f"Image name: {image_name}")
+        logger.debug(f"Output directory: {output_dir_path}")
 
+        logger.debug(f"Preparing volumes for tool {tool_name}")
         env = {}
-
         data_dir = self.merge_directories(input_path, dataset_dir)
-
-        tool_args = tool["docker"].get("command", "")
+        logger.debug(f"Data directory: {data_dir}")
         if stage != "pre_training":
-            config_script = tool["docker"].get(
-                "config_script", "config_model.py")
-            config_script_path = os.path.abspath(config_script)
-            self._ensure_config_exists(config_script_path)
+            config_script_path = tool.docker.config_script
+            config_script = os.path.basename(config_script_path)
             volumes = {
-                os.path.abspath(data_dir): {"bind": "/data", "mode": "ro"},
+                data_dir: {"bind": "/data", "mode": "ro"},
                 os.path.abspath(output_dir_path): {"bind": "/output", "mode": "rw"},
-                config_script_path: {"bind": "/app/config_model.py", "mode": "ro"},
+                config_script_path: {"bind": "/app/config_model.py", "mode": "rw"},
             }
-            print("Mounting config file to /app:",
-                  os.path.abspath(str(config_script)))
+            logger.debug(f"Mounting config file to /app: {os.path.abspath(str(config_script))}")
         else:
             volumes = {
                 os.path.abspath(data_dir): {"bind": "/data", "mode": "ro"},
                 os.path.abspath(output_dir_path): {"bind": "/output", "mode": "rw"},
             }
-        print("Mounting input dir:", os.path.abspath(data_dir))
-        print("Mounting output dir:", os.path.abspath(output_dir_path))
+        logger.debug(f"Mounting input dir: {os.path.abspath(data_dir)}")
+        logger.debug(f"Mounting output dir: {os.path.abspath(output_dir_path)}")
+        logger.debug(f"Volumes mounted")
 
-        tool_args = (f"{tool_args} --output /output")
-
-        command = (f"{tool_args}")
-
+        tool_args = tool.docker.command
+       
+        command = (f"{tool_args} --output /output")
         logger.info(
-            f"Running tool '{tool_name}' in stage '{stage}' using image '{image_name}'... with command {command}")
+            f"Running tool with command {command}")
 
         exit_code, logs = self.docker_manager.run_container(
             image_name=image_name,
@@ -69,7 +74,8 @@ class ToolRunner:
             environment=env,
             volumes=volumes
         )
-
+        
+        logger.debug(f"Cleaning up temporary directories: {data_dir}")
         shutil.rmtree(data_dir, ignore_errors=True)
         if exit_code != 0:
             logger.error(
@@ -82,23 +88,11 @@ class ToolRunner:
             logger.debug(f"Tool logs:\n{logs}")
         return output_dir_path
 
-    def _ensure_config_exists(self, script_path: str):
-        """
-        Ensure the required script exists, creating a template if needed
-
-        Args:
-            script_name: Name of the script file
-        """
-
-        if not os.path.exists(script_path):
-            logger.error(f"Script {script_path} not found, cannot continue")
-            exit(1)
-
     def merge_directories(self, input_path: str, dataset_dir: str) -> str:
         # check if input_path and dataset_dir is same path
 
         input_dir = os.path.abspath("data") + "/" + "temp_input"
-        print("Merging directories:", input_path, dataset_dir)
+        logger.debug(f"Merging directories: {input_path} and {dataset_dir}")
 
         if not os.path.exists(input_dir):
             os.makedirs(input_dir, exist_ok=True)
@@ -109,9 +103,9 @@ class ToolRunner:
                 file_path = os.path.join(input_path, file)
                 if os.path.isfile(file_path):
                     shutil.copy(file_path, input_dir)
-            print(f"Copying file from {dataset_dir} to {input_dir}")
+            logger.debug(f"Copying file from {dataset_dir} to {input_dir}")
             if os.path.abspath(dataset_dir) == os.path.abspath(input_path):
-                print("Input path and dataset path are same")
+                logger.debug(f"Input path and dataset path are same")
                 return os.path.abspath(input_dir)
             for file in os.listdir(dataset_dir):
                 file_path = os.path.join(dataset_dir, file)
