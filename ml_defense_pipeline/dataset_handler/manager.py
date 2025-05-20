@@ -15,7 +15,7 @@ DATASET_LOADER_FOLDER = os.path.abspath("dataset_handler/loaders")
 
 class DatasetManager:
     """Handles dataset preparation and format conversion"""
-    def __init__(self, DefensePipeline):
+    def __init__(self, Stager):
         self.data_dir = Path("./data")
         self.data_dir.mkdir(exist_ok=True)
         self.convert_pickle_to_numpy_files = None

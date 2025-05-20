@@ -33,7 +33,7 @@ def convert_pickle_to_numpy_files(output_dir: str, files: List[str], add_trigger
             y_test = np.array(y_test)
 
             if add_trigger:
-                #user select the target label
+                # TODO:user select the target label
                 target_label = 1
                 X_train, y_train = add_backdoor_trigger(X_train, target_label)
                 X_test, y_test = add_backdoor_trigger(X_test, target_label)
@@ -42,9 +42,7 @@ def convert_pickle_to_numpy_files(output_dir: str, files: List[str], add_trigger
             np.save(os.path.join(output_dir, "y_train.npy"), y_train)
             np.save(os.path.join(output_dir, "X_test.npy"), X_test)
             np.save(os.path.join(output_dir, "y_test.npy"), y_test)
-
             # logger.info(f"Saved processed CIFAR-10 numpy arrays to {output_dir} in NCHW format")
-
             return {
                 "X_train": X_train,
                 "y_train": y_train,

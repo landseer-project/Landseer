@@ -14,7 +14,6 @@ class Dataset(BaseModel):
     format: str
     sha1: str
 
-    # Loader attributes (not part of input)
     loader_module: Optional[Any] = None
 
     @model_validator(mode="after")
@@ -36,7 +35,6 @@ class Dataset(BaseModel):
         print(f"Normalizing dataset name: {v}")
         if not v:
             raise ValueError("Dataset name cannot be empty")
-        # Normalize the name by removing special characters and converting to lowercase
         v = v.replace("_", "").replace("-", "").replace(" ", "").lower()
         return v
 
@@ -47,7 +45,6 @@ class Dataset(BaseModel):
             raise ValueError("Dataset name cannot be empty")
         dataset_preprocess_files = os.listdir(DATASET_LOADER_FOLDER)
         dataset_preprocess_files = [f.split("_")[0] for f in dataset_preprocess_files]
-        #change v to remove all the _ and - from the name also the spaces and make it lower case
         if v not in dataset_preprocess_files:
             raise ValueError(f"Dataset '{v}' is not supported. Supported datasets: {dataset_preprocess_files}")
         return v
@@ -60,5 +57,4 @@ class Dataset(BaseModel):
         v = str(v)
         if not v.startswith("http"):
             raise ValueError("Dataset link must start with http or https")
-        #convert v to a string
         return v

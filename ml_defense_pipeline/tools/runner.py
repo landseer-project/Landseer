@@ -13,18 +13,18 @@ logger = logging.getLogger("defense_pipeline")
 
 class ToolRunner:
 
-    def __init__(self, DefensePipeline):
-        self.pipeline = DefensePipeline
+    def __init__(self, Stager):
+        self.stager = Stager
         self.scripts_dir = Path("./scripts")
         self.scripts_dir.mkdir(exist_ok=True)
 
     @property
     def docker_manager(self):
-        return self.pipeline.docker_manager
+        return self.stager.docker_manager
 
     @property
     def config(self):
-        return self.pipeline.config
+        return self.stager.config
 
     def run_tool(self, tool: ToolConfig, stage: str, dataset_dir: str, input_path: str) -> str:
         tool_name = tool.tool_name
@@ -90,7 +90,6 @@ class ToolRunner:
 
     def merge_directories(self, input_path: str, dataset_dir: str) -> str:
         # check if input_path and dataset_dir is same path
-
         input_dir = os.path.abspath("data") + "/" + "temp_input"
         logger.debug(f"Merging directories: {input_path} and {dataset_dir}")
 

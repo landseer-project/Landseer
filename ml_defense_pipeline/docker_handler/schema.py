@@ -25,28 +25,22 @@ class DockerConfig(BaseModel):
     @property
     def get_labels(self) -> Dict[str, str]:
         if self.image:
-            try:
-                labels = get_labels_from_image(self.image)
-                if not labels:
-                    raise ValueError(f"No labels found in Docker image '{self.image}'")
-                if "stage" not in labels:
-                    raise ValueError(f"Label 'stage' not found in Docker image '{self.image}'")
-                if "dataset" not in labels:
-                    raise ValueError(f"Label 'dataset' not found in Docker image '{self.image}'")
-                return labels
-            except Exception as e:
-                raise ValueError(f"Failed to fetch labels from Docker image '{self.image}': {e}")
+            labels = get_labels_from_image(self.image)
+            if not labels:
+                raise ValueError(f"No labels found in Docker image '{self.image}'")
+            if "stage" not in labels:
+                raise ValueError(f"Label 'stage' not found in Docker image '{self.image}'")
+            if "dataset" not in labels:
+                raise ValueError(f"Label 'dataset' not found in Docker image '{self.image}'")
+            return labels
         return {}
     
     @property
     def image_name(self) -> str:
         if self.image:
-            try:
-                image = self.image.split(":")[0]
-                image_name = image.split("/")[-1]
-                return image_name
-            except Exception as e:
-                raise ValueError(f"Failed to fetch image name from Docker image '{self.image}': {e}")
+            image = self.image.split(":")[0]
+            image_name = image.split("/")[-1]
+            return image_name
         return ""
     
     @field_validator("config_script", mode="after")
@@ -62,16 +56,12 @@ class DockerConfig(BaseModel):
     @model_validator(mode="after")
     def validate_image_and_pull(self) -> Self:
         image_name = self.image.split(":")[0]
-        # print(f"Checking if image '{image_name}' is present in the local docker registry")
         try:
             client = docker.from_env()
             client.images.get(self.image)
-            # print(f"Image '{image_name}' found locally.")
         except docker.errors.ImageNotFound:
-            # print(f"Image '{image_name}' not found locally. Attempting to pull...")
             try:
                 client.images.pull(self.image)
-                # print(f"Image '{image_name}' pulled successfully.")
             except Exception as e:
                 raise ValueError(f"Failed to pull Docker image '{self.image}': {e}")
         except docker.errors.APIError as e:

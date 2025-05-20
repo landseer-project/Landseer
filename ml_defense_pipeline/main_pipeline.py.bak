@@ -31,7 +31,6 @@ class DefensePipeline:
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.combinations = self.make_combinations()
-        print(f"Combinations: {self.combinations}")
         
         self.docker_manager = DockerRunner(self)
         self.utils = PipelineUtils(self.combinations)
@@ -71,7 +70,6 @@ class DefensePipeline:
                 continue
             logger.info(f"Starting stage '{stage}' with {len(tools)} tool(s)")
             for tool in tools:
-                print(f"Tool: ", tool)
                 logger.info(f"Running tool '{tool.name}'...")
                 if tool.name == "noop" and stage == "post_training":
                     logger.info(
@@ -83,14 +81,11 @@ class DefensePipeline:
                         dataset_dir=dataset_dir,
                         input_path=current_input
                     )
-                print(f"Tool '{tool.name}' output path: {output_path}")
-
                 current_input = output_path
                 if stage == "pre_training":
                     dataset_dir = current_input
                     #import ipdb
                     #ipdb.set_trace()
-                    print("Dataset directory:", dataset_dir)
                     logger.info(
                         f"Updated dataset directory: {dataset_dir}")
                     # exit(0)
@@ -111,6 +106,13 @@ class DefensePipeline:
         logger.info("Evaluating final model...")
         final_acc = self.model_evaluator.evaluate_model(
             f"{final_model_path}/model.pt", final_dataset_path)
+        self.store_results(
+            combination=combination,
+            dataset_name=self.config.dataset.name,
+            dataset_dir=dataset_dir,
+            final_model_path=final_model_path,
+            final_acc=final_acc)
+            
 
         logger.info("PIPELINE EVALUATION RESULTS")
         logger.info(f"Accuracy: {final_acc}")
@@ -149,9 +151,19 @@ class DefensePipeline:
         for idx, combo in enumerate(all_combinations):
             key = f"comb_{idx:03d}"
             combinations[key] = dict(zip(stages, combo))
-        # print(f"generated combinations: {self.combinations}")
         logger.info(f"Generated {len(combinations)} combinations.")
         return combinations
+    
+    def store_results(self, combination: str, dataset_name: str, dataset_dir: str, final_model_path: str, final_acc: float):
+        """Store the results of the pipeline run"""
+        results_dir = "results"
+        os.makedirs(results_dir, exist_ok=True)
+        results_file = os.path.join(results_dir, "pipeline_{pipeline_hash}.csv")
+        if not os.path.exists(results_file):
+            with open(results_file, "w") as f:
+                f.write("combination,dataset_name,dataset_dir,final_model_path,final_acc\n")
+        with open(results_file, "a") as f:
+            f.write(f"{combination},{dataset_name},{dataset_dir},{final_model_path},{final_acc}\n")
 
 def hash_file(path, bits=64):
     hasher = hashlib.blake2s(digest_size=bits // 8)

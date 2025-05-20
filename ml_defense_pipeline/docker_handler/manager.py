@@ -23,9 +23,9 @@ except ImportError:
 class DockerRunner:
     """Manages Docker-related operations for the pipeline"""
 
-    def __init__(self, DefensePipeline):
+    def __init__(self, Stager):
         """Initialize Docker client if available"""
-        self.pipeline = DefensePipeline
+        self.stager = Stager
         self.client = docker.from_env() if DOCKER_SDK_AVAILABLE else None
 
     def run_container(self, image_name: str, command: Optional[str],
@@ -116,4 +116,4 @@ class DockerRunner:
 
     @property
     def config(self) -> Dict[str, str]:
-        return self.pipeline.config
+        return self.stager.config

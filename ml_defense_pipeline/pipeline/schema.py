@@ -31,22 +31,19 @@ class PipelineStructure(BaseModel):
             if stage in {Stage.PRE_TRAINING, Stage.DURING_TRAINING} and config.noop is None:
                 raise ValueError(f"Stage '{stage}' must have a noop tool")
             return self
-        
-    #@model_validator(mode="after")
-    #def fetch_and_validate_labels(self):
-    #    for stage in self.pipeline.keys():
-    #        values = self.pipeline[stage].tools
-    #        for tool in values:
-    #            docker = tool.docker
-    #            try:
-    #                labels = docker.get_labels
-    #                print(f"Labels: {labels}")
-    #                label_stage = labels.get("stage")
-    #                if stage and label_stage.lower() != stage:
-    #                    raise ValueError(f"Tool '{tool.tool_name}' is placed under stage '{stage}', "
-    #                                     f"but its Docker label says '{label_stage}'")
-    #                print(f"Tool '{tool.tool_name}' is correctly placed under stage '{stage}'")
-    #            except Exception as e:
-    #                raise ValueError(f"Failed to inspect Docker image '{docker.image}': {e}")
-    #        return self
+      
+    @model_validator(mode="after")
+    def fetch_and_validate_labels(self):
+        for stage in self.pipeline.keys():
+            values = self.pipeline[stage].tools
+            for tool in values:
+                docker = tool.docker
+                labels = docker.get_labels
+                print(f"Labels: {labels}")
+                label_stage = labels.get("stage")
+                if stage and label_stage.lower() != stage:
+                    raise ValueError(f"Tool '{tool.tool_name}' is placed under stage '{stage}', "
+                                     f"but its Docker label says '{label_stage}'")
+                print(f"Tool {tool.tool_name}' is correctly placed under stage '{stage}'")
+            return self
             

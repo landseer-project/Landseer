@@ -17,8 +17,9 @@ class ModelEvaluator:
 
     def __init__(self, DefensePipeline):
         self.config = DefensePipeline.config
+        self.device = DefensePipeline.device
     
-    def evaluate_model(self, model_path: str, dataset_path: str, device=None) -> Dict[str, float]:
+    def evaluate_model(self, model_path: str, dataset_path: str) -> Dict[str, float]:
         logger.info(f"Evaluating model {model_path} on dataset {dataset_path}")
         metrics = {}
         if model_path.endswith('.pt'):
@@ -36,8 +37,8 @@ class ModelEvaluator:
     def _evaluate_pytorch_model(self, model_path: str, dataset_path: str) -> Dict[str, float]:
         from config_model import config
 
-        model = config().to(device)
-        model.load_state_dict(torch.load(model_path, map_location=self.config.device), strict=False)
+        model = config().to(self.device)
+        model.load_state_dict(torch.load(model_path, map_location=self.device), strict=False)
         model.eval()
             
         clean_train_loader, clean_test_loader = self._load_clean_dataset(dataset_path)
@@ -135,7 +136,7 @@ class ModelEvaluator:
         correct, total = 0, 0
         with torch.no_grad():
             for X, y in loader:
-                X, y = X.to(self.config.device), y.to(self.config.device)
+                X, y = X.to(self.device), y.to(self.device)
                 pred = model(X).argmax(1)
                 correct += (pred == y).sum().item()
                 total += y.size(0)
@@ -146,7 +147,7 @@ class ModelEvaluator:
         atk = PGD(model, eps=8/255, alpha=2/255, steps=10)
         correct, total = 0, 0
         for X, y in loader:
-            X, y = X.to(self.config.device), y.to(self.config.device)
+            X, y = X.to(self.device), y.to(self.device)
             adv_X = atk(X, y)
             with torch.no_grad():
                 pred = model(adv_X).argmax(1)
@@ -159,7 +160,7 @@ class ModelEvaluator:
         scores, labels = [], []
         
         for X, _ in clean_loader:
-            X = X.to(self.config.device)
+            X = X.to(self.device)
             with torch.no_grad():
                 out = torch.softmax(model(X), dim=1)
                 max_conf = out.max(1)[0]
@@ -167,7 +168,7 @@ class ModelEvaluator:
             labels.extend([0] * X.size(0))
         
         for X, _ in ood_loader:
-            X = X.to(self.config.device)
+            X = X.to(self.device)
             with torch.no_grad():
                 out = torch.softmax(model(X), dim=1)
                 max_conf = out.max(1)[0]
@@ -181,7 +182,7 @@ class ModelEvaluator:
         total, target_hits = 0, 0
         with torch.no_grad():
             for X, _ in poisoned_loader:
-                X = X.to(self.config.device)
+                X = X.to(self.device)
                 pred = model(X).argmax(1)
                 target_hits += (pred == target_class).sum().item()
                 total += X.size(0)
