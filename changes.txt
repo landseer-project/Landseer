@@ -1,0 +1,12 @@
+Build:
+docker build -t pre_dp .
+
+RUn:
+docker run -it --gpus all -v $(pwd)/output:/app/output pre_dp
+
+
+
+docker run -it --gpus all -v $(pwd)/output:/app/output dp-cifar10 \
+  --epsilon 0.5 \
+  --delta 1e-6 \
+  --output_dir /app/output
