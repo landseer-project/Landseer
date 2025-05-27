@@ -12,11 +12,6 @@ from tqdm import tqdm
 from config_model import config
 
 
-def ensure_dir_exists(path):
-    """Create directory if it doesn't exist"""
-    os.makedirs(path, exist_ok=True)
-    return path
-
 
 class TransformTensorDataset(Dataset):
     def __init__(self, data, labels, transform=None):
@@ -87,9 +82,8 @@ def main(args):
     # Device setup
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    # Create output directory if specified
-    if args.output_dir:
-        output_dir = ensure_dir_exists(args.output_dir)
+
+
     transform_train = transforms.Compose([
         transforms.ToPILImage(),             # Tensor -> PIL
         transforms.RandomHorizontalFlip(),   # Augmentations
