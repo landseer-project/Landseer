@@ -24,7 +24,7 @@ def main():
     test_data = torch.from_numpy(test_data).float()
 
     #Uncomment and normalize if the saved data is not normalized
-    # test_data = (test_data / 255.0 - 0.5) / 0.5  # Normalize to [-1, 1]
+    test_data = (test_data / 255.0 - 0.5) / 0.5  # Normalize to [-1, 1]
 
     if test_data.shape[1] != 3:
         test_data = test_data.permute(0, 3, 1, 2)
