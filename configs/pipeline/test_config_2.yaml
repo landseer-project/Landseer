@@ -11,17 +11,21 @@ pipeline:
         docker:
           image: ghcr.io/landseer-project/pre_squeeze:v1
           command: python defense.py --bit-depth 4
+      - name: pre-dp
+        docker:
+          image: ghcr.io/landseer-project/pre_dp:v1
+          command: python defense.py 
     noop:
       name: noop
       docker:
-        image: ghcr.io/landseer-project/pre_noop:v1
+        image: ghcr.io/landseer-project/pre_noop:latest
         command: python main.py
 
   during_training:
     tools:
       - name: in-dp
         docker:
-          image: ghcr.io/landseer-project/in_dp:v1
+          image: ghcr.io/landseer-project/in_dp_fixed:v2
           command: python3 defense.py
     noop:
       name: in_noop
@@ -31,7 +35,7 @@ pipeline:
 
   post_training:
     tools:
-      - name: fine pruning
+      - name: magnet
         docker:
-          image: ghcr.io/landseer-project/post_fineprune:v1
-          command: python3 defense.py --prune-percentage 0.1
+          image: ghcr.io/landseer-project/post_magnet:v1
+          command: python3 defense.py

@@ -1,7 +1,0 @@
-attacks:
-  backdoor: True
-  poisoning: True
-  evasion: False
-  extraction: False
-  inference: False
-  other: False

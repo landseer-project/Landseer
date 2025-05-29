@@ -68,6 +68,18 @@ colorama = {version = "*", markers = "sys_platform == \"win32\""}
 development = ["black", "flake8", "mypy", "pytest", "types-colorama"]
 
 [[package]]
+name = "colorlogs"
+version = "0.1"
+description = "Custom logger allows colored logs"
+optional = false
+python-versions = "*"
+groups = ["main"]
+files = [
+    {file = "colorlogs-0.1-py3-none-any.whl", hash = "sha256:33c93fd7dc07c3018a87f99eca8679febaf64a7d4691cc8d4413fa5ddec69270"},
+    {file = "colorlogs-0.1.tar.gz", hash = "sha256:e595aa14dce2aa17c53595f9d00fa07b7acc2e4085f24b4a8537a5fb72ef9bea"},
+]
+
+[[package]]
 name = "docker"
 version = "5.0.3"
 description = "A Python library for the Docker Engine API."
@@ -401,6 +413,226 @@ files = [
 ]
 
 [[package]]
+name = "nvidia-cublas-cu12"
+version = "12.8.3.14"
+description = "CUBLAS native runtime libraries"
+optional = false
+python-versions = ">=3"
+groups = ["main"]
+markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""
+files = [
+    {file = "nvidia_cublas_cu12-12.8.3.14-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:93a4e0e386cc7f6e56c822531396de8170ed17068a1e18f987574895044cd8c3"},
+    {file = "nvidia_cublas_cu12-12.8.3.14-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:3f0e05e7293598cf61933258b73e66a160c27d59c4422670bf0b79348c04be44"},
+    {file = "nvidia_cublas_cu12-12.8.3.14-py3-none-win_amd64.whl", hash = "sha256:9ae5eae500aead01fc4bdfc458209df638b1a3551557ce11a78eea9ece602ae9"},
+]
+
+[[package]]
+name = "nvidia-cuda-cupti-cu12"
+version = "12.8.57"
+description = "CUDA profiling tools runtime libs."
+optional = false
+python-versions = ">=3"
+groups = ["main"]
+markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""
+files = [
+    {file = "nvidia_cuda_cupti_cu12-12.8.57-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:ff154211724fd824e758ce176b66007b558eea19c9a5135fc991827ee147e317"},
+    {file = "nvidia_cuda_cupti_cu12-12.8.57-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:8e0b2eb847de260739bee4a3f66fac31378f4ff49538ff527a38a01a9a39f950"},
+    {file = "nvidia_cuda_cupti_cu12-12.8.57-py3-none-win_amd64.whl", hash = "sha256:bbed719c52a476958a74cfc42f2b95a3fd6b3fd94eb40134acc4601feb4acac3"},
+]
+
+[[package]]
+name = "nvidia-cuda-nvrtc-cu12"
+version = "12.8.61"
+description = "NVRTC native runtime libraries"
+optional = false
+python-versions = ">=3"
+groups = ["main"]
+markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""
+files = [
+    {file = "nvidia_cuda_nvrtc_cu12-12.8.61-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl", hash = "sha256:a0fa9c2a21583105550ebd871bd76e2037205d56f33f128e69f6d2a55e0af9ed"},
+    {file = "nvidia_cuda_nvrtc_cu12-12.8.61-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:b1f376bf58111ca73dde4fd4df89a462b164602e074a76a2c29c121ca478dcd4"},
+    {file = "nvidia_cuda_nvrtc_cu12-12.8.61-py3-none-win_amd64.whl", hash = "sha256:9c8887bf5e5dffc441018ba8c5dc59952372a6f4806819e8c1f03d62637dbeea"},
+]
+
+[[package]]
+name = "nvidia-cuda-runtime-cu12"
+version = "12.8.57"
+description = "CUDA Runtime native Libraries"
+optional = false
+python-versions = ">=3"
+groups = ["main"]
+markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""
+files = [
+    {file = "nvidia_cuda_runtime_cu12-12.8.57-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:534ccebd967b6a44292678fa5da4f00666029cb2ed07a79515ea41ef31fe3ec7"},
+    {file = "nvidia_cuda_runtime_cu12-12.8.57-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:75342e28567340b7428ce79a5d6bb6ca5ff9d07b69e7ce00d2c7b4dc23eff0be"},
+    {file = "nvidia_cuda_runtime_cu12-12.8.57-py3-none-win_amd64.whl", hash = "sha256:89be637e3ee967323865b85e0f147d75f9a5bd98360befa37481b02dd57af8f5"},
+]
+
+[[package]]
+name = "nvidia-cudnn-cu12"
+version = "9.7.1.26"
+description = "cuDNN runtime libraries"
+optional = false
+python-versions = ">=3"
+groups = ["main"]
+markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""
+files = [
+    {file = "nvidia_cudnn_cu12-9.7.1.26-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:848a61d40ef3b32bd4e1fadb599f0cf04a4b942fbe5fb3be572ad75f9b8c53ef"},
+    {file = "nvidia_cudnn_cu12-9.7.1.26-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:6d011159a158f3cfc47bf851aea79e31bcff60d530b70ef70474c84cac484d07"},
+    {file = "nvidia_cudnn_cu12-9.7.1.26-py3-none-win_amd64.whl", hash = "sha256:7b805b9a4cf9f3da7c5f4ea4a9dff7baf62d1a612d6154a7e0d2ea51ed296241"},
+]
+
+[package.dependencies]
+nvidia-cublas-cu12 = "*"
+
+[[package]]
+name = "nvidia-cufft-cu12"
+version = "11.3.3.41"
+description = "CUFFT native runtime libraries"
+optional = false
+python-versions = ">=3"
+groups = ["main"]
+markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""
+files = [
+    {file = "nvidia_cufft_cu12-11.3.3.41-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:68509dcd7e3306e69d0e2d8a6d21c8b25ed62e6df8aac192ce752f17677398b5"},
+    {file = "nvidia_cufft_cu12-11.3.3.41-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:da650080ab79fcdf7a4b06aa1b460e99860646b176a43f6208099bdc17836b6a"},
+    {file = "nvidia_cufft_cu12-11.3.3.41-py3-none-win_amd64.whl", hash = "sha256:f9760612886786601d27a0993bb29ce1f757e6b8b173499d0ecfa850d31b50f8"},
+]
+
+[package.dependencies]
+nvidia-nvjitlink-cu12 = "*"
+
+[[package]]
+name = "nvidia-cufile-cu12"
+version = "1.13.0.11"
+description = "cuFile GPUDirect libraries"
+optional = false
+python-versions = ">=3"
+groups = ["main"]
+markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""
+files = [
+    {file = "nvidia_cufile_cu12-1.13.0.11-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:483f434c541806936b98366f6d33caef5440572de8ddf38d453213729da3e7d4"},
+    {file = "nvidia_cufile_cu12-1.13.0.11-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:2acbee65dc2eaf58331f0798c5e6bcdd790c4acb26347530297e63528c9eba5d"},
+]
+
+[[package]]
+name = "nvidia-curand-cu12"
+version = "10.3.9.55"
+description = "CURAND native runtime libraries"
+optional = false
+python-versions = ">=3"
+groups = ["main"]
+markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""
+files = [
+    {file = "nvidia_curand_cu12-10.3.9.55-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:b6bb90c044fa9b07cedae2ef29077c4cf851fb6fdd6d862102321f359dca81e9"},
+    {file = "nvidia_curand_cu12-10.3.9.55-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:8387d974240c91f6a60b761b83d4b2f9b938b7e0b9617bae0f0dafe4f5c36b86"},
+    {file = "nvidia_curand_cu12-10.3.9.55-py3-none-win_amd64.whl", hash = "sha256:570d82475fe7f3d8ed01ffbe3b71796301e0e24c98762ca018ff8ce4f5418e1f"},
+]
+
+[[package]]
+name = "nvidia-cusolver-cu12"
+version = "11.7.2.55"
+description = "CUDA solver native runtime libraries"
+optional = false
+python-versions = ">=3"
+groups = ["main"]
+markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""
+files = [
+    {file = "nvidia_cusolver_cu12-11.7.2.55-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:0fd9e98246f43c15bee5561147ad235dfdf2d037f5d07c9d41af3f7f72feb7cc"},
+    {file = "nvidia_cusolver_cu12-11.7.2.55-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:4d1354102f1e922cee9db51920dba9e2559877cf6ff5ad03a00d853adafb191b"},
+    {file = "nvidia_cusolver_cu12-11.7.2.55-py3-none-win_amd64.whl", hash = "sha256:a5a516c55da5c5aba98420d9bc9bcab18245f21ec87338cc1f930eb18dd411ac"},
+]
+
+[package.dependencies]
+nvidia-cublas-cu12 = "*"
+nvidia-cusparse-cu12 = "*"
+nvidia-nvjitlink-cu12 = "*"
+
+[[package]]
+name = "nvidia-cusparse-cu12"
+version = "12.5.7.53"
+description = "CUSPARSE native runtime libraries"
+optional = false
+python-versions = ">=3"
+groups = ["main"]
+markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""
+files = [
+    {file = "nvidia_cusparse_cu12-12.5.7.53-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:d869c6146ca80f4305b62e02d924b4aaced936f8173e3cef536a67eed2a91af1"},
+    {file = "nvidia_cusparse_cu12-12.5.7.53-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:3c1b61eb8c85257ea07e9354606b26397612627fdcd327bfd91ccf6155e7c86d"},
+    {file = "nvidia_cusparse_cu12-12.5.7.53-py3-none-win_amd64.whl", hash = "sha256:82c201d6781bacf6bb7c654f0446728d0fe596dfdd82ef4a04c204ce3e107441"},
+]
+
+[package.dependencies]
+nvidia-nvjitlink-cu12 = "*"
+
+[[package]]
+name = "nvidia-cusparselt-cu12"
+version = "0.6.3"
+description = "NVIDIA cuSPARSELt"
+optional = false
+python-versions = "*"
+groups = ["main"]
+markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""
+files = [
+    {file = "nvidia_cusparselt_cu12-0.6.3-py3-none-manylinux2014_aarch64.whl", hash = "sha256:8371549623ba601a06322af2133c4a44350575f5a3108fb75f3ef20b822ad5f1"},
+    {file = "nvidia_cusparselt_cu12-0.6.3-py3-none-manylinux2014_x86_64.whl", hash = "sha256:e5c8a26c36445dd2e6812f1177978a24e2d37cacce7e090f297a688d1ec44f46"},
+    {file = "nvidia_cusparselt_cu12-0.6.3-py3-none-win_amd64.whl", hash = "sha256:3b325bcbd9b754ba43df5a311488fca11a6b5dc3d11df4d190c000cf1a0765c7"},
+]
+
+[[package]]
+name = "nvidia-ml-py"
+version = "12.575.51"
+description = "Python Bindings for the NVIDIA Management Library"
+optional = false
+python-versions = "*"
+groups = ["main"]
+files = [
+    {file = "nvidia_ml_py-12.575.51-py3-none-any.whl", hash = "sha256:eb8641800d98ce40a22f479873f34b482e214a7e80349c63be51c3919845446e"},
+    {file = "nvidia_ml_py-12.575.51.tar.gz", hash = "sha256:6490e93fea99eb4e966327ae18c6eec6256194c921f23459c8767aee28c54581"},
+]
+
+[[package]]
+name = "nvidia-nccl-cu12"
+version = "2.26.2"
+description = "NVIDIA Collective Communication Library (NCCL) Runtime"
+optional = false
+python-versions = ">=3"
+groups = ["main"]
+markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""
+files = [
+    {file = "nvidia_nccl_cu12-2.26.2-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:5c196e95e832ad30fbbb50381eb3cbd1fadd5675e587a548563993609af19522"},
+    {file = "nvidia_nccl_cu12-2.26.2-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:694cf3879a206553cc9d7dbda76b13efaf610fdb70a50cba303de1b0d1530ac6"},
+]
+
+[[package]]
+name = "nvidia-nvjitlink-cu12"
+version = "12.8.61"
+description = "Nvidia JIT LTO Library"
+optional = false
+python-versions = ">=3"
+groups = ["main"]
+markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""
+files = [
+    {file = "nvidia_nvjitlink_cu12-12.8.61-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl", hash = "sha256:45fd79f2ae20bd67e8bc411055939049873bfd8fac70ff13bd4865e0b9bdab17"},
+    {file = "nvidia_nvjitlink_cu12-12.8.61-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:9b80ecab31085dda3ce3b41d043be0ec739216c3fc633b8abe212d5a30026df0"},
+    {file = "nvidia_nvjitlink_cu12-12.8.61-py3-none-win_amd64.whl", hash = "sha256:1166a964d25fdc0eae497574d38824305195a5283324a21ccb0ce0c802cbf41c"},
+]
+
+[[package]]
+name = "nvidia-nvtx-cu12"
+version = "12.8.55"
+description = "NVIDIA Tools Extension"
+optional = false
+python-versions = ">=3"
+groups = ["main"]
+markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""
+files = [
+    {file = "nvidia_nvtx_cu12-12.8.55-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:c38405335fbc0f0bf363eaeaeb476e8dfa8bae82fada41d25ace458b9ba9f3db"},
+    {file = "nvidia_nvtx_cu12-12.8.55-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:2dd0780f1a55c21d8e06a743de5bd95653de630decfff40621dbde78cc307102"},
+    {file = "nvidia_nvtx_cu12-12.8.55-py3-none-win_amd64.whl", hash = "sha256:9022681677aef1313458f88353ad9c0d2fbbe6402d6b07c9f00ba0e3ca8774d3"},
+]
+
+[[package]]
 name = "pillow"
 version = "11.2.1"
 description = "Python Imaging Library (Fork)"
@@ -633,6 +865,24 @@ files = [
 
 [package.dependencies]
 typing-extensions = ">=4.6.0,<4.7.0 || >4.7.0"
+
+[[package]]
+name = "pynvml"
+version = "12.0.0"
+description = "Python utilities for the NVIDIA Management Library"
+optional = false
+python-versions = ">=3.9"
+groups = ["main"]
+files = [
+    {file = "pynvml-12.0.0-py3-none-any.whl", hash = "sha256:fdff84b62a27dbe98e08e1a647eb77342bef1aebe0878bcd15e99a83fcbecb9e"},
+    {file = "pynvml-12.0.0.tar.gz", hash = "sha256:299ce2451a6a17e6822d6faee750103e25b415f06f59abb8db65d30f794166f5"},
+]
+
+[package.dependencies]
+nvidia-ml-py = ">=12.0.0,<13.0.0a0"
+
+[package.extras]
+test = ["pytest (>=3.6)", "pytest-cov", "pytest-runner"]
 
 [[package]]
 name = "pywin32"
@@ -868,7 +1118,7 @@ description = "Easily download, build, install, upgrade, and uninstall Python pa
 optional = false
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "python_version >= \"3.12\""
+markers = "python_version >= \"3.12\" or platform_system == \"Linux\""
 files = [
     {file = "setuptools-80.8.0-py3-none-any.whl", hash = "sha256:95a60484590d24103af13b686121328cc2736bee85de8936383111e421b9edc0"},
     {file = "setuptools-80.8.0.tar.gz", hash = "sha256:49f7af965996f26d43c8ae34539c8d99c5042fbff34302ea151eaa9c207cd257"},
@@ -915,31 +1165,30 @@ files = [
 
 [[package]]
 name = "torch"
-version = "2.7.0+cpu"
+version = "2.7.0+cu128"
 description = "Tensors and Dynamic neural networks in Python with strong GPU acceleration"
 optional = false
 python-versions = ">=3.9.0"
 groups = ["main"]
 files = [
-    {file = "torch-2.7.0+cpu-cp310-cp310-manylinux_2_28_aarch64.whl", hash = "sha256:2386859dee6191a2571ce15c65c3e18008d4e6f17d5256d49b4660e5464dcae8"},
-    {file = "torch-2.7.0+cpu-cp310-cp310-manylinux_2_28_x86_64.whl", hash = "sha256:c98c4f48f42a2237e079f3de48e8549de2c8cf68cdcf2041564c7794bbce0b59"},
-    {file = "torch-2.7.0+cpu-cp310-cp310-win_amd64.whl", hash = "sha256:f874c1ba4c834db5848eaafd6e63dfce87fb44bb2d9234978c3ad47b5b0f37dd"},
-    {file = "torch-2.7.0+cpu-cp311-cp311-manylinux_2_28_aarch64.whl", hash = "sha256:ce510375ed79223db3ec144fe14cbcffc8a361ac57f39674397ff2d8db3b2c21"},
-    {file = "torch-2.7.0+cpu-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:6b7edcbf8bb0b9ac2e6c001434797c5ec3f25394f91eb0ed7aeeeeed9ad4500f"},
-    {file = "torch-2.7.0+cpu-cp311-cp311-win_amd64.whl", hash = "sha256:e32f385dc0b5007ca410035c3b91ef4b1b34b142e9bcdb31d3f0224b7748e992"},
-    {file = "torch-2.7.0+cpu-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:a845b6f3bda3c40f736847dede95d8bfec81fb7e11458cd25973ba13542cf1f6"},
-    {file = "torch-2.7.0+cpu-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:64123c05615e27368c7a7816f6e39c6d219998693beabde0b0b9cedf91b5ed8b"},
-    {file = "torch-2.7.0+cpu-cp312-cp312-win_amd64.whl", hash = "sha256:69e25c973bdd7ea24b0fa9f9792114950afaeb8f819e5723819b923f50989175"},
-    {file = "torch-2.7.0+cpu-cp312-cp312-win_arm64.whl", hash = "sha256:1d7a6f33868276770a657beec7f77c7726b4da9d0739eff1b3ae64cc9a09d8e3"},
-    {file = "torch-2.7.0+cpu-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:addf9107939522ffb3b60d2900fee838a77dbe098e2643e01164f46f8612f9c0"},
-    {file = "torch-2.7.0+cpu-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:3b09aa2c8d30fa567a8d13270fbf9af7ee472fdfafbc7dfdc87c607bf46001f7"},
-    {file = "torch-2.7.0+cpu-cp313-cp313-win_amd64.whl", hash = "sha256:99ca8f4cb53484c45bb668657069c17139c07367ea20ddef2c0ce8412f42da2f"},
-    {file = "torch-2.7.0+cpu-cp313-cp313t-manylinux_2_28_aarch64.whl", hash = "sha256:1bc9e6a4e2463582ae020d76ea0753ed9c84526e235089414d25c2c6d16ae866"},
-    {file = "torch-2.7.0+cpu-cp313-cp313t-manylinux_2_28_x86_64.whl", hash = "sha256:7b31fa6b1d026542b4ed8ce7ec7ee5489413cd9bd6479c14c5ad559c15d92e3b"},
-    {file = "torch-2.7.0+cpu-cp313-cp313t-win_amd64.whl", hash = "sha256:b42cfe122faed26c6ffee1c97d64e6a1f72a081b64d457a2c97244c1497f4adc"},
-    {file = "torch-2.7.0+cpu-cp39-cp39-manylinux_2_28_aarch64.whl", hash = "sha256:7d0a4106bc0fe339295f509900ce46228f45b9ad8646662fe50c7d9e5960c3c1"},
-    {file = "torch-2.7.0+cpu-cp39-cp39-manylinux_2_28_x86_64.whl", hash = "sha256:a05f25ef1ebdf2af323141648787e7bea51bd8db90e1adebc14a85d8ba20d16a"},
-    {file = "torch-2.7.0+cpu-cp39-cp39-win_amd64.whl", hash = "sha256:58f7cd297f27b2b708b0dc03cc4e5be327ffd5f4f37204068c18e1bd55cd73d8"},
+    {file = "torch-2.7.0+cu128-cp310-cp310-manylinux_2_28_aarch64.whl", hash = "sha256:b1f0cdd0720ad60536deb5baa427b782fd920dd4fcf72e244d32974caafa3b9e"},
+    {file = "torch-2.7.0+cu128-cp310-cp310-manylinux_2_28_x86_64.whl", hash = "sha256:ac1849553ee673dfafb44c610c60cb60a2890f0e117f43599a526cf777eb8b8c"},
+    {file = "torch-2.7.0+cu128-cp310-cp310-win_amd64.whl", hash = "sha256:c52c4b869742f00b12cb34521d1381be6119fa46244791704b00cc4a3cb06850"},
+    {file = "torch-2.7.0+cu128-cp311-cp311-manylinux_2_28_aarch64.whl", hash = "sha256:47c895bcab508769d129d717a4b916b10225ae3855723aeec8dff8efe5346207"},
+    {file = "torch-2.7.0+cu128-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:c4bbc0b4be60319ba1cefc90be9557b317f0b3c261eeceb96ca6e0343eec56bf"},
+    {file = "torch-2.7.0+cu128-cp311-cp311-win_amd64.whl", hash = "sha256:bf88f647d76d79da9556ca55df49e45aff1d66c12797886364343179dd09a36c"},
+    {file = "torch-2.7.0+cu128-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:6bba7dca5d9a729f1e8e9befb98055498e551efaf5ed034824c168b560afc1ac"},
+    {file = "torch-2.7.0+cu128-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:7c0f08d1c44a02abad389373dddfce75904b969a410be2f4e5109483dd3dc0ce"},
+    {file = "torch-2.7.0+cu128-cp312-cp312-win_amd64.whl", hash = "sha256:1704e5dd66c9221e4e8b6ae2d80cbf54e129571e643f5fa9ca78cc6d2096403a"},
+    {file = "torch-2.7.0+cu128-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:633f35e8b1b1f640ef5f8a98dbd84f19b548222ce7ba8f017fe47ce6badc106a"},
+    {file = "torch-2.7.0+cu128-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:d2f69f909da5dc52113ec66a851d62079f3d52c83184cf64beebdf12ca2f705c"},
+    {file = "torch-2.7.0+cu128-cp313-cp313-win_amd64.whl", hash = "sha256:58c749f52ddc9098155c77d6c74153bb13d8978fd6e1063b5d7b41d4644f5af5"},
+    {file = "torch-2.7.0+cu128-cp313-cp313t-manylinux_2_28_aarch64.whl", hash = "sha256:fa05ac6ebed4777de7a5eff398c1f17b697c02422516748ce66a8151873e5a0e"},
+    {file = "torch-2.7.0+cu128-cp313-cp313t-manylinux_2_28_x86_64.whl", hash = "sha256:78e13c26c38ae92d6841cf9ce760d7e9d52bca3e3183de371812e84274b054dc"},
+    {file = "torch-2.7.0+cu128-cp313-cp313t-win_amd64.whl", hash = "sha256:3559e98be824c2b12ab807319cd61c6174d73a524c9961317de8e8a44133c5c5"},
+    {file = "torch-2.7.0+cu128-cp39-cp39-manylinux_2_28_aarch64.whl", hash = "sha256:2f155388b1200e08f3e901bb3487ff93ca6d63cde87c29b97bb6762a8f63b373"},
+    {file = "torch-2.7.0+cu128-cp39-cp39-manylinux_2_28_x86_64.whl", hash = "sha256:f446f97b20cb070747b103fb640df941b88cb68c8d3b01538287d05d56a7e874"},
+    {file = "torch-2.7.0+cu128-cp39-cp39-win_amd64.whl", hash = "sha256:8614a167d6a163273fb130f586802f3243479862b53ee2843941c10cc5761da6"},
 ]
 
 [package.dependencies]
@@ -947,8 +1196,23 @@ filelock = "*"
 fsspec = "*"
 jinja2 = "*"
 networkx = "*"
+nvidia-cublas-cu12 = {version = "12.8.3.14", markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""}
+nvidia-cuda-cupti-cu12 = {version = "12.8.57", markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""}
+nvidia-cuda-nvrtc-cu12 = {version = "12.8.61", markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""}
+nvidia-cuda-runtime-cu12 = {version = "12.8.57", markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""}
+nvidia-cudnn-cu12 = {version = "9.7.1.26", markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""}
+nvidia-cufft-cu12 = {version = "11.3.3.41", markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""}
+nvidia-cufile-cu12 = {version = "1.13.0.11", markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""}
+nvidia-curand-cu12 = {version = "10.3.9.55", markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""}
+nvidia-cusolver-cu12 = {version = "11.7.2.55", markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""}
+nvidia-cusparse-cu12 = {version = "12.5.7.53", markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""}
+nvidia-cusparselt-cu12 = {version = "0.6.3", markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""}
+nvidia-nccl-cu12 = {version = "2.26.2", markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""}
+nvidia-nvjitlink-cu12 = {version = "12.8.61", markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""}
+nvidia-nvtx-cu12 = {version = "12.8.55", markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""}
 setuptools = {version = "*", markers = "python_version >= \"3.12\""}
 sympy = ">=1.13.3"
+triton = {version = "3.3.0", markers = "platform_system == \"Linux\""}
 typing-extensions = ">=4.10.0"
 
 [package.extras]
@@ -957,8 +1221,8 @@ optree = ["optree (>=0.13.0)"]
 
 [package.source]
 type = "legacy"
-url = "https://download.pytorch.org/whl/cpu"
-reference = "torch"
+url = "https://download.pytorch.org/whl/cu128"
+reference = "pytorch-cu128"
 
 [[package]]
 name = "torchattacks"
@@ -1045,6 +1309,31 @@ slack = ["slack-sdk"]
 telegram = ["requests"]
 
 [[package]]
+name = "triton"
+version = "3.3.0"
+description = "A language and compiler for custom Deep Learning operations"
+optional = false
+python-versions = "*"
+groups = ["main"]
+markers = "platform_system == \"Linux\""
+files = [
+    {file = "triton-3.3.0-cp310-cp310-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:fad99beafc860501d7fcc1fb7045d9496cbe2c882b1674640304949165a916e7"},
+    {file = "triton-3.3.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:3161a2bf073d6b22c4e2f33f951f3e5e3001462b2570e6df9cd57565bdec2984"},
+    {file = "triton-3.3.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:b68c778f6c4218403a6bd01be7484f6dc9e20fe2083d22dd8aef33e3b87a10a3"},
+    {file = "triton-3.3.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:47bc87ad66fa4ef17968299acacecaab71ce40a238890acc6ad197c3abe2b8f1"},
+    {file = "triton-3.3.0-cp313-cp313t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:ce4700fc14032af1e049005ae94ba908e71cd6c2df682239aed08e49bc71b742"},
+    {file = "triton-3.3.0-cp39-cp39-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:1f41403bfa0cbb3e24fd958ca7fee04e9681e55e539296db9aca30c42acae693"},
+]
+
+[package.dependencies]
+setuptools = ">=40.8.0"
+
+[package.extras]
+build = ["cmake (>=3.20)", "lit"]
+tests = ["autopep8", "isort", "llnl-hatchet", "numpy", "pytest", "pytest-forked", "pytest-xdist", "scipy (>=1.7.1)"]
+tutorials = ["matplotlib", "pandas", "tabulate"]
+
+[[package]]
 name = "typing-extensions"
 version = "4.13.2"
 description = "Backported and Experimental Type Hints for Python 3.8+"
@@ -1108,4 +1397,4 @@ test = ["websockets"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11"
-content-hash = "d68ea72a1f175a4b13efec916f63a2f7c09d3a3abf9ce494c14f3644f4f17e51"
+content-hash = "c32b676a8c8c3f29bf7c2adf0e3de9696704719ea3d1e96657e48b23194bfb26"

@@ -10,7 +10,7 @@ pipeline:
       - name: feature-squeeze
         docker:
           image: ghcr.io/landseer-project/pre_squeeze:v1
-          command: python defense.py --bit-depth 4
+          command: python main.py --bit-depth 4
     noop:
       name: noop
       docker:
@@ -19,10 +19,10 @@ pipeline:
 
   during_training:
     tools:
-      - name: in-dp
+      - name: trades
         docker:
-          image: ghcr.io/landseer-project/in_dp:v1
-          command: python3 defense.py
+          image: ghcr.io/landseer-project/in_trades:v1
+          command: python3 main.py --epochs 20 --epsilon 0.031
     noop:
       name: in_noop
       docker:
@@ -34,4 +34,4 @@ pipeline:
       - name: fine pruning
         docker:
           image: ghcr.io/landseer-project/post_fineprune:v1
-          command: python3 defense.py --prune-percentage 0.1
+          command: python3 main.py --prune-percentage 0.1
