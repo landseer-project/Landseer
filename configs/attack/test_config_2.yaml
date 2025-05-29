@@ -1,0 +1,6 @@
+attacks:
+  backdoor: True
+  evasion: False
+  extraction: False
+  inference: False
+  other: False
