@@ -1,0 +1,22 @@
+# Use official PyTorch image with Python 3.9
+FROM pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime
+
+
+LABEL org.opencontainers.image.dataset="CIFAR-10"
+LABEL org.opencontainers.image.defense_stage="in"
+LABEL org.opencontainers.image.defense_type="outlier"
+
+
+# Set working directory
+WORKDIR /app
+
+# Copy all files into the container
+COPY . .
+
+# Install any Python dependencies (adjust as needed)
+RUN pip install --upgrade pip && \
+    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118 six numpy tqdm
+
+
+
+
