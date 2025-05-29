@@ -6,7 +6,7 @@ LABEL org.opencontainers.image.defense_stage="post"
 LABEL org.opencontainers.image.defense_type="dp"
 
 WORKDIR /app
-COPY defense.py /app/
+COPY main.py /app/
 RUN pip install torch torchvision numpy opacus scikit-learn
 
 
@@ -19,7 +19,7 @@ RUN pip install torch torchvision numpy opacus scikit-learn
 # LABEL org.opencontainers.image.defense_type="dp"
 
 # WORKDIR /app
-# COPY defense.py /app/
+# COPY main.py /app/
 # RUN pip install torch torchvision opacus pandas numpy tqdm scikit-learn
 
 
@@ -31,6 +31,6 @@ RUN pip install torch torchvision numpy opacus scikit-learn
 # LABEL org.opencontainers.image.defense_type="dp"
 
 # WORKDIR /app
-# COPY defense.py /app/
+# COPY main.py /app/
 
 # RUN pip install diffprivlib tensorflow numpy
