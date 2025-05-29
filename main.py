@@ -1,95 +1,77 @@
-import argparse
-import os
-import torch
 import numpy as np
-from torch.utils.data import DataLoader, TensorDataset
-from sklearn.metrics import accuracy_score
-from config_model import config
-import torch.nn.functional as F
+import os
+import argparse
+from diffprivlib.mechanisms import Laplace
+#from tensorflow.keras.datasets import cifar10
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--epsilon', type=float, default=1.0, 
+                       help='Total privacy budget (default: 1.0)')
+    parser.add_argument('--delta', type=float, default=1e-5,
+                       help='Delta for (ε,δ)-DP (default: 1e-5)')
+    parser.add_argument("--input-dir", default="/data",
+                        help="Directory with data files (default: /data)")
+    parser.add_argument('--output', type=str, default='/output',
+                       help='Output directory (default: ./output)')
+    return parser.parse_args()
+
+# def preprocess_images(images):
+#     images = images.astype(np.float32) / 255.0
+#     return np.transpose(images, (0, 3, 1, 2))  # [N, 3, 32, 32]
+
+def apply_pixel_dp(images, epsilon):
+    """Apply DP to images of any shape [N, C, H, W]"""
+    dp_images = np.zeros_like(images)
+    n_pixels = images.shape[1] * images.shape[2] * images.shape[3]  # C×H×W
+    pixel_epsilon = epsilon / n_pixels
+    
+    for i in range(images.shape[0]):          # N
+        for c in range(images.shape[1]):      # C
+            for h in range(images.shape[2]):   # H
+                for w in range(images.shape[3]):  # W
+                    laplace = Laplace(epsilon=pixel_epsilon, sensitivity=1.0)
+                    dp_images[i,c,h,w] = np.clip(laplace.randomise(images[i,c,h,w]), 0, 1)
+    return dp_images
 
 def main():
-    # Arguments
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--epsilon", type=float, default=3.0)
-    parser.add_argument("--delta", type=float, default=1e-5)
-    parser.add_argument("--input_dir", type=str, default="/data")
-    parser.add_argument("--output", type=str, default="/output")
-    args = parser.parse_args()
+    args = parse_args()
+    #os.makedirs(args.output_dir, exist_ok=True)
+    #(train_images, train_labels), (test_images, test_labels) = cifar10.load_data()
+    # train_images = preprocess_images(train_images)
+    # test_images = preprocess_images(test_images)
 
-    # Load CIFAR-10 test data
-    test_data = np.load(os.path.join(args.input_dir, "test_data.npy"))
-    test_labels = np.load(os.path.join(args.input_dir, "test_labels.npy"))
-    
-    # Convert to tensors and normalize
-    test_data = torch.from_numpy(test_data).float()
+    # Load CIFAR-10 data from files
+    train_images = np.load(os.path.join(args.input_dir, 'data.npy'))
+    train_labels = np.load(os.path.join(args.input_dir, 'labels.npy'))
+    test_images = np.load(os.path.join(args.input_dir, 'test_data.npy'))
+    test_labels = np.load(os.path.join(args.input_dir, 'test_labels.npy'))
 
-    #Uncomment and normalize if the saved data is not normalized
-    test_data = (test_data / 255.0 - 0.5) / 0.5  # Normalize to [-1, 1]
+    print(f"train_images shape: {train_images.shape}")
+    print(f"train_labels shape: {train_labels.shape}")
 
-    if test_data.shape[1] != 3:
-        test_data = test_data.permute(0, 3, 1, 2)
-    test_labels = torch.from_numpy(test_labels).long()
-    test_loader = DataLoader(TensorDataset(test_data, test_labels), batch_size=64)
+    # Verify shape
+    if len(train_images.shape) != 4:
+        raise ValueError("Input must be 4D array [N,C,H,W]")
+    if train_images.shape[1] != 3:
+        raise ValueError("Expected 3 color channels")
+    # train_images = preprocess_images(train_images)
+    # test_images = preprocess_images(test_images)
 
+    print(f"Applying DP with ε={args.epsilon}, δ={args.delta}")
+    dp_train_images = apply_pixel_dp(train_images, args.epsilon)
 
-    # Load model
-    model = config()
-    model.load_state_dict(torch.load(os.path.join(args.input_dir, "model.pt"), map_location="cpu"))
-    model.eval()
+    # Save files
+    np.save(f'{args.output}/data.npy', dp_train_images)
+    np.save(f'{args.output}/labels.npy', train_labels)
+    np.save(f'{args.output}/test_data.npy', test_images)
+    np.save(f'{args.output}/test_labels.npy', test_labels)
 
-    # Evaluate without DP noise
-    with torch.no_grad():
-        correct = 0
-        total = 0
-        for images, labels in test_loader:
-            outputs = model(images)
-            predicted = outputs.argmax(dim=1)
-            correct += (predicted == labels).sum().item()
-            total += labels.size(0)
-        print("Non-DP Accuracy: {:.4f}".format(correct / total))
-
-
-    def add_dp_noise(model, dataloader, epsilon, delta):
-        with torch.no_grad():
-            all_probs = []
-            all_labels = []
-            for images, labels in dataloader:
-                logits = model(images)
-                probs = F.softmax(logits, dim=1)
-                all_probs.append(probs)
-                all_labels.append(labels)
-            
-            all_probs = torch.cat(all_probs)
-            all_labels = torch.cat(all_labels)
-
-        # Estimate L1 sensitivity (between outputs of two different samples)
-        sensitivity = 1.0  # Reasonable assumption for probability outputs (L1 norm <= 2)
-    
-
-        # Add gaussian noise
-        scale = sensitivity / epsilon
-        noise = torch.normal(0, scale, size=all_probs.shape)
-        noisy_probs = all_probs + noise
-        noisy_preds = noisy_probs.argmax(dim=1)
-
-        # Manually return the given epsilon and delta (since no DP training was done)
-        return noisy_preds.numpy(), all_labels.numpy(), epsilon, delta
-
-    # Run DP evaluation
-    dp_preds, true_labels, epsilon, delta = add_dp_noise(
-        model, test_loader, args.epsilon, args.delta
-    )
-
-    accuracy = accuracy_score(true_labels, dp_preds)
-    print(f"DP Results (ε={epsilon:.2f}, δ={delta:.1e}):")
-    print(f"- Accuracy: {accuracy:.4f}")
-
-    # Save results
-    print(f"Saving to: {os.path.abspath(os.path.join(args.output, 'privacy_metrics.txt'))}")
-    with open(os.path.join(args.output, 'privacy_metrics.txt'), 'w') as f:
+    with open(f'{args.output}/privacy_metrics.txt', 'w') as f:
         f.write(f"epsilon={args.epsilon}\n")
         f.write(f"delta={args.delta}\n")
-        f.write(f"dp_accuracy={accuracy:.4f}\n")
+
+    print(f"Saved DP-processed CIFAR-10 to {args.output}")
 
 if __name__ == "__main__":
     main()
