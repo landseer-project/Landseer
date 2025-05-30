@@ -123,6 +123,10 @@ def main():
         pipeline_executor.run_all_combinations_parallel()
         Path(settings.results_dir, ".success").touch()
         # pipeline_executor.run_pipeline()
+    except KeyboardInterrupt:
+        logger.error("Pipeline interrupted by user!")
+        Path(settings.results_dir, ".failed").touch()
+        raise
     except Exception as e:
         logger.error(f"Pipeline execution failed: {e}")
         Path(settings.results_dir, ".failed").touch()

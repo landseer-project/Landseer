@@ -9,7 +9,7 @@ import h5py
 from torch.utils.data import TensorDataset, DataLoader
 from torchattacks import PGD
 from sklearn.metrics import roc_auc_score
-from typing import Dict, Optional, Tuple, Any
+from typing import Dict, Optional, Tuple, Any, List
 from pathlib import Path
 
 from landseer_pipeline.evaluator.fingerprinting import evaluate_fingerprinting_mingd
@@ -28,7 +28,7 @@ class ModelEvaluator:
         self.attacks = attacks
         self.model_config = settings.config.pipeline[Stage.DURING_TRAINING].noop.docker.config_script
     
-    def evaluate_model(self, model_path: str, dataset_path: str) -> Dict[str, float]:
+    def evaluate_model(self, model_path: str, dataset_path: str, post_training_results: Optional[List] = None) -> Dict[str, float]:
         logger.info(f"Evaluating model {model_path} on dataset {dataset_path}")
         metrics = {}
         if model_path.endswith('.pt'):
@@ -44,7 +44,7 @@ class ModelEvaluator:
                 
         return metrics
     
-    def _evaluate_pytorch_model(self, model_path: str, dataset_path: str) -> Dict[str, float]:
+    def _evaluate_pytorch_model(self, model_path: str, dataset_path: str, post_training_results: Optional[List] = None):
         config = load_config_from_script(self.model_config)
 
         model = config().to(self.device)
@@ -97,6 +97,7 @@ class ModelEvaluator:
         else:
             metrics["backdoor_asr"] = 0.0
         metrics["fingerprinting"] = evaluate_fingerprinting_mingd(model, clean_test_loader)
+        metrics["privacy_epsilon"] = self.extract_privacy_epsilon(post_training_results)
         
         #     try:
         #         target_class = 0
@@ -227,22 +228,34 @@ class ModelEvaluator:
                 ood_loader = DataLoader(TensorDataset(torch.rand_like(X_test), y_test), batch_size=64, shuffle=False)
         return ood_loader
     
-    def extract_privacy_epsilon(model_path: Path) -> float:
-        params_file = model_path.parent / "privacy_params.txt"
-        if not params_file.exists():
-            logger.warning(f"privacy_params.txt not found at {params_file}")
-            return -1.0  # or None
+    def extract_privacy_epsilon(self, post_training_results: Optional[List]) -> float:
+        if not post_training_results:
+            logger.warning("No post-training results provided for privacy epsilon extraction.")
+            return -1.0
+        # check all the post results dolders for the privacy_params.txt file
+        for result in post_training_results:
+            model_path = Path(result)
+            if not model_path.exists():
+                logger.warning(f"Model path {model_path} does not exist.")
+                continue
+            if model_path.is_dir():
+                # Check for privacy_params.txt in the directory
+                params_file = model_path / "privacy_metrics.txt"
+                if params_file.exists():
+                    return self._parse_privacy_params(params_file)
+            elif model_path.is_file() and model_path.suffix == ".txt":
+                # If it's a file, try to parse it directly
+                return self._parse_privacy_params(model_path)
+        
+    def _parse_privacy_params(self, params_file: Path) -> float:
+        # epsilon=3.0
+        # delta=1e-05
+        # dp_accuracy=0.1017
         try:
-            with open(params_file, "r") as f:
+            with open(params_file, 'r') as f:
                 for line in f:
-                    if "epsilon" in line.lower():
-                        parts = line.strip().split("=")
-                        if len(parts) == 2:
-                            return float(parts[1].strip())
-            logger.warning(f"Could not parse epsilon from {params_file}")
-            return -1.0
+                    if line.startswith("epsilon="):
+                        return float(line.split('=')[1].strip())
         except Exception as e:
-            logger.error(f"Error reading {params_file}: {e}")
-            return -1.0
-
-    
+            logger.warning(f"Could not parse privacy parameters from {params_file}: {e}")
+        return -1.0
