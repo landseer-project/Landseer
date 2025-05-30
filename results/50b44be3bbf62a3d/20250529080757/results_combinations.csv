@@ -1,5 +1,0 @@
-pipeline_id,combination,pre_training,in_training,post_training,dataset_name,dataset_type,acc_train_clean,acc_test_clean,acc_robust,ood_auc,fingerprinting,asr,total_duration
-50b44be3bbf62a3d,comb_001,['pre-noop'],[],['post-fineprune'],cifar10,clean,0.9829,0.8152,0.0000,0.7546,0.8152,0.0973,0.62
-50b44be3bbf62a3d,comb_000,['pre-noop'],[],[],cifar10,clean,0.9953,0.8401,0.0000,0.6815,0.8401,0.1039,0.48
-50b44be3bbf62a3d,comb_003,['pre-squeeze'],[],['post-fineprune'],cifar10,clean,0.9787,0.8133,0.0000,0.8916,0.8133,0.0840,0.61
-50b44be3bbf62a3d,comb_002,['pre-squeeze'],[],[],cifar10,clean,0.9927,0.8373,0.0000,0.8927,0.8373,0.0968,0.40

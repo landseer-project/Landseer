@@ -5,13 +5,14 @@ from filelock import FileLock
 from landseer_pipeline.config import Settings
 from typing import List, Dict
 from landseer_pipeline.config import Stage
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import itertools
 from landseer_pipeline.tools import ToolRunner
 from landseer_pipeline.evaluator import ModelEvaluator
 from landseer_pipeline.pipeline.cache import CacheManager
 from landseer_pipeline.utils import ResultLogger, GPUAllocator
 from landseer_pipeline.utils.files import copy_or_link_log
+from landseer_pipeline.config import ToolConfig
 import time
 import torch
 
@@ -25,12 +26,6 @@ class PipelineExecutor():
         self.config = settings.config
         self.attacks = settings.attacks
         self.dataset_manager = dataset_manager
-        self.model_evaluator = ModelEvaluator(
-            settings=settings,
-            dataset_manager=self.dataset_manager,
-            attacks=self.attacks.attacks,
-            device=settings.device
-        )
         self.cache_manager = CacheManager(settings)
         self.logger = ResultLogger(settings.results_dir, settings.pipeline_id)
         self.gpu_allocator = GPUAllocator()
@@ -57,11 +52,15 @@ class PipelineExecutor():
         return self.config.get("pipeline",[]).get(stage, []).get("tools", [])
     
     def run_all_combinations_parallel(self):
-        self.combinations = self.make_combinations()
-        with ThreadPoolExecutor(max_workers=min(len(self.combinations), os.cpu_count())) as executor:
-            futures = [executor.submit(self.run_combination, combo) for combo in self.combinations]
-            for future in futures:
-                future.result()
+        self.make_combinations()
+        with ThreadPoolExecutor(max_workers=min(len(self.combinations), torch.cuda.device_count())) as executor:
+            future_to_combo = { executor.submit(self.run_combination, combo): combo for combo in self.combinations }
+            for future in as_completed(future_to_combo):
+                combo = future_to_combo[future]
+                try:
+                    future.result()
+                except Exception as e:
+                    logger.error(f"Combination {combo} failed with error: {e}")
     
     def get_tools_for_combination(self, combination: str, stage: str) -> List[Dict]:
         """Get the list of tools for a specific combination and stage"""
@@ -72,7 +71,7 @@ class PipelineExecutor():
     
     def run_pipeline(self):
         # run for even different dataset combinations like clean poisoned etc.
-        self.combinations = self.make_combinations()
+        self.make_combinations()
         logger.info("\n============================\n PIPELINE STARTED\n============================")
         for combination in self.combinations:
             logger.info(f"---------Running combination: {combination}---------")
@@ -98,8 +97,11 @@ class PipelineExecutor():
             key = f"comb_{idx:03d}"
             combinations[key] = dict(zip(stages, combo))
         logger.info(f"Generated {len(combinations)} combinations.")
+        def count_noops(combo_dict):
+            return sum(1 for tool in combo_dict.values() if isinstance(tool, ToolConfig) and tool.name == "noop")
+        sorted_combos = sorted(combinations.items(), key=lambda x: count_noops(x[1]), reverse=True)
+        self.combinations = dict(sorted_combos)
         # print(f"Combinations generated: {combinations}")
-        return combinations
     
     def run_combination(self, combination):
         current_input = self.pipeline_dataset_dir
@@ -127,10 +129,18 @@ class PipelineExecutor():
                 cache_path, lock = self.cache_manager.safe_cache_path(cache_key)
                 in_progress_marker = cache_path / ".in_progress"
                 success_marker = cache_path / ".success"
+
+                logger.info(f"[CACHE] {combination}: Tool '{tool.name}' at stage '{stage}' -> cache_key: {cache_key}")
+                if success_marker.exists():
+                    logger.info(f"[CACHE] HIT: Cache for {tool.name} at stage {stage} is ready.")
+                elif in_progress_marker.exists():
+                    logger.info(f"[CACHE] WAIT: Cache for {tool.name} at stage {stage} is in progress.")
+                else:
+                    logger.info(f"[CACHE] MISS: Will compute for {tool.name} at stage {stage}.")
                 
                 try:
-                    if success_marker.exists() and self.settings.use_cache:
-                        logger.info(f"[+] {combination}: Using cached at {cache_path}")
+                    if success_marker.exists() and not in_progress_marker.exists() and self.settings.use_cache:
+                        logger.info(f"[+] {combination}: Using cached output for tool '{tool.name}' at stage '{stage}': {cache_path}")
                         tool_output_path = cache_path / "output"
                     else:
                         logger.info(f"[+] {combination}: Running tool '{tool.name}' at stage '{stage}'")
@@ -139,6 +149,7 @@ class PipelineExecutor():
 
                         try:
                             gpu_id = self.gpu_allocator.allocate_gpu()
+                            logging.debug(f"{combination}: Allocated GPU ID: {gpu_id} for tool '{tool.name}' at stage '{stage}'")
                             tool_runner = ToolRunner(
                             self.settings, tool, stage, dataset_dir=dataset_dir,
                             input_path=current_input,
@@ -148,6 +159,7 @@ class PipelineExecutor():
                             tool_output_path, toolrun_duration = tool_runner.run_tool(
                                 combination_id=combination
                             )
+                            self.gpu_allocator.release_gpu(gpu_id)
                             success_marker.touch()
                             self.logger.log_tool(combination, stage, tool.name, cache_key, str(tool_output_path), toolrun_duration, "success")
 
@@ -155,16 +167,9 @@ class PipelineExecutor():
                                 in_progress_marker.unlink()
                         except Exception as e:
                             logger.error(f"{combination}: Tool '{tool.name}' failed at stage '{stage}': {e}")
+                            self.gpu_allocator.release_gpu(gpu_id)
                             self.cache_manager.mark_as_failed(cache_key)
-                            self.logger.log_tool(
-                                combination,
-                                stage,
-                                tool.name,
-                                cache_key,
-                                str(tool_output_path),
-                                0,  
-                                "failure"
-                            )
+                            self.logger.log_tool(combination, stage, tool.name, cache_key, str(tool_output_path), 0, "failure")
                             raise                            
                     current_input = str(tool_output_path)
                     if stage == "pre_training":
@@ -186,7 +191,11 @@ class PipelineExecutor():
         model_path = os.path.join(current_input, "model.pt")
         if os.path.exists(model_path):
             logger.info(f"{combination}:Evaluating final model...")
-            final_acc = self.model_evaluator.evaluate_model(model_path, self.pipeline_dataset_dir)
+            # assign gpu_id for evaluation
+            gpu_id = self.gpu_allocator.allocate_gpu()
+            model_evaluator = ModelEvaluator(settings=self.settings,dataset_manager=self.dataset_manager,attacks=self.attacks.attacks,gpu_id=gpu_id)
+            final_acc = model_evaluator.evaluate_model(model_path, self.pipeline_dataset_dir)
+            self.gpu_allocator.release_gpu(gpu_id)
             self.logger.log_combination(combination, tools_by_stage=tools_by_stage, dataset_name=self.settings.config.dataset.name,dataset_type=self.pipeline_dataset_type, acc=final_acc, duration=comb_duration)
             logger.info(f"{combination}: Evaluation completed : {final_acc}")
         else:

@@ -1,0 +1,9 @@
+pipeline_id,combination,pre_training,in_training,post_training,dataset_name,dataset_type,acc_train_clean,acc_test_clean,acc_robust,ood_auc,fingerprinting,asr,total_duration
+08e4b92f303f606c,comb_004,['feature-squeeze'],[],[],cifar10,clean,0.8491,0.6895,0.0000,0.5018,0.6895,0.0992,120.34
+08e4b92f303f606c,comb_001,['noop'],[],['fine pruning'],cifar10,clean,0.1871,0.1791,0.0000,0.2312,0.1791,0.0007,123.87
+08e4b92f303f606c,comb_000,['noop'],[],[],cifar10,clean,0.9330,0.6793,0.0000,0.4081,0.6793,0.0974,129.19
+08e4b92f303f606c,comb_005,['feature-squeeze'],[],['fine pruning'],cifar10,clean,0.2440,0.2354,0.0000,0.0320,0.2354,0.0002,133.62
+08e4b92f303f606c,comb_006,['feature-squeeze'],[],[],cifar10,clean,0.6858,0.6447,0.1780,0.5879,0.6447,0.0974,245.98
+08e4b92f303f606c,comb_007,['feature-squeeze'],[],['fine pruning'],cifar10,clean,0.1802,0.1758,0.1209,0.1955,0.1758,0.0345,250.72
+08e4b92f303f606c,comb_002,['noop'],[],[],cifar10,clean,0.6750,0.6409,0.1827,0.8304,0.6409,0.0928,288.20
+08e4b92f303f606c,comb_003,['noop'],[],['fine pruning'],cifar10,clean,0.2267,0.2264,0.1166,0.1611,0.2264,0.0125,293.74

@@ -10,11 +10,11 @@ pipeline:
       - name: feature-squeeze
         docker:
           image: ghcr.io/landseer-project/pre_squeeze:v1
-          command: python defense.py --bit-depth 4
+          command: python main.py --bit-depth 4
       - name: pre-dp
         docker:
           image: ghcr.io/landseer-project/pre_dp:v1
-          command: python defense.py 
+          command: python main.py 
     noop:
       name: noop
       docker:
@@ -26,7 +26,7 @@ pipeline:
       - name: in-dp
         docker:
           image: ghcr.io/landseer-project/in_dp_fixed:v2
-          command: python3 defense.py
+          command: python3 main.py
     noop:
       name: in_noop
       docker:
@@ -38,4 +38,4 @@ pipeline:
       - name: magnet
         docker:
           image: ghcr.io/landseer-project/post_magnet:v1
-          command: python3 defense.py
+          command: python3 main.py

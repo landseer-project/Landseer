@@ -21,7 +21,7 @@ class DockerRunner:
         print(f"Using device: {self.device}")
 
     def run_container(self, image_name: str, command: Optional[str],
-                      environment: Dict[str, str], volumes: Dict[str, Dict]) -> Tuple[int, str]:
+                      environment: Dict[str, str], volumes: Dict[str, Dict], gpu_id) -> Tuple[int, str]:
         try:
             if self.client:
                 device_requests = None

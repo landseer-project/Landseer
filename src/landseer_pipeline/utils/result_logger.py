@@ -25,7 +25,7 @@ class ResultLogger:
             return [tool.name for tool in tools] if tools else []
         
         pre_training = extract_names(tools_by_stage.get("pre_training", []))
-        in_training = extract_names(tools_by_stage.get("in_training", []))
+        in_training = extract_names(tools_by_stage.get("during_training", []))
         post_training = extract_names(tools_by_stage.get("post_training", []))
 
         acc_train_clean = acc.get("clean_train_accuracy", 0.0)
