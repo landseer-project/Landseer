@@ -2,7 +2,7 @@
 set -euo pipefail
 shopt -s nullglob
 
-PIPELINE_DIR="/share/landseer/workspace-ayushi/Landseer/configs/configs_by_in_tool"
+PIPELINE_DIR="/share/landseer/workspace-ayushi/Landseer/configs/configs_by_in_tool_latest"
 ATTACK_DIR="configs/attack"
 LOG_DIR="run_logs"
 MAIN_SCRIPT="src/landseer_pipeline/main.py"
@@ -36,7 +36,7 @@ for pipeline_config in "${pipeline_configs[@]}"; do
     echo "  Log: $log_file"
 
     # Run and capture success/failure
-    if python3 -m landseer_pipeline.main -c "$pipeline_config" -a "$attack_config" > "$log_file" 2>&1; then
+    if poetry run landseer -c "$pipeline_config" -a "$attack_config" > "$log_file" 2>&1; then
       touch "$success_flag"
       echo "✔ SUCCESS: $log_base"
       ((success_count++))

@@ -110,10 +110,8 @@ class DockerConfig(BaseModel):
         logger.debug(f"Validating Docker image: {self.image}")
         image_name = self.image.split(":")[0]
         try:
-            client = docker.from_env()
-            client.images.get(self.image)
-        except docker.errors.ImageNotFound:
-            logger.warning(f"Docker image '{self.image}' not found locally. Attempting to pull...")
+            client = docker.from_env() 
+            logger.warning(f"Attempting to pull docker image...")
             client.images.pull(self.image)
         except docker.errors.APIError as e:
             raise ValueError(f"Failed to check Docker image '{self.image}': {e}")

@@ -112,16 +112,20 @@ def main():
         use_cache=not args.no_cache,
         log_level=log_level
     )
-        
-    dataset_manager = DatasetManager(settings)
-    # tool_runner = ToolRunner(settings)
-    # model_evaluator = ModelEvaluator(settings)
-    pipeline_executor = PipelineExecutor(settings, dataset_manager=dataset_manager)
-    # components = create_components(settings)
-    
-    dataset_manager.prepare_dataset()
-    #go to pipeline handler and let it run the pipeline
-    pipeline_executor.run_all_combinations_parallel()
-    # pipeline_executor.run_pipeline()
+    try:
+        dataset_manager = DatasetManager(settings)
+        # tool_runner = ToolRunner(settings)
+        # model_evaluator = ModelEvaluator(settings)
+        pipeline_executor = PipelineExecutor(settings, dataset_manager=dataset_manager)
+        # components = create_components(settings)
+        dataset_manager.prepare_dataset()
+        #go to pipeline handler and let it run the pipeline
+        pipeline_executor.run_all_combinations_parallel()
+        Path(settings.results_dir, ".success").touch()
+        # pipeline_executor.run_pipeline()
+    except Exception as e:
+        logger.error(f"Pipeline execution failed: {e}")
+        Path(settings.results_dir, ".failed").touch()
+        raise e
 if __name__ == "__main__":
     main()

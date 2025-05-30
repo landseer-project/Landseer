@@ -70,7 +70,8 @@ class ToolRunner:
         logger.debug(f"{combination_id}/{tool_name}: Volume bindings: {volumes}")
 
         tool_args = self.tool_config.docker.command
-        command = (f"{tool_args} --output /output")
+        command = f"{tool_args} --output /output"
+
 
         logger.info(f"{combination_id}/{tool_name}: Container command: {command}")
         
@@ -79,7 +80,8 @@ class ToolRunner:
             image_name=image_name,
             command=command,
             environment=env,
-            volumes=volumes
+            volumes=volumes,
+            gpu_id=self.gpu_id
         )
         duration = time.time() - start
         tool_log_path = os.path.join(

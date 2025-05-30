@@ -20,9 +20,11 @@ logger = logging.getLogger()
 
 class ModelEvaluator:
 
-    def __init__(self, settings, dataset_manager, attacks, device):
+    def __init__(self, settings, dataset_manager, attacks, gpu_id):
         self.dataset_manager = dataset_manager
-        self.device = device
+        if gpu_id is not None and torch.cuda.is_available():
+            self.device = torch.device(f"cuda:{gpu_id}")
+            logger.info(f"Using GPU {gpu_id} for evaluation")
         self.attacks = attacks
         self.model_config = settings.config.pipeline[Stage.DURING_TRAINING].noop.docker.config_script
     
