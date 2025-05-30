@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 from filelock import FileLock
 from landseer_pipeline.utils.docker import get_image_digest
+from typing import List
 
 #TODO: Make a class for cahcing to get output path from settings
 class CacheManager:
@@ -24,39 +25,47 @@ class CacheManager:
         cache_path = self.get_cache_path(cache_key)
         if not cache_path.exists():
             return False
-        # Check if .success file exists or if the directory is not empty
         success_file = cache_path / ".success"
         if success_file.exists():
             return True
     
-    def compute_cache_key(self, tool, stage: str, input_path: str, dataset) -> str:
-        #open config script and get the config model content
-        if tool.docker.config_script:
-            config_script_path = Path(tool.docker.config_script)
-            if not config_script_path.exists():
-                raise FileNotFoundError(f"Config script {config_script_path} does not exist.")
-            with open(config_script_path, "r") as f:
-                config_model_content = f.read()
-        image_name = tool.docker.image
-        digest = get_image_digest(image_name)
-        data = {
+    def compute_cache_key(self, tools: List,current_tool, stage: str, input_path: str, dataset) -> str:
+        tool_sequence_data = []
+        for tool in tools:
+            config_model_content = ""
+            print(f"Processing tool: {tool}")
+            if tool.docker.config_script:
+                config_script_path = Path(tool.docker.config_script)
+                if not config_script_path.exists():
+                    raise FileNotFoundError(f"Config script {config_script_path} does not exist.")
+                with open(config_script_path, "r") as f:
+                    config_model_content = f.read()
+            image_name = tool.docker.image
+            digest = get_image_digest(image_name)
+            tool_entry = {
             "tool_name": tool.name,
             "tool_config": tool.dict() if hasattr(tool, "dict") else {},
-            "stage": stage,
-            "input_path": str(input_path),
-            "dataset": str(dataset),
             "image_digest": digest,
             "config": config_model_content
             }
+            tool_sequence_data.append(tool_entry)
+        data = {
+        "tool_sequence": tool_sequence_data,  # order matters
+        "current_tool": str(current_tool),
+        "stage": stage,
+        "input_path": str(input_path),
+        "dataset": str(dataset),
+        }
         json_str = json.dumps(data, sort_keys=True)
-        hash = hashlib.sha256(json_str.encode()).hexdigest()
-        #write json to file
-        cache_dir = self.settings.output_dir / hash
+        hash_val = hashlib.sha256(json_str.encode()).hexdigest()
+        cache_dir = self.settings.output_dir / hash_val
+        
         if not cache_dir.exists():
             cache_dir.mkdir(parents=True, exist_ok=True)
         with open(cache_dir / "metadata.json", "w") as f:
             json.dump(data, f, indent=4)
-        return hash
+        return hash_val
+
     
     def get_cached_output(self, cache_key: str) -> str:
         cache_path = self.settings.output_dir / cache_key / "output"

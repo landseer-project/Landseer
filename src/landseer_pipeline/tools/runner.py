@@ -76,29 +76,44 @@ class ToolRunner:
         logger.info(f"{combination_id}/{tool_name}: Container command: {command}")
         
         start = time.time()
-        exit_code, logs = self.docker_manager.run_container(
-            image_name=image_name,
-            command=command,
-            environment=env,
-            volumes=volumes,
-            gpu_id=self.gpu_id
-        )
-        duration = time.time() - start
-        tool_log_path = os.path.join(
-            output_dir_path,"..",
-            "tool_logs",
-            f"{stage}_{tool_name.replace(' ', '_')}.log")
-        os.makedirs(os.path.dirname(tool_log_path), exist_ok=True)
-        with open(tool_log_path, "w") as f:
-            f.write(logs)
+        exit_code = None
+        logs = None
         
-        logger.debug(f"{combination_id}/{tool_name}: Cleaning up temporary directory: {data_dir}")
-        shutil.rmtree(data_dir, ignore_errors=True)
+        try:
+            exit_code, logs, container = self.docker_manager.run_container(
+                image_name=image_name,
+                command=command,
+                environment=env,
+                volumes=volumes,
+                gpu_id=self.gpu_id
+            )
+        finally:
+            # Always cleanup temporary directory
+            logger.debug(f"{combination_id}/{tool_name}: Cleaning up temporary directory: {data_dir}")
+            shutil.rmtree(data_dir, ignore_errors=True)
+            
+            # Force container cleanup to release GPU
+            #try:
+            #    self.docker_manager.cleanup_container(container)
+            #except Exception as cleanup_error:
+            #    logger.warning(f"{combination_id}/{tool_name}: Container cleanup failed: {cleanup_error}")
+        
+        duration = time.time() - start
+        
+        # Write logs only if we have them
+        if logs is not None:
+            tool_log_path = os.path.join(
+                output_dir_path,"..",
+                "tool_logs",
+                f"{stage}_{tool_name.replace(' ', '_')}.log")
+            os.makedirs(os.path.dirname(tool_log_path), exist_ok=True)
+            with open(tool_log_path, "w") as f:
+                f.write(logs)
 
         if exit_code != 0:
             raise RuntimeError(
                 f"{combination_id}/{tool_name}: Failed with exit code {exit_code}")
-        else:
-            logger.info(
+        
+        logger.info(
                 f"{combination_id}/{tool_name}: Completed successfully and output saved to {output_dir_path}")
         return output_dir_path, duration

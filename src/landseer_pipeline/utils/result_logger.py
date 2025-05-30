@@ -14,7 +14,7 @@ class ResultLogger:
                 f.write("pipeline_id,combination,stage,tool_name,cache_key,duration_sec,status,output_path\n")
         if not self.combinations_csv.exists():
             with open(self.combinations_csv, "w") as f:
-                f.write("pipeline_id,combination,pre_training,in_training,post_training,dataset_name,dataset_type,acc_train_clean,acc_test_clean,acc_robust,ood_auc,fingerprinting,asr,total_duration\n")
+                f.write("pipeline_id,combination,pre_training,in_training,post_training,dataset_name,dataset_type,acc_train_clean,acc_test_clean,acc_robust,ood_auc,fingerprinting,asr,privacy_epsilon,total_duration\n")
 
     def log_tool(self, combination, stage, tool_name, cache_key, output_path, duration, status):
         with open(self.tools_csv, "a") as f:
@@ -34,9 +34,10 @@ class ResultLogger:
         ood_auc = acc.get("ood_auc", 0.0)
         fingerprinting_acc = acc.get("fingerprinting", 0.0)
         asr = acc.get("backdoor_asr", 0.0)
+        privacy_epsilon = acc.get("privacy_epsilon", 0.0)
         
         with open(self.combinations_csv, "a") as f:
             f.write(f"{self.pipeline_id},{combination},{pre_training},{in_training},{post_training},"
                 f"{dataset_name},{dataset_type},{acc_train_clean:.4f},{acc_clean:.4f},{acc_robust:.4f},"
-                f"{ood_auc:.4f},{fingerprinting_acc:.4f},{asr:.4f},{duration:.2f}\n")
+                f"{ood_auc:.4f},{fingerprinting_acc:.4f},{asr:.4f},{privacy_epsilon:.4f},{duration:.2f}\n")
  
