@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import logging
 
 logger = logging.getLogger(__name__)
-# === MINGD Attack (Dataset Attribution) ===
+
 def loss_mingd(preds, target):
     return (preds.max(dim=1)[0] - preds[torch.arange(preds.shape[0]), target]).mean()
 
@@ -20,7 +20,6 @@ def mingd(model, X, y, target, alpha=0.01, num_iter=20):
         delta.grad.zero_()
     return delta.detach()
 
-# === Evaluation Logic ===
 def evaluate_fingerprinting_mingd(model, dataloader):
     model.cuda()
     model.eval()
