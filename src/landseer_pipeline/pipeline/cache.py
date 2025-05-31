@@ -5,7 +5,6 @@ from filelock import FileLock
 from landseer_pipeline.utils.docker import get_image_digest
 from typing import List
 
-#TODO: Make a class for cahcing to get output path from settings
 class CacheManager:
     def __init__(self, settings):
         self.settings = settings
