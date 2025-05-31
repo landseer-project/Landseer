@@ -28,10 +28,6 @@ class ModelEvaluator:
         self.device = f"cuda" if torch.cuda.is_available() else "cpu"
 
     def _get_model_path(self, model_name: str) -> str:
-        # go through outputs of post stage
-        #output dirs in list are sequential and can be mapped to the sequence of tools
-        # prefer the last output directory for the model
-        #if no model in post training outputs, then return model of latest during training stage
         for stage, outputs in self.outputs.items():
             if stage == Stage.POST_TRAINING:
                 for output in outputs:
@@ -41,7 +37,6 @@ class ModelEvaluator:
                         model_path = Path(output / model_name)
                         if model_path.exists():
                             return str(model_path)
-        # if no model found in post training, check during training
         for stage, outputs in self.outputs.items():
             if stage == Stage.DURING_TRAINING:
                 for output in outputs:
@@ -101,9 +96,7 @@ class ModelEvaluator:
                 logger.warning(f"Could not evaluate outlier detection: {e}")
         else:
             metrics["ood_auc"] = 0.0
-            
-        # TODO: check for the dataset as well as the pipeline tool types if type is backdoor then evaluate_backdoor
-            
+                        
         if clean_test_loader is not None:
             try:
                 robust_acc = self.evaluate_pgd(model, clean_test_loader)
@@ -251,7 +244,6 @@ class ModelEvaluator:
         return ood_loader
     
     def extract_privacy_epsilon(self, output_by_stages: Dict) -> float:
-        #check for all stages as key the list of directories to find privacy_metrics file
         for stage, outputs in output_by_stages.items():
             for output in outputs:
                 if isinstance(output, str):
@@ -266,9 +258,6 @@ class ModelEvaluator:
         return -1.0
         
     def _parse_privacy_params(self, params_file: Path) -> float:
-        # epsilon=3.0
-        # delta=1e-05
-        # dp_accuracy=0.1017
         try:
             with open(params_file, 'r') as f:
                 for line in f:
