@@ -8,6 +8,7 @@ import sys
 import torch
 from pathlib import Path
 import datetime
+from typing import Optional
 sys.path.insert(0, str(Path(__file__).parent / ".." / "src"))  # Adjust the path to your src directory
 
 import logging
@@ -15,6 +16,7 @@ from .dataset_handler import DatasetManager
 from .pipeline import PipelineExecutor
 from .config import Settings, validate_and_load_pipeline_config, validate_and_load_attack_config
 from .utils import hash_file, setup_logger
+from .gpu_manager import GPUManager
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='ML Defense Pipeline')
@@ -85,7 +87,23 @@ def parse_arguments():
         default=Path("./results"),
         help='Directory to store results'
     )
+
+    parser.add_argument('--max-temp', type=float, default=80.0, help='Maximum GPU temperature')
+    parser.add_argument('--cooldown-time', type=int, default=300, help='GPU cooldown time in seconds')
+
     return parser.parse_args()
+
+def setup_logging(log_file: Optional[str] = None):
+    """Setup logging configuration."""
+    log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    logging.basicConfig(
+        level=logging.INFO,
+        format=log_format,
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            *([logging.FileHandler(log_file)] if log_file else [])
+        ]
+    )
 
 def main():
     args = parse_arguments()
@@ -112,7 +130,28 @@ def main():
         use_cache=not args.no_cache,
         log_level=log_level
     )
+
+    # Setup logging
+    log_dir = Path('run_logs')
+    log_dir.mkdir(exist_ok=True)
+    config_name = Path(args.config).stem
+    attack_name = Path(args.attack_config).stem
+    log_file = log_dir / f"{config_name}__{attack_name}.log"
+    setup_logging(str(log_file))
+
+    # Initialize GPU manager
+    gpu_manager = GPUManager(max_temp=args.max_temp, cooldown_time=args.cooldown_time)
+    
     try:
+        # Get available GPU
+        gpu_id = gpu_manager.get_available_gpu()
+        if gpu_id is None:
+            logger.error("No available GPU found that meets temperature requirements")
+            sys.exit(1)
+
+        logger.info(f"Using GPU {gpu_id}")
+        os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
+
         dataset_manager = DatasetManager(settings)
         # tool_runner = ToolRunner(settings)
         # model_evaluator = ModelEvaluator(settings)
@@ -131,5 +170,9 @@ def main():
         logger.error(f"Pipeline execution failed: {e}")
         Path(settings.results_dir, ".failed").touch()
         raise e
+    finally:
+        if 'gpu_id' in locals():
+            gpu_manager.release_gpu(gpu_id)
+
 if __name__ == "__main__":
     main()
