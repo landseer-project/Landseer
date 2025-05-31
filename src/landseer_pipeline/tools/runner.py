@@ -7,12 +7,10 @@ import os
 from pathlib import Path
 from typing import Dict
 import shutil
-from landseer_pipeline.config import ToolConfig
 from landseer_pipeline.docker_handler import DockerRunner
 from landseer_pipeline.utils import ResultLogger
 from landseer_pipeline.utils.files import merge_directories
 from dataclasses import dataclass
-
 
 logger = logging.getLogger(__name__)
 

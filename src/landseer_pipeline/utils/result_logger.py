@@ -28,16 +28,16 @@ class ResultLogger:
         in_training = extract_names(tools_by_stage.get("during_training", []))
         post_training = extract_names(tools_by_stage.get("post_training", []))
 
-        acc_train_clean = acc.get("clean_train_accuracy", 0.0)
-        acc_clean = acc.get("clean_test_accuracy", 0.0)
-        acc_robust = acc.get("robust_accuracy", 0.0)
-        ood_auc = acc.get("ood_auc", 0.0)
-        fingerprinting_acc = acc.get("fingerprinting", 0.0)
-        asr = acc.get("backdoor_asr", 0.0)
-        privacy_epsilon = acc.get("privacy_epsilon", 0.0)
+        acc_train_clean = acc.get("clean_train_accuracy", -1)
+        acc_clean = acc.get("clean_test_accuracy", -1)
+        acc_robust = acc.get("robust_accuracy", -1)
+        ood_auc = acc.get("ood_auc", -1)
+        fingerprinting_acc = acc.get("fingerprinting", -1)
+        asr = acc.get("backdoor_asr", -1)
+        privacy_epsilon = acc.get("privacy_epsilon", -1)
         
         with open(self.combinations_csv, "a") as f:
             f.write(f"{self.pipeline_id},{combination},{pre_training},{in_training},{post_training},"
                 f"{dataset_name},{dataset_type},{acc_train_clean:.4f},{acc_clean:.4f},{acc_robust:.4f},"
-                f"{ood_auc:.4f},{fingerprinting_acc:.4f},{asr:.4f},{privacy_epsilon:.4f},{duration:.2f}\n")
+                f"{ood_auc:.4f},{fingerprinting_acc:.4f},{asr:.4f},{privacy_epsilon},{duration:.2f}\n")
  

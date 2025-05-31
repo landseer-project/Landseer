@@ -20,17 +20,46 @@ logger = logging.getLogger()
 
 class ModelEvaluator:
 
-    def __init__(self, settings, dataset_manager, attacks, gpu_id):
+    def __init__(self, settings, dataset_manager, attacks, outputs, gpu_id):
         self.dataset_manager = dataset_manager
-        if gpu_id is not None and torch.cuda.is_available():
-            self.device = torch.device(f"cuda:{gpu_id}")
-            logger.info(f"Using GPU {gpu_id} for evaluation")
         self.attacks = attacks
         self.model_config = settings.config.pipeline[Stage.DURING_TRAINING].noop.docker.config_script
+        self.outputs = outputs
+        self.device = f"cuda" if torch.cuda.is_available() else "cpu"
+
+    def _get_model_path(self, model_name: str) -> str:
+        # go through outputs of post stage
+        #output dirs in list are sequential and can be mapped to the sequence of tools
+        # prefer the last output directory for the model
+        #if no model in post training outputs, then return model of latest during training stage
+        for stage, outputs in self.outputs.items():
+            if stage == Stage.POST_TRAINING:
+                for output in outputs:
+                    if isinstance(output, str):
+                        output = Path(output)
+                    if output.is_dir():
+                        model_path = Path(output / model_name)
+                        if model_path.exists():
+                            return str(model_path)
+        # if no model found in post training, check during training
+        for stage, outputs in self.outputs.items():
+            if stage == Stage.DURING_TRAINING:
+                for output in outputs:
+                    if isinstance(output, str):
+                        output = Path(output)
+                    if output.is_dir():
+                        model_path = Path(output / model_name)
+                        if model_path.exists():
+                            return str(model_path)
+        logger.warning(f"Model {model_name} not found in outputs.")
+
     
-    def evaluate_model(self, model_path: str, dataset_path: str, post_training_results: Optional[List] = None) -> Dict[str, float]:
-        logger.info(f"Evaluating model {model_path} on dataset {dataset_path}")
+    def evaluate_model(self, dataset_path: str) -> Dict[str, float]:
+        print(self.device.count)
+        
         metrics = {}
+        model_path = self._get_model_path("model.pt")
+        logger.info(f"Evaluating model {model_path} on dataset {dataset_path}")
         if model_path.endswith('.pt'):
             metrics = self._evaluate_pytorch_model(model_path, dataset_path)
         elif model_path.endswith('.h5'):
@@ -40,11 +69,11 @@ class ModelEvaluator:
             metrics = {"clean_test_accuracy": 0.0}
         for name, value in metrics.items():
             print(f"Metric {name}")
-            logger.info(f"Metric {name}: {value:.4f}")
+            logger.info(f"Metric {name}: {value}")
                 
         return metrics
     
-    def _evaluate_pytorch_model(self, model_path: str, dataset_path: str, post_training_results: Optional[List] = None):
+    def _evaluate_pytorch_model(self, model_path: str, dataset_path: str):
         config = load_config_from_script(self.model_config)
 
         model = config().to(self.device)
@@ -97,15 +126,8 @@ class ModelEvaluator:
         else:
             metrics["backdoor_asr"] = 0.0
         metrics["fingerprinting"] = evaluate_fingerprinting_mingd(model, clean_test_loader)
-        metrics["privacy_epsilon"] = self.extract_privacy_epsilon(post_training_results)
-        
-        #     try:
-        #         target_class = 0
-        #         backdoor_asr = self.evaluate_backdoor(model, poisoned_loader, target_class, device)
-        #         metrics["backdoor_asr"] = backdoor_asr
-        #     except Exception as e:
-        #         logger.warning(f"Could not evaluate backdoor ASR: {e}")
-        #     
+        metrics["privacy_epsilon"] = self.extract_privacy_epsilon(self.outputs)
+             
         return metrics
     
     def _evaluate_tensorflow_model(self, model_path: str, dataset_path: str) -> Dict[str, float]:
@@ -228,24 +250,20 @@ class ModelEvaluator:
                 ood_loader = DataLoader(TensorDataset(torch.rand_like(X_test), y_test), batch_size=64, shuffle=False)
         return ood_loader
     
-    def extract_privacy_epsilon(self, post_training_results: Optional[List]) -> float:
-        if not post_training_results:
-            logger.warning("No post-training results provided for privacy epsilon extraction.")
-            return -1.0
-        # check all the post results dolders for the privacy_params.txt file
-        for result in post_training_results:
-            model_path = Path(result)
-            if not model_path.exists():
-                logger.warning(f"Model path {model_path} does not exist.")
-                continue
-            if model_path.is_dir():
-                # Check for privacy_params.txt in the directory
-                params_file = model_path / "privacy_metrics.txt"
-                if params_file.exists():
-                    return self._parse_privacy_params(params_file)
-            elif model_path.is_file() and model_path.suffix == ".txt":
-                # If it's a file, try to parse it directly
-                return self._parse_privacy_params(model_path)
+    def extract_privacy_epsilon(self, output_by_stages: Dict) -> float:
+        #check for all stages as key the list of directories to find privacy_metrics file
+        for stage, outputs in output_by_stages.items():
+            for output in outputs:
+                if isinstance(output, str):
+                    output = Path(output)
+                if isinstance(output, Path) and output.is_dir():
+                    params_file = output / "privacy_metrics.txt"
+                    if params_file.exists():
+                        epsilon = self._parse_privacy_params(params_file)
+                        if epsilon >= 0:
+                            return (epsilon, stage)
+        logger.warning("No privacy metrics file found in outputs.")
+        return -1.0
         
     def _parse_privacy_params(self, params_file: Path) -> float:
         # epsilon=3.0

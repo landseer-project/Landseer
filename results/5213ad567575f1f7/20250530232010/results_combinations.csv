@@ -1,0 +1,36 @@
+pipeline_id,combination,pre_training,in_training,post_training,dataset_name,dataset_type,acc_train_clean,acc_test_clean,acc_robust,ood_auc,fingerprinting,asr,privacy_epsilon,total_duration
+5213ad567575f1f7,comb_012,['pre-squeeze'],['in_noop'],['post_dp'],cifar10,clean,0.9923,0.8370,0.0011,0.7614,0.8370,0.0965,(3.0, 'post_training'),2.79
+5213ad567575f1f7,comb_003,['noop'],['in_noop'],['fine pruning', 'post_dp'],cifar10,clean,0.8827,0.7213,0.0000,0.6183,0.7213,0.0595,(3.0, 'post_training'),3.84
+5213ad567575f1f7,comb_032,['pre-dp'],['in_noop'],['post_dp'],cifar10,clean,0.1025,0.1012,0.0000,0.5567,0.1012,0.1203,(1.0, 'pre_training'),2.67
+5213ad567575f1f7,comb_014,['pre-squeeze'],['in_noop'],['post_dp', 'fine pruning'],cifar10,clean,0.8164,0.6695,0.0000,0.6974,0.6695,0.1012,(3.0, 'post_training'),4.93
+5213ad567575f1f7,comb_050,['pre-squeeze', 'pre-dp'],['in_noop'],['noop'],cifar10,clean,0.0957,0.0961,0.0000,0.5703,0.0961,0.0188,(1.0, 'pre_training'),3.07
+5213ad567575f1f7,comb_002,['noop'],['in_noop'],['post_dp'],cifar10,clean,0.9978,0.8465,0.0000,0.7673,0.8465,0.1083,(3.0, 'post_training'),4.33
+5213ad567575f1f7,comb_013,['pre-squeeze'],['in_noop'],['fine pruning', 'post_dp'],cifar10,clean,0.8164,0.6695,0.0000,0.6998,0.6695,0.1012,(3.0, 'post_training'),4.54
+5213ad567575f1f7,comb_058,['pre-squeeze', 'pre-dp'],['in-trades'],['fine pruning', 'post_dp'],cifar10,clean,0.1000,0.1000,0.1000,-1.0000,0.1000,1.0000,(1.0, 'pre_training'),5.26
+5213ad567575f1f7,comb_082,['pre-dp', 'pre-squeeze'],['in_noop'],['post_dp'],cifar10,clean,0.1238,0.1244,0.0000,0.5470,0.1244,0.0081,(1.0, 'pre_training'),3.99
+5213ad567575f1f7,comb_051,['pre-squeeze', 'pre-dp'],['in_noop'],['fine pruning'],cifar10,clean,0.0912,0.0916,0.0000,0.6655,0.0916,0.0398,(1.0, 'pre_training'),4.03
+5213ad567575f1f7,comb_001,['noop'],['in_noop'],['fine pruning'],cifar10,clean,0.8827,0.7213,0.0000,0.6203,0.7213,0.0595,-1.0,4.07
+5213ad567575f1f7,comb_031,['pre-dp'],['in_noop'],['fine pruning'],cifar10,clean,0.0901,0.0904,0.0000,0.5342,0.0904,0.1765,(1.0, 'pre_training'),3.54
+5213ad567575f1f7,comb_030,['pre-dp'],['in_noop'],['noop'],cifar10,clean,0.1025,0.1012,0.0000,0.5550,0.1012,0.1203,(1.0, 'pre_training'),2.84
+5213ad567575f1f7,comb_000,['noop'],['in_noop'],['noop'],cifar10,clean,0.9978,0.8465,0.0000,0.7668,0.8465,0.1083,-1.0,2.28
+5213ad567575f1f7,comb_016,['pre-squeeze'],['in-trades'],['fine pruning'],cifar10,clean,0.9612,0.6123,0.2399,0.8992,0.6123,0.0631,-1.0,4.01
+5213ad567575f1f7,comb_059,['pre-squeeze', 'pre-dp'],['in-trades'],['post_dp', 'fine pruning'],cifar10,clean,0.1000,0.1000,0.1000,-1.0000,0.1000,1.0000,(1.0, 'pre_training'),4.51
+5213ad567575f1f7,comb_011,['pre-squeeze'],['in_noop'],['fine pruning'],cifar10,clean,0.8164,0.6695,0.0000,0.6982,0.6695,0.1012,-1.0,3.13
+5213ad567575f1f7,comb_056,['pre-squeeze', 'pre-dp'],['in-trades'],['fine pruning'],cifar10,clean,0.1000,0.1000,0.1000,-1.0000,0.1000,1.0000,(1.0, 'pre_training'),4.37
+5213ad567575f1f7,comb_054,['pre-squeeze', 'pre-dp'],['in_noop'],['post_dp', 'fine pruning'],cifar10,clean,0.0912,0.0916,0.0000,0.6643,0.0916,0.0398,(1.0, 'pre_training'),5.22
+5213ad567575f1f7,comb_080,['pre-dp', 'pre-squeeze'],['in_noop'],['noop'],cifar10,clean,0.1238,0.1244,0.0000,0.5443,0.1244,0.0081,(1.0, 'pre_training'),3.06
+5213ad567575f1f7,comb_017,['pre-squeeze'],['in-trades'],['post_dp'],cifar10,clean,0.9999,0.7636,0.3040,0.8276,0.7636,0.1126,(3.0, 'post_training'),4.05
+5213ad567575f1f7,comb_055,['pre-squeeze', 'pre-dp'],['in-trades'],['noop'],cifar10,clean,0.1000,0.1000,0.1000,-1.0000,0.1000,1.0000,(1.0, 'pre_training'),4.40
+5213ad567575f1f7,comb_015,['pre-squeeze'],['in-trades'],['noop'],cifar10,clean,0.9999,0.7636,0.3040,0.8258,0.7636,0.1126,-1.0,2.27
+5213ad567575f1f7,comb_010,['pre-squeeze'],['in_noop'],['noop'],cifar10,clean,0.9923,0.8370,0.0009,0.7607,0.8370,0.0965,-1.0,4.29
+5213ad567575f1f7,comb_081,['pre-dp', 'pre-squeeze'],['in_noop'],['fine pruning'],cifar10,clean,0.1029,0.1051,0.0000,0.5375,0.1051,0.0273,(1.0, 'pre_training'),4.28
+5213ad567575f1f7,comb_004,['noop'],['in_noop'],['post_dp', 'fine pruning'],cifar10,clean,0.8827,0.7213,0.0000,0.6192,0.7213,0.0595,(3.0, 'post_training'),5.07
+5213ad567575f1f7,comb_019,['pre-squeeze'],['in-trades'],['post_dp', 'fine pruning'],cifar10,clean,0.9612,0.6123,0.2396,0.8987,0.6123,0.0631,(3.0, 'post_training'),4.27
+5213ad567575f1f7,comb_052,['pre-squeeze', 'pre-dp'],['in_noop'],['post_dp'],cifar10,clean,0.0957,0.0961,0.0000,0.5678,0.0961,0.0188,(1.0, 'pre_training'),4.49
+5213ad567575f1f7,comb_057,['pre-squeeze', 'pre-dp'],['in-trades'],['post_dp'],cifar10,clean,0.1000,0.1000,0.1000,-1.0000,0.1000,1.0000,(1.0, 'pre_training'),4.26
+5213ad567575f1f7,comb_083,['pre-dp', 'pre-squeeze'],['in_noop'],['fine pruning', 'post_dp'],cifar10,clean,0.1029,0.1051,0.0000,0.5437,0.1051,0.0273,(1.0, 'pre_training'),5.16
+5213ad567575f1f7,comb_084,['pre-dp', 'pre-squeeze'],['in_noop'],['post_dp', 'fine pruning'],cifar10,clean,0.1029,0.1051,0.0000,0.5343,0.1051,0.0273,(1.0, 'pre_training'),5.36
+5213ad567575f1f7,comb_053,['pre-squeeze', 'pre-dp'],['in_noop'],['fine pruning', 'post_dp'],cifar10,clean,0.0912,0.0916,0.0000,0.6673,0.0916,0.0398,(1.0, 'pre_training'),4.49
+5213ad567575f1f7,comb_035,['pre-dp'],['in-trades'],['noop'],cifar10,clean,0.1000,0.1000,0.1000,-1.0000,0.1000,1.0000,(1.0, 'pre_training'),6255.98
+5213ad567575f1f7,comb_005,['noop'],['in-trades'],['noop'],cifar10,clean,0.9998,0.7695,0.3133,0.6831,0.7695,0.0995,-1.0,7228.95
+5213ad567575f1f7,comb_085,['pre-dp', 'pre-squeeze'],['in-trades'],['noop'],cifar10,clean,0.1000,0.1000,0.1000,-1.0000,0.1000,1.0000,(1.0, 'pre_training'),8330.49

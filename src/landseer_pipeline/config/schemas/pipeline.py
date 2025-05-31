@@ -162,7 +162,7 @@ class PipelineStructure(BaseModel):
     @model_validator(mode="after")
     def validate_noop_for_necessary_stages(self):
         for stage, config in self.pipeline.items():
-            if stage in {Stage.PRE_TRAINING, Stage.DURING_TRAINING} and config.noop is None:
+            if stage in {Stage.DURING_TRAINING} and config.noop is None:
                 raise ValueError(f"Stage '{stage}' must have a noop tool")
             return self
       

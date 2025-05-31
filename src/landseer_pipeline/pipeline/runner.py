@@ -12,7 +12,9 @@ from landseer_pipeline.evaluator import ModelEvaluator
 from landseer_pipeline.pipeline.cache import CacheManager
 from landseer_pipeline.utils import ResultLogger, GPUAllocator
 from landseer_pipeline.utils.files import copy_or_link_log
-from landseer_pipeline.config import ToolConfig
+from landseer_pipeline.config import ToolConfig, Stage
+from landseer_pipeline.dataset_handler import DatasetManager
+from landseer_pipeline.config import ToolConfig, DockerConfig
 import time
 import csv
 import torch
@@ -54,6 +56,9 @@ class PipelineExecutor():
 		"""Get the list of tools for a specific stage"""
 		return self.config.get("pipeline",[]).get(stage, []).get("tools", [])
 	
+	def run_all_combinations_parallel_new(self):
+		max_workers = torch.cuda.device_count() if self.settings.use_gpu else os.cpu_count()
+	
 	def run_all_combinations_parallel(self):
 		self.make_combinations()
 		with ThreadPoolExecutor(max_workers=min(len(self.combinations), os.cpu_count())) as executor:
@@ -64,6 +69,7 @@ class PipelineExecutor():
 					future.result()
 				except Exception as e:
 					logger.error(f"Combination {combo} failed with error: {e}")
+
 	
 	def get_tools_for_combination(self, combination: str, stage: str) -> List[Dict]:
 		"""Get the list of tools for a specific combination and stage"""
@@ -84,35 +90,47 @@ class PipelineExecutor():
 		logger.info("\n============================\n PIPELINE COMPLETED\n============================")
 
 	def make_combinations(self):
-		"""Create combinations of tools with all permutations and subsets, including noop"""
 		pipeline = self.config.pipeline
 		stages = [stage for stage in Stage]
 		options_per_stage = []
+		
 		for stage in stages:
-			stage_config = pipeline.get(stage, {})
-			tools: List[ToolConfig] = stage_config.tools
+			stage_config = pipeline.get(stage)
+			if stage_config is None:
+				raise ValueError(f"Missing StageConfig for stage: {stage}")
+			
+			tools: List[ToolConfig] = stage_config.tools or []
 			noop: Optional[ToolConfig] = stage_config.noop
-			# Generate all non-empty permutations of tools in this stage
-			permuted_tool_seqs = []
-			for r in range(1, len(tools) + 1):
-				permuted_tool_seqs.extend(permutations(tools, r))
-			stage_options = [tuple([noop])] if noop else []
-			stage_options += permuted_tool_seqs
+			
+			# Create noop if it doesn't exist
+			if noop is None:
+				dummy_docker = DockerConfig(image="ghcr.io/landseer-project/post_noop:v1", command="python main.py")
+				noop = ToolConfig(name="noop", docker=dummy_docker)
+			
+			# Initialize stage options with noop
+			stage_options = [(noop,)]
+			
+			# Add all permutations of tools if tools exist
+			if tools:
+				for r in range(1, len(tools) + 1):
+					stage_options.extend(permutations(tools, r))
+			
+			# Add this stage's options to the main list
 			options_per_stage.append(stage_options)
-			# Cartesian product of all stage sequences
+			print(f"Stage {stage.value} has {len(stage_options)} options with noop included.")
+		
 		all_combinations = list(product(*options_per_stage))
 		combinations = {}
+		print(f"Generated {len(all_combinations)} combinations with permutations.")
 		
 		for idx, combo in enumerate(all_combinations):
 			key = f"comb_{idx:03d}"
-			# Flatten per-stage tool tuples into a full dict by stage
-			stage_combo_dict = {}
-			for i, stage in enumerate(stages):
-				stage_combo_dict[stage] = list(combo[i])  # List of ToolConfigs per stage
+			stage_combo_dict = {stage: list(combo[i]) for i, stage in enumerate(stages)}
 			combinations[key] = stage_combo_dict
-		def count_noops(stage_combo_dict):
-			return sum(1 for tools in stage_combo_dict.values() if len(tools) == 1 and tools[0].name == "noop")
 
+		def count_noops(stage_combo_dict):
+			return sum(1 for tools in stage_combo_dict.values() if len(tools) == 1 and getattr(tools[0], "name", "") == "noop")
+		
 		sorted_combos = sorted(combinations.items(), key=lambda x: count_noops(x[1]), reverse=True)
 		self.combinations = dict(sorted_combos)
 		export_combinations_to_csv("all_pipeline_combinations.csv", self.combinations)
@@ -126,10 +144,9 @@ class PipelineExecutor():
 		comb_start = time.time()
 		tools_by_stage = {"pre_training": [], "during_training": [], "post_training": []}
 
+		all_output_paths = {}
 		for stage in stages:
-			if stage == "post_training":
-				post_training_results = []
-			print(f"Running stage: {stage}")
+			stage_tool_outputs = []
 			tools = combination_dict[stage]
 			print(f"Tools for stage {stage}: {tools}")
 			logger.info(f"{combination}--- STAGE: {stage.upper()} ---")
@@ -182,7 +199,6 @@ class PipelineExecutor():
 							tool_output_path, toolrun_duration = tool_runner.run_tool(
 								combination_id=combination
 							)
-							self.gpu_allocator.release_gpu(gpu_id)
 							success_marker.touch()
 							self.logger.log_tool(combination, stage, tool.name, cache_key, str(tool_output_path), toolrun_duration, "success")
 
@@ -193,10 +209,11 @@ class PipelineExecutor():
 							self.cache_manager.mark_as_failed(cache_key)
 							self.logger.log_tool(combination, stage, tool.name, cache_key, str(tool_output_path), 0, "failure")
 							raise 
-					if stage != "post_training":                       
+					if stage != "post_training":
 						current_input = str(tool_output_path)
-					if stage == "post_training" and isinstance(tool_output_path, str):
-						post_training_results.append(tool_output_path)
+					elif Path(tool_output_path).is_dir() and Path(tool_output_path/"model.pt").exists():
+						current_input = tool_output_path
+					stage_tool_outputs.append(tool_output_path)
 					if stage == "pre_training":
 						dataset_dir = current_input
 						logger.debug(f"[+] {combination}: Updated dataset directory: {dataset_dir}")
@@ -212,20 +229,16 @@ class PipelineExecutor():
 						logger.warning(f"{combination}: Cache log not found at {cache_log}. Skipping log copy.")
 				finally:
 					lock.release()
+			all_output_paths[stage] = stage_tool_outputs
 
 		comb_duration = time.time() - comb_start
-		model_path = os.path.join(current_input, "model.pt")
-		if os.path.exists(model_path):
-			logger.info(f"{combination}:Evaluating final model...")
-			# assign gpu_id for evaluation
-			gpu_id = self.gpu_allocator.allocate_gpu()
-			model_evaluator = ModelEvaluator(settings=self.settings,dataset_manager=self.dataset_manager,attacks=self.attacks.attacks,gpu_id=gpu_id)
-			final_acc = model_evaluator.evaluate_model(model_path, self.pipeline_dataset_dir, post_training_results=post_training_results)
-			self.gpu_allocator.release_gpu(gpu_id)
-			self.logger.log_combination(combination, tools_by_stage=tools_by_stage, dataset_name=self.settings.config.dataset.name,dataset_type=self.pipeline_dataset_type, acc=final_acc, duration=comb_duration)
-			logger.info(f"{combination}: Evaluation completed : {final_acc}")
-		else:
-			logger.warning(f"{combination}: Model not found at {model_path}. Skipping evaluation.")
+		logger.info(f"{combination}:Evaluating final model...")
+		gpu_id = self.gpu_allocator.allocate_gpu()
+		model_evaluator = ModelEvaluator(settings=self.settings,dataset_manager=self.dataset_manager,attacks=self.attacks.attacks,outputs=all_output_paths, gpu_id=gpu_id)
+		final_acc = model_evaluator.evaluate_model(self.pipeline_dataset_dir)
+		self.gpu_allocator.release_gpu(gpu_id)
+		self.logger.log_combination(combination, tools_by_stage=tools_by_stage, dataset_name=self.settings.config.dataset.name,dataset_type=self.pipeline_dataset_type, acc=final_acc, duration=comb_duration)
+		logger.info(f"{combination}: Evaluation completed : {final_acc}")
 
 def export_combinations_to_csv(filename="generated_combinations.csv", combinations=None):
     if not combinations:
