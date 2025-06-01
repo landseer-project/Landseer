@@ -29,6 +29,37 @@ Landseer is a modular framework to systematically explore, compose, and evaluate
 - **Extraction**: Model stealing and membership inference attacks
 - **Inference**: Privacy attacks extracting training data information
 
+##  Project Structure
+
+```
+landseer-pipeline/
+├── src/landseer_pipeline/
+│   ├── config/                 # Configuration management
+│   ├── dataset_handler/        # Dataset loading and preprocessing
+│   ├── docker_handler/         # Docker container management
+│   ├── evaluator/             # Model evaluation and metrics
+│   ├── pipeline/              # Pipeline execution logic
+│   ├── tools/                 # Tool execution framework
+│   └── utils/                 # Utilities (logging, GPU, files)
+├── configs/
+│   ├── pipeline/              # Pipeline configuration files
+│   ├── attack/                # Attack configuration files
+│   └── model/                 # Model architecture definitions
+├── cache/                     # Cached tool outputs
+├── results/                   # Experiment results
+└── logs/                      # Execution logs
+```
+
+2. **Tool interface requirements**:
+   - Input: `/data` directory (dataset + previous tool outputs)
+   - Output: `/output` directory (processed data/model)
+   - Config: `config_model.py` (model architecture)
+
+3. **Expected outputs**:
+   - Pre-training tools: Processed dataset files (npy)
+   - During-training tools: `model.pt` (trained PyTorch model)
+   - Post-training tools: `model.pt` (refined model)
+
 ## Installation
 
 ### Prerequisites
@@ -116,37 +147,6 @@ attacks:
   inference: false
   other: false
 ```
-
-##  Project Structure
-
-```
-landseer-pipeline/
-├── src/landseer_pipeline/
-│   ├── config/                 # Configuration management
-│   ├── dataset_handler/        # Dataset loading and preprocessing
-│   ├── docker_handler/         # Docker container management
-│   ├── evaluator/             # Model evaluation and metrics
-│   ├── pipeline/              # Pipeline execution logic
-│   ├── tools/                 # Tool execution framework
-│   └── utils/                 # Utilities (logging, GPU, files)
-├── configs/
-│   ├── pipeline/              # Pipeline configuration files
-│   ├── attack/                # Attack configuration files
-│   └── model/                 # Model architecture definitions
-├── cache/                     # Cached tool outputs
-├── results/                   # Experiment results
-└── logs/                      # Execution logs
-```
-
-2. **Tool interface requirements**:
-   - Input: `/data` directory (dataset + previous tool outputs)
-   - Output: `/output` directory (processed data/model)
-   - Config: `config_model.py` (model architecture)
-
-3. **Expected outputs**:
-   - Pre-training tools: Processed dataset files (npy)
-   - During-training tools: `model.pt` (trained PyTorch model)
-   - Post-training tools: `model.pt` (refined model)
 
 ## Results Interpretation
 
