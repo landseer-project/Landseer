@@ -16,11 +16,12 @@ Landseer is a modular framework to systematically explore, compose, and evaluate
 - **Result Tracking**: Detailed logging and CSV-based result reporting
 
 ### Supported Metrics
-- **Clean Accuracy**: Standard model performance on clean test data
+- **Clean Accuracy**: Standard model performance on clean train and test data
 - **Robust Accuracy**: Performance under adversarial attacks (PGD)
-- **Out-of-Distribution (OOD) Detection**: AUC for detecting anomalous inputs
-- **Fingerprinting Resistance**: Model's resistance to ownership verification attacks
+- **Out-of-Distribution (OOD) Detection**: AUC for detecting out-of-distribution inputs
+- **Fingerprint confidence score and p-value**: Confidence score and p-value of suspected stolen model to victim model's fingerptint
 - **Backdoor Attack Success Rate (ASR)**: Success rate of backdoor triggers
+- **Epsilon**: Privacy Budget for differentially private data or models 
 - **Training Duration**: Time measurements for each tool and combination
 
 ### Attack Types
