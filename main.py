@@ -56,7 +56,7 @@ def main():
 
     # Load trained model
     model = config()
-    model.load_state_dict(torch.load(os.path.join(args.input_dir, "model1.pt"), map_location="cpu"))
+    model.load_state_dict(torch.load(os.path.join(args.input_dir, "model.pt"), map_location="cpu"))
     model.eval()
 
     # Evaluate without DP noise
