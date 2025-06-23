@@ -7,54 +7,47 @@ from sklearn.metrics import accuracy_score
 from config_model import config
 import torch.nn.functional as F
 from torchvision import transforms
-from PIL import Image
 
-# Custom Dataset to apply transforms on test data from .npy
+# --- Custom Dataset (No ToTensor, no PIL, already (C,H,W)) ---
 class NpyCIFAR10TestDataset(Dataset):
     def __init__(self, images, labels, transform=None):
-        self.images = images
-        self.labels = labels
+        self.images = torch.tensor(images).float()  # already (C,H,W), float32, [0,1]
+        self.labels = torch.tensor(labels).long()
         self.transform = transform
 
     def __len__(self):
         return len(self.images)
 
     def __getitem__(self, idx):
-        img = self.images[idx].numpy().astype(np.uint8)  # [C, H, W] or [H, W, C]
-        img = np.transpose(img, (1, 2, 0)) if img.shape[0] == 3 else img  # Ensure [H, W, C]
-        img = Image.fromarray(img)
+        img = self.images[idx]
         if self.transform:
             img = self.transform(img)
         label = self.labels[idx]
         return img, label
 
+# --- Main Evaluation Script ---
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--epsilon", type=float, default=8.0)
     parser.add_argument("--delta", type=float, default=1e-5)
     parser.add_argument("--input_dir", type=str, default="/data")
     parser.add_argument("--output", type=str, default="/output")
+    # parser.add_argument("--input_dir", type=str, default="./outputdata")
+    # parser.add_argument("--output", type=str, default="./output")
     args = parser.parse_args()
 
-    # Load test data from .npy
+    # Load .npy files (already in (N, C, H, W), float32)
     test_data = np.load(os.path.join(args.input_dir, "test_data.npy"))
     test_labels = np.load(os.path.join(args.input_dir, "test_labels.npy"))
 
-    # Convert to tensors and permute from NHWC to NCHW
-    test_data = torch.from_numpy(test_data).permute(0, 3, 1, 2).contiguous()  # [N, C, H, W]
-    test_labels = torch.from_numpy(test_labels).long()
+    # Define normalization only (no ToTensor)
+    test_transform = transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
 
-    # Define normalization transform (same as training)
-    test_transform = transforms.Compose([
-        transforms.ToTensor(),  # Ensure image becomes float32 tensor in [0,1]
-        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-    ])
-
-    # Apply transform through custom dataset class
+    # Dataset and loader
     test_dataset = NpyCIFAR10TestDataset(test_data, test_labels, transform=test_transform)
     test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
 
-    # Load trained model
+    # Load model
     model = config()
     model.load_state_dict(torch.load(os.path.join(args.input_dir, "model.pt"), map_location="cpu"))
     model.eval()
@@ -70,7 +63,7 @@ def main():
             total += labels.size(0)
         print("Non-DP Accuracy: {:.4f}".format(correct / total))
 
-    # Add DP noise during inference
+    # --- Add DP noise during inference ---
     def add_dp_noise(model, dataloader, epsilon, delta):
         with torch.no_grad():
             all_probs = []
@@ -100,7 +93,7 @@ def main():
     print(f"DP Results (ε={epsilon:.2f}, δ={delta:.1e}):")
     print(f"- Accuracy: {accuracy:.4f}")
 
-    # Save results
+    # Save metrics
     os.makedirs(args.output, exist_ok=True)
     with open(os.path.join(args.output, 'privacy_metrics.txt'), 'w') as f:
         f.write(f"epsilon={args.epsilon}\n")
@@ -109,6 +102,33 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
