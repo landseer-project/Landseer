@@ -6,23 +6,12 @@ dataset:
 
 pipeline:
   pre_training:
-    tools:
-    - name: pre-squeeze
-      docker:
-        command: python3 main.py
-        config_script: configs/model/config_model.py
-        image: ghcr.io/landseer-project/pre_squeeze:v1
-      
+    tools:      
     - docker:
         command: python3 main.py
         config_script: configs/model/config_model.py
         image: ghcr.io/landseer-project/pre_xgbod:v2
       name: pre-xgbod
-    - docker:
-        command: python3 main.py
-        config_script: configs/model/config_model.py
-        image: ghcr.io/landseer-project/pre_dp:v5
-      name: pre-dp
 
     noop:
       name: noop
@@ -32,14 +21,15 @@ pipeline:
 
   during_training:
     tools:
-    - name: in-trades
+    - name: watermarknn
       docker:
-        image: ghcr.io/landseer-project/in_trades:v1
-        command: python3 main.py
+        image: ghcr.io/landseer-project/pre_watermarknn_cpu:v1
+        command: conda run -n watermarknn python -u main.py
+
     noop:
       name: in_noop
       docker:
-        image: ghcr.io/landseer-project/in_noop:latest
+        image: ghcr.io/landseer-project/in_noop:v5
         command: python main.py
 
   post_training:
@@ -48,9 +38,15 @@ pipeline:
       docker:
         image: ghcr.io/landseer-project/post_fineprune:v1
         command: python3 main.py --prune-percentage 0.1
+
+  deployment:
+    tools:
     - name: post_dp
       docker:
         command: python3 main.py
         config_script: configs/model/config_model.py
-        image: ghcr.io/landseer-project/post_dp:v3
-      
+        image: ghcr.io/landseer-project/post_dp:v4
+    - name: post_magnet
+      docker:
+        image: ghcr.io/landseer-project/post_magnet:v2
+        command: python3 main.py

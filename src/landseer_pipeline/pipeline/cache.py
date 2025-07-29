@@ -12,7 +12,8 @@ class CacheManager:
 
     def safe_cache_path(self, cache_key):
         cache_path = self.get_cache_path(cache_key)
-        lock = FileLock(str(cache_path) + ".lock")
+        lock_path = cache_path / ".lock"
+        lock = FileLock(str(lock_path))
         lock.acquire()
         return cache_path, lock
 
@@ -29,28 +30,9 @@ class CacheManager:
         if success_file.exists():
             return True
     
-    def compute_cache_key(self, tools: List,current_tool, stage: str, input_path: str, dataset) -> str:
-        tool_sequence_data = []
-        for tool in tools:
-            config_model_content = ""
-            print(f"Processing tool: {tool}")
-            if tool.docker.config_script:
-                config_script_path = Path(tool.docker.config_script)
-                if not config_script_path.exists():
-                    raise FileNotFoundError(f"Config script {config_script_path} does not exist.")
-                with open(config_script_path, "r") as f:
-                    config_model_content = f.read()
-            image_name = tool.docker.image
-            digest = get_image_digest(image_name)
-            tool_entry = {
-            "tool_name": tool.name,
-            "tool_config": tool.dict() if hasattr(tool, "dict") else {},
-            "image_digest": digest,
-            "config": config_model_content
-            }
-            tool_sequence_data.append(tool_entry)
+    def compute_cache_key(self, prev_cache_key: str,current_tool, stage: str, input_path: str, dataset) -> str:
         data = {
-        "tool_sequence": tool_sequence_data,  # order matters
+        "tool_sequence": prev_cache_key,  # order matters
         "current_tool": str(current_tool),
         "stage": stage,
         "input_path": str(input_path),

@@ -6,6 +6,7 @@ from landseer_pipeline.config import Settings
 from typing import List, Dict, Optional
 from landseer_pipeline.config import Stage
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import hashlib
 import itertools
 from landseer_pipeline.tools import ToolRunner
 from landseer_pipeline.evaluator import ModelEvaluator
@@ -23,6 +24,10 @@ from itertools import permutations, product
 
 logger = logging.getLogger(__name__)
 
+class Combination():
+	def __init__(self, settings: Settings, dataset_manager: Optional[DatasetManager] = None, idx):
+		self.id = idx
+		self.combo_output_dir = settings.results_dir / self.settings.pipeline_id / f"comb_{idx:03d}"
 class PipelineExecutor():
 	
 	def __init__(self, settings: Settings, dataset_manager=None):
@@ -142,8 +147,8 @@ class PipelineExecutor():
 		dataset_dir = self.pipeline_dataset_dir
 		stages = [stage.value for stage in Stage]
 		comb_start = time.time()
-		tools_by_stage = {"pre_training": [], "during_training": [], "post_training": []}
-
+		tools_by_stage = {"pre_training": [], "during_training": [], "post_training": [], "deployment": []}
+		cache_key = hashlib.sha256(b"").hexdigest() + "_init"
 		all_output_paths = {}
 		for stage in stages:
 			stage_tool_outputs = []
@@ -153,15 +158,15 @@ class PipelineExecutor():
 			if not tools:
 				logger.debug(f"{combination}: No tools configured for stage '{stage}'. Skipping.")
 				continue
-			tools_by_stage[stage] = tools if tools else []			
+			tools_by_stage[stage] = tools if tools else []
 			for tool in tools:
 				logger.info(f"[Tool: {tool.name}] Starting execution...")
 				
-				if tool.name == "noop" and stage == "post_training":
+				if tool.name == "noop" and (stage == "post_training" or stage == "deployment"):
 					logger.info(f"[+] {combination}: Noop done")
 					continue
 				
-				cache_key = self.cache_manager.compute_cache_key(tools, tool, stage, current_input, self.pipeline_dataset_dir)
+				cache_key = self.cache_manager.compute_cache_key(cache_key, tool, stage, current_input, self.pipeline_dataset_dir)
 				cache_path, lock = self.cache_manager.safe_cache_path(cache_key)
 				in_progress_marker = cache_path / ".in_progress"
 				success_marker = cache_path / ".success"
@@ -199,6 +204,7 @@ class PipelineExecutor():
 							tool_output_path, toolrun_duration = tool_runner.run_tool(
 								combination_id=combination
 							)
+							tool.set_output_path(tool_output_path)
 							success_marker.touch()
 							self.logger.log_tool(combination, stage, tool.name, cache_key, str(tool_output_path), toolrun_duration, "success")
 
@@ -209,8 +215,8 @@ class PipelineExecutor():
 							self.cache_manager.mark_as_failed(cache_key)
 							self.logger.log_tool(combination, stage, tool.name, cache_key, str(tool_output_path), 0, "failure")
 							raise 
-					if stage != "post_training":
-						current_input = str(tool_output_path)
+					if stage != "deployment":
+						current_input = tool_output_path
 					elif Path(tool_output_path).is_dir() and Path(tool_output_path/"model.pt").exists():
 						current_input = tool_output_path
 					stage_tool_outputs.append(tool_output_path)
@@ -232,9 +238,9 @@ class PipelineExecutor():
 			all_output_paths[stage] = stage_tool_outputs
 
 		comb_duration = time.time() - comb_start
-		logger.info(f"{combination}:Evaluating final model...")
+		logger.info(f"{combination}: Evaluating final model...")
 		gpu_id = self.gpu_allocator.allocate_gpu()
-		model_evaluator = ModelEvaluator(settings=self.settings,dataset_manager=self.dataset_manager,attacks=self.attacks.attacks,outputs=all_output_paths, gpu_id=gpu_id)
+		model_evaluator = ModelEvaluator(settings=self.settings,dataset_manager=self.dataset_manager,attacks=self.attacks.attacks,tools_by_stage=tool_by_stage, gpu_id=gpu_id)
 		final_acc = model_evaluator.evaluate_model(self.pipeline_dataset_dir)
 		self.gpu_allocator.release_gpu(gpu_id)
 		self.logger.log_combination(combination, tools_by_stage=tools_by_stage, dataset_name=self.settings.config.dataset.name,dataset_type=self.pipeline_dataset_type, acc=final_acc, duration=comb_duration)
