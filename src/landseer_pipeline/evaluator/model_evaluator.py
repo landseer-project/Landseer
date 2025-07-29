@@ -16,15 +16,38 @@ from landseer_pipeline.evaluator.fingerprinting import evaluate_fingerprinting_m
 from landseer_pipeline.config import Stage
 from landseer_pipeline.utils import load_config_from_script
 
+from torchvision import transforms
+import torch
+
 logger = logging.getLogger()
+
+#Adding dataset Normalizer
+class NormalizedDataset(torch.utils.data.Dataset):
+    def __init__(self, images, labels, normalize=True):
+        images = torch.tensor(images).float()
+        if images.max() > 1.0:
+            images = images / 255.0
+        self.images = images
+        self.labels = torch.tensor(labels).long()
+        self.transform = transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)) if normalize else None
+
+    def __getitem__(self, idx):
+        x = self.images[idx]
+        if self.transform:
+            x = self.transform(x)
+        y = self.labels[idx]
+        return x, y
+
+    def __len__(self):
+        return len(self.labels)
 
 class ModelEvaluator:
 
-    def __init__(self, settings, dataset_manager, attacks, outputs, gpu_id):
+    def __init__(self, settings, dataset_manager, attacks, tools_by_stage, gpu_id):
         self.dataset_manager = dataset_manager
         self.attacks = attacks
         self.model_config = settings.config.pipeline[Stage.DURING_TRAINING].noop.docker.config_script
-        self.outputs = outputs
+        self.tools_by_stage = tools_by_stage
         self.device = f"cuda" if torch.cuda.is_available() else "cpu"
 
     def _get_model_path(self, model_name: str) -> str:
@@ -127,6 +150,7 @@ class ModelEvaluator:
             metrics["backdoor_asr"] = 0.0
         metrics["fingerprinting"] = evaluate_fingerprinting_mingd(model, clean_test_loader)
         metrics["privacy_epsilon"] = self.extract_privacy_epsilon(self.outputs)
+        metrics["dp_accuracy"] = self.extract_dp_accuracy(self.outputs)
              
         return metrics
     
@@ -158,10 +182,11 @@ class ModelEvaluator:
         except ImportError as e:
             logger.warning(f"Could not evaluate TensorFlow model: {e}")
             return {"clean_test_accuracy": 0.0}
-
-    def _load_dataset(self, dataset_path: str) -> Tuple[Optional[DataLoader], Optional[DataLoader], Optional[DataLoader]]:
+        
+    #New Load dataset function to include NormalizedDataset
+    def _load_dataset(self, dataset_path: str) -> Tuple[Optional[DataLoader], Optional[DataLoader]]:
         clean_train_loader, clean_test_loader = None, None
-             
+
         if dataset_path:
             files = os.listdir(dataset_path)
             if 'test_data.npy' in files and 'test_labels.npy' in files:
@@ -169,13 +194,37 @@ class ModelEvaluator:
                 y_train = np.load(os.path.join(dataset_path, 'labels.npy'))
                 X_test = np.load(os.path.join(dataset_path, 'test_data.npy'))
                 y_test = np.load(os.path.join(dataset_path, 'test_labels.npy'))
-                clean_train_dataset = TensorDataset(torch.tensor(X_train).float(), torch.tensor(y_train).long())
-                clean_train_loader = DataLoader(clean_train_dataset, batch_size=128, shuffle=False)
-                clean_test_dataset = TensorDataset(torch.tensor(X_test).float(), torch.tensor(y_test).long())
-                clean_test_loader = DataLoader(clean_test_dataset, batch_size=128 , shuffle=False)
+
+                # Apply normalization consistent with training
+                train_dataset = NormalizedDataset(X_train, y_train, normalize=True)
+                test_dataset = NormalizedDataset(X_test, y_test, normalize=True)
+
+                clean_train_loader = DataLoader(train_dataset, batch_size=128, shuffle=False)
+                clean_test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
+
         else:
             logger.warning(f"Unsupported dataset format: {dataset_path}")
+
         return clean_train_loader, clean_test_loader
+
+
+    # def _load_dataset(self, dataset_path: str) -> Tuple[Optional[DataLoader], Optional[DataLoader], Optional[DataLoader]]:
+    #     clean_train_loader, clean_test_loader = None, None
+             
+    #     if dataset_path:
+    #         files = os.listdir(dataset_path)
+    #         if 'test_data.npy' in files and 'test_labels.npy' in files:
+    #             X_train = np.load(os.path.join(dataset_path, 'data.npy'))
+    #             y_train = np.load(os.path.join(dataset_path, 'labels.npy'))
+    #             X_test = np.load(os.path.join(dataset_path, 'test_data.npy'))
+    #             y_test = np.load(os.path.join(dataset_path, 'test_labels.npy'))
+    #             clean_train_dataset = TensorDataset(torch.tensor(X_train).float(), torch.tensor(y_train).long())
+    #             clean_train_loader = DataLoader(clean_train_dataset, batch_size=128, shuffle=False)
+    #             clean_test_dataset = TensorDataset(torch.tensor(X_test).float(), torch.tensor(y_test).long())
+    #             clean_test_loader = DataLoader(clean_test_dataset, batch_size=128 , shuffle=False)
+    #     else:
+    #         logger.warning(f"Unsupported dataset format: {dataset_path}")
+    #     return clean_train_loader, clean_test_loader
     
     def evaluate_clean(self, model, loader):
         model.eval()
@@ -273,6 +322,34 @@ class ModelEvaluator:
             with open(params_file, 'r') as f:
                 for line in f:
                     if line.startswith("epsilon="):
+                        return float(line.split('=')[1].strip())
+        except Exception as e:
+            logger.warning(f"Could not parse privacy parameters from {params_file}: {e}")
+        return -1.0
+    
+    def extract_dp_accuracy(self, output_by_stages: Dict) -> float:
+        #check for all stages as key the list of directories to find privacy_metrics file
+        for stage, outputs in output_by_stages.items():
+            for output in outputs:
+                if isinstance(output, str):
+                    output = Path(output)
+                if isinstance(output, Path) and output.is_dir():
+                    params_file = output / "privacy_metrics.txt"
+                    if params_file.exists():
+                        acc = self._get_dp_accuracy(params_file)
+                        if acc >= 0:
+                            return (acc, stage)
+        logger.warning("No privacy metrics file found in outputs.")
+        return -1.0
+        
+    def _get_dp_accuracy(self, params_file: Path) -> float:
+        # epsilon=3.0
+        # delta=1e-05
+        # dp_accuracy=0.1017
+        try:
+            with open(params_file, 'r') as f:
+                for line in f:
+                    if line.startswith("dp_accuracy="):
                         return float(line.split('=')[1].strip())
         except Exception as e:
             logger.warning(f"Could not parse privacy parameters from {params_file}: {e}")

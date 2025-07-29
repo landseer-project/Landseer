@@ -1,4 +1,5 @@
 from pathlib import Path
+import csv
 
 class ResultLogger:
     def __init__(self, results_dir, pipeline_id):
@@ -14,7 +15,7 @@ class ResultLogger:
                 f.write("pipeline_id,combination,stage,tool_name,cache_key,duration_sec,status,output_path\n")
         if not self.combinations_csv.exists():
             with open(self.combinations_csv, "w") as f:
-                f.write("pipeline_id,combination,pre_training,in_training,post_training,dataset_name,dataset_type,acc_train_clean,acc_test_clean,acc_robust,ood_auc,fingerprinting,asr,privacy_epsilon,total_duration\n")
+                f.write("combination,pre_training,in_training,post_training,deployment,dataset_name,dataset_type,acc_train_clean,acc_test_clean,acc_robust,ood_auc,fingerprinting,asr,privacy_epsilon,dp_accuracy,total_duration\n")
 
     def log_tool(self, combination, stage, tool_name, cache_key, output_path, duration, status):
         with open(self.tools_csv, "a") as f:
@@ -27,7 +28,7 @@ class ResultLogger:
         pre_training = extract_names(tools_by_stage.get("pre_training", []))
         in_training = extract_names(tools_by_stage.get("during_training", []))
         post_training = extract_names(tools_by_stage.get("post_training", []))
-
+        deployment = extract_names(tools_by_stage.get("deployment", []))
         acc_train_clean = acc.get("clean_train_accuracy", -1)
         acc_clean = acc.get("clean_test_accuracy", -1)
         acc_robust = acc.get("robust_accuracy", -1)
@@ -35,9 +36,20 @@ class ResultLogger:
         fingerprinting_acc = acc.get("fingerprinting", -1)
         asr = acc.get("backdoor_asr", -1)
         privacy_epsilon = acc.get("privacy_epsilon", -1)
-        
-        with open(self.combinations_csv, "a") as f:
-            f.write(f"{self.pipeline_id},{combination},{pre_training},{in_training},{post_training},"
-                f"{dataset_name},{dataset_type},{acc_train_clean:.4f},{acc_clean:.4f},{acc_robust:.4f},"
-                f"{ood_auc:.4f},{fingerprinting_acc:.4f},{asr:.4f},{privacy_epsilon},{duration:.2f}\n")
- 
+        dp_acc = acc.get("dp_accuracy", -1)
+         
+        file_exists = self.combinations_csv.exists()
+        with open(self.combinations_csv, "a", newline='') as f:
+            writer = csv.writer(f, quoting=csv.QUOTE_MINIMAL)
+            if not file_exists:
+                writer.writerow([
+                "combination", "pre_training", "in_training", "post_training", "deployment",
+                "dataset_name", "dataset_type", "acc_train_clean", "acc_test_clean", "acc_robust",
+                "ood_auc", "fingerprinting", "asr", "privacy_epsilon", "dp_accuracy", "total_duration"
+                ])
+            writer.writerow([
+            combination, str(pre_training), str(in_training), str(post_training), str(deployment),
+            dataset_name, dataset_type, round(acc_train_clean, 4), round(acc_clean, 4),
+            round(acc_robust, 4), round(ood_auc, 4), round(fingerprinting_acc, 4),
+            round(asr, 4), str(privacy_epsilon), str(dp_acc), round(duration, 2)
+            ])

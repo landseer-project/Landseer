@@ -80,9 +80,9 @@ class DockerConfig(BaseModel):
             labels = get_labels_from_image(self.image)
             if not labels:
                 raise ValueError(f"No labels found in Docker image '{self.image}'")
-            if "stage" not in labels:
+            if "org.opencontainers.image.stage" not in labels:
                 raise ValueError(f"Label 'stage' not found in Docker image '{self.image}'")
-            if "dataset" not in labels:
+            if "org.opencontainers.image.dataset" not in labels:
                 raise ValueError(f"Label 'dataset' not found in Docker image '{self.image}'")
             return labels
         return {}
@@ -121,6 +121,7 @@ class DockerConfig(BaseModel):
 class ToolConfig(BaseModel):
     name: str = Field(description="Name of the tool")
     docker: DockerConfig = Field(description="Docker configuration for the tool")
+    output_path: Optional[str] = Field(default=None, description="Path to store the output of the tool")
 
     @property
     def tool_name(self) -> str:
@@ -137,11 +138,26 @@ class ToolConfig(BaseModel):
     @property
     def tool_defense_type(self) -> str:
         return self.docker.get_labels.get("defense_type", "unknown")
+
+    def set_output_path(self, output_path: str):
+        self.output_path = output_path
+        logger.debug(f"For tool '{self.name}', setting output path to: {self.output_path}")
+
+    def has_output_path(self) -> bool:
+        return self.output_path is not None and os.path.exists(self.output_path)
     
 class Stage(str, Enum):
     PRE_TRAINING = "pre_training"
     DURING_TRAINING = "during_training"
     POST_TRAINING = "post_training"
+    DEPLOYMENT = "deployment"
+
+class DefenseType(str, Enum):
+    ADVERSARIAL = "adversarial"
+    OUTLIER = "outlier"
+    DIFFERENTIAL_PRIVACY = "differential_privacy"
+    WATERMARKING = "watermarking"
+    UNKNOWN = "unknown"
 
 class StageConfig(BaseModel):
     tools: List[ToolConfig] = Field(default_factory=list, description="List of tools to be used in the stage")
@@ -166,17 +182,17 @@ class PipelineStructure(BaseModel):
                 raise ValueError(f"Stage '{stage}' must have a noop tool")
             return self
       
-    #@model_validator(mode="after")
-    #def fetch_and_validate_labels(self):
-    #    for stage in self.pipeline.keys():
-    #        values = self.pipeline[stage].tools
-    #        for tool in values:
-    #            docker = tool.docker
-    #            labels = docker.get_labels
-    #            print(f"Labels: {labels}")
-    #            label_stage = labels.get("stage")
-    #            if stage and label_stage.lower() != stage:
-    #                raise ValueError(f"Tool '{tool.tool_name}' is placed under stage '{stage}', "
-    #                                 f"but its Docker label says '{label_stage}'")
-    #            print(f"Tool {tool.tool_name}' is correctly placed under stage '{stage}'")
-    #        return self
+    @model_validator(mode="after")
+    def fetch_and_validate_labels(self):
+        for stage in self.pipeline.keys():
+            values = self.pipeline[stage].tools
+            for tool in values:
+                docker = tool.docker
+                labels = docker.get_labels
+                print(f"Labels: {labels}")
+                label_stage = labels.get("org.opencontainers.image.stage")
+                if stage and label_stage.lower() != stage:
+                    raise ValueError(f"Tool '{tool.tool_name}' is placed under stage '{stage}', "
+                                     f"but its Docker label says '{label_stage}'")
+                print(f"Tool {tool.tool_name}' is correctly placed under stage '{stage}'")
+            return self

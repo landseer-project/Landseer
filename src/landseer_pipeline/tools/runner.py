@@ -28,7 +28,7 @@ class ToolRunner:
         self.input_path = input_path
         output_path = f"{output_path}"
         #if output_path does not exist, create it
-        self.output_path = os.path.abspath(output_path)
+        self.output_path =  Path(output_path)
         print(f"Output path: {self.output_path}")
         self.docker_manager = DockerRunner(self.settings)
         self.gpu_id = gpu_id
@@ -49,35 +49,30 @@ class ToolRunner:
         env["CUDA_VISIBLE_DEVICES"] = str(self.gpu_id)
         logger.debug(f"{combination_id}/{tool_name}: Setting CUDA_VISIBLE_DEVICES to {env['CUDA_VISIBLE_DEVICES']}")
 
-        data_dir = merge_directories(input_path, dataset_dir)
-        logger.debug(f"{combination_id}/{tool_name}: Temporary input directory created at: {data_dir}")
-        if stage != "pre_training":
-            config_script_path = self.tool_config.docker.config_script
-            logging.debug(f"{combination_id}/{tool_name}: Config script path: {config_script_path}")
-            volumes = {
-                data_dir: {"bind": "/data", "mode": "ro"},
-                os.path.abspath(output_dir_path): {"bind": "/output", "mode": "rw"},
-                config_script_path: {"bind": "/app/config_model.py", "mode": "rw"},
-            }
-            logger.debug(f"{combination_id}/{tool_name}: Mounting config script: {config_script_path}")
-        else:
-            volumes = {
-                os.path.abspath(data_dir): {"bind": "/data", "mode": "ro"},
-                os.path.abspath(output_dir_path): {"bind": "/output", "mode": "rw"},
-            }
-        logger.debug(f"{combination_id}/{tool_name}: Volume bindings: {volumes}")
-
-        tool_args = self.tool_config.docker.command
-        command = f"{tool_args} --output /output"
-
-
-        logger.info(f"{combination_id}/{tool_name}: Container command: {command}")
-        
-        start = time.time()
-        exit_code = None
-        logs = None
-        
         try:
+            data_dir = merge_directories(input_path, dataset_dir)
+            logger.debug(f"{combination_id}/{tool_name}: Temporary input directory created at: {data_dir}")
+            if stage != "pre_training":
+                config_script_path = self.tool_config.docker.config_script
+                logging.debug(f"{combination_id}/{tool_name}: Config script path: {config_script_path}")
+                volumes = {
+                    data_dir: {"bind": "/data", "mode": "ro"},
+                    os.path.abspath(output_dir_path): {"bind": "/output", "mode": "rw"},
+                    config_script_path: {"bind": "/app/config_model.py", "mode": "rw"},
+                    }
+                logger.debug(f"{combination_id}/{tool_name}: Mounting config script: {config_script_path}")
+            else:
+                volumes = {
+                    os.path.abspath(data_dir): {"bind": "/data", "mode": "ro"},
+                    os.path.abspath(output_dir_path): {"bind": "/output", "mode": "rw"},
+                    }
+                logger.debug(f"{combination_id}/{tool_name}: Volume bindings: {volumes}")
+            tool_args = self.tool_config.docker.command
+            command = f"{tool_args} --output /output"
+            logger.info(f"{combination_id}/{tool_name}: Container command: {command}")
+            start = time.time()
+            exit_code = None
+            logs = None    
             exit_code, logs, container = self.docker_manager.run_container(
                 image_name=image_name,
                 command=command,
@@ -85,33 +80,34 @@ class ToolRunner:
                 volumes=volumes,
                 gpu_id=self.gpu_id
             )
-        finally:
-            # Always cleanup temporary directory
-            logger.debug(f"{combination_id}/{tool_name}: Cleaning up temporary directory: {data_dir}")
-            shutil.rmtree(data_dir, ignore_errors=True)
+        
             
             # Force container cleanup to release GPU
             #try:
             #    self.docker_manager.cleanup_container(container)
             #except Exception as cleanup_error:
             #    logger.warning(f"{combination_id}/{tool_name}: Container cleanup failed: {cleanup_error}")
-        
-        duration = time.time() - start
-        
-        # Write logs only if we have them
-        if logs is not None:
-            tool_log_path = os.path.join(
-                output_dir_path,"..",
-                "tool_logs",
+            duration = time.time() - start
+            # Write logs only if we have them
+            if logs is not None:
+                tool_log_path = os.path.join(
+                    output_dir_path,"..", "tool_logs",
                 f"{stage}_{tool_name.replace(' ', '_')}.log")
-            os.makedirs(os.path.dirname(tool_log_path), exist_ok=True)
-            with open(tool_log_path, "w") as f:
-                f.write(logs)
-
-        if exit_code != 0:
-            raise RuntimeError(
+                os.makedirs(os.path.dirname(tool_log_path), exist_ok=True)
+                with open(tool_log_path, "w") as f:
+                    f.write(logs)
+            
+            if exit_code != 0:
+                raise RuntimeError(
                 f"{combination_id}/{tool_name}: Failed with exit code {exit_code}")
-        
-        logger.info(
+            logger.info(
                 f"{combination_id}/{tool_name}: Completed successfully and output saved to {output_dir_path}")
+        #exception of ctrl+c
+        except KeyboardInterrupt:
+            logger.error(f"{combination_id}/{tool_name}: Execution interrupted by user.")
+            raise 
+        finally:
+            # Always cleanup temporary directory
+            logger.debug(f"{combination_id}/{tool_name}: Cleaning up temporary directory: {data_dir}")
+            shutil.rmtree(data_dir, ignore_errors=True)    
         return output_dir_path, duration
