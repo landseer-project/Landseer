@@ -28,13 +28,13 @@ class Settings():
         object.__setattr__(self, "results_dir", Path(self.results_dir) / str(self.pipeline_id) / str(self.timestamp))
         object.__setattr__(self, "output_dir", Path(self.output_dir) / str(self.pipeline_id))
 
-        config_model_path = (
-        self.config.pipeline.get("during_training").noop.docker.config_script
-        if self.config.pipeline.get("during_training") and self.config.pipeline.get("during_training").noop
-        else None
-        )
-        object.__setattr__(self, "config_model_path", config_model_path)
-      
+        # New centralized model script path
+        model_script_path = self.config.model.script if self.config and self.config.model else None
+        object.__setattr__(self, "config_model_path", model_script_path)
+        object.__setattr__(self, "model_framework", self.config.model.framework if self.config and self.config.model else None)
+        object.__setattr__(self, "model_params", self.config.model.params if self.config and self.config.model else {})
+        object.__setattr__(self, "model_script_hash", self.config.model.content_hash if self.config and self.config.model else "unknown")
+        
         self._create_directories()
     
     def _create_directories(self):
@@ -43,4 +43,3 @@ class Settings():
         for directory in directories:
             directory.mkdir(parents=True, exist_ok=True)
 
-    

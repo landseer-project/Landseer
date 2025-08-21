@@ -1,6 +1,10 @@
 from landseer_pipeline.utils.logger import setup_logger
 from landseer_pipeline.utils.result_logger import ResultLogger
 from landseer_pipeline.utils.gpu import GPUAllocator
+from landseer_pipeline.utils.temp_manager import temp_manager
+from landseer_pipeline.utils.auxiliary import (
+    AuxiliaryFileManager
+)
 from landseer_pipeline.utils.files import (
     hash_file,
     merge_directories,

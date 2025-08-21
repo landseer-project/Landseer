@@ -3,6 +3,7 @@ Model evaluation for ML Defense Pipeline
 """
 import logging
 import os
+import json
 import torch
 import numpy as np
 import h5py
@@ -16,141 +17,408 @@ from landseer_pipeline.evaluator.fingerprinting import evaluate_fingerprinting_m
 from landseer_pipeline.config import Stage
 from landseer_pipeline.utils import load_config_from_script
 
-from torchvision import transforms
-import torch
+import json
+from torchvision import datasets, transforms
+import os
 
 logger = logging.getLogger()
 
 #Adding dataset Normalizer
-class NormalizedDataset(torch.utils.data.Dataset):
-    def __init__(self, images, labels, normalize=True):
-        images = torch.tensor(images).float()
-        if images.max() > 1.0:
-            images = images / 255.0
-        self.images = images
-        self.labels = torch.tensor(labels).long()
-        self.transform = transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)) if normalize else None
+# class NormalizedDataset(torch.utils.data.Dataset):
+#     def __init__(self, images, labels, normalize=True):
+#         images = torch.tensor(images).float()
+#         if images.max() > 1.0:
+#             images = images / 255.0
+#         self.images = images
+#         self.labels = torch.tensor(labels).long()
+#         self.transform = transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)) if normalize else None
 
-    def __getitem__(self, idx):
-        x = self.images[idx]
-        if self.transform:
-            x = self.transform(x)
-        y = self.labels[idx]
-        return x, y
+#     def __getitem__(self, idx):
+#         x = self.images[idx]
+#         if self.transform:
+#             x = self.transform(x)
+#         y = self.labels[idx]
+#         return x, y
 
-    def __len__(self):
-        return len(self.labels)
+#     def __len__(self):
+#         return len(self.labels)
 
 class ModelEvaluator:
 
-    def __init__(self, settings, dataset_manager, attacks, tools_by_stage, gpu_id):
+    def __init__(self, settings, dataset_manager, attacks, tools_by_stage, gpu_id, combination_output):
         self.dataset_manager = dataset_manager
         self.attacks = attacks
         self.model_config = settings.config.pipeline[Stage.DURING_TRAINING].noop.docker.config_script
         self.tools_by_stage = tools_by_stage
-        self.device = f"cuda" if torch.cuda.is_available() else "cpu"
+        self.device = f"cuda:{gpu_id}" if torch.cuda.is_available() and gpu_id is not None else "cpu"
+        self.combination_output = combination_output
 
-    def _get_model_path(self, model_name: str) -> str:
-        # go through outputs of post stage
-        #output dirs in list are sequential and can be mapped to the sequence of tools
-        # prefer the last output directory for the model
-        #if no model in post training outputs, then return model of latest during training stage
-        for stage, outputs in self.outputs.items():
-            if stage == Stage.POST_TRAINING:
-                for output in outputs:
-                    if isinstance(output, str):
-                        output = Path(output)
-                    if output.is_dir():
-                        model_path = Path(output / model_name)
-                        if model_path.exists():
-                            return str(model_path)
-        # if no model found in post training, check during training
-        for stage, outputs in self.outputs.items():
-            if stage == Stage.DURING_TRAINING:
-                for output in outputs:
-                    if isinstance(output, str):
-                        output = Path(output)
-                    if output.is_dir():
-                        model_path = Path(output / model_name)
-                        if model_path.exists():
-                            return str(model_path)
-        logger.warning(f"Model {model_name} not found in outputs.")
+    #I also need something to see which types of tools are in pipeline
+    @property
+    def input_model(self) -> str:
+        json_path = Path(self.combination_output) / "fin_output_paths.json"
+        if json_path.exists():
+            with open(json_path, 'r') as f:
+                paths = json.load(f)
+            model_entry = paths.get("model.pt", "")
+            if isinstance(model_entry, dict):
+                return model_entry.get("source_path", "")
+            return model_entry
+        else:
+            logger.warning(f"Combination output paths file {json_path} does not exist.")
+            return ""
 
-    
+    @property
+    def input_train_dataset(self) -> str:
+        json_path = Path(self.combination_output) / "fin_output_paths.json"
+        if json_path.exists():
+            with open(json_path, 'r') as f:
+                paths = json.load(f)
+            data_entry = paths.get("data.npy", "")
+            if isinstance(data_entry, dict):
+                return data_entry.get("source_path", "")
+            return data_entry
+        else:
+            logger.warning(f"Combination output paths file {json_path} does not exist.")
+            return ""
+
+    @property
+    def input_test_dataset(self) -> str:
+        json_path = Path(self.combination_output) / "fin_output_paths.json"
+        if json_path.exists():
+            with open(json_path, 'r') as f:
+                paths = json.load(f)
+            test_data_entry = paths.get("test_data.npy", "")
+            if isinstance(test_data_entry, dict):
+                return test_data_entry.get("source_path", "")
+            return test_data_entry
+        else:
+            logger.warning(f"Combination output paths file {json_path} does not exist.")
+            return ""
+
+    @property
+    def input_train_labels(self) -> str:
+        json_path = Path(self.combination_output) / "fin_output_paths.json"
+        if json_path.exists():
+            with open(json_path, 'r') as f:
+                paths = json.load(f)
+            labels_entry = paths.get("labels.npy", "")
+            if isinstance(labels_entry, dict):
+                return labels_entry.get("source_path", "")
+            return labels_entry
+        else:
+            logger.warning(f"Combination output paths file {json_path} does not exist.")
+            return ""
+
+    @property
+    def input_test_labels(self) -> str:
+        json_path = Path(self.combination_output) / "fin_output_paths.json"
+        if json_path.exists():
+            with open(json_path, 'r') as f:
+                paths = json.load(f)
+            test_labels_entry = paths.get("test_labels.npy", "")
+            if isinstance(test_labels_entry, dict):
+                return test_labels_entry.get("source_path", "")
+            return test_labels_entry
+        else:
+            logger.warning(f"Combination output paths file {json_path} does not exist.")
+            return ""
+
+    @property
+    def input_wm_matrix(self) -> str:
+        json_path = Path(self.combination_output) / "fin_output_paths.json"
+        if json_path.exists():
+            with open(json_path, 'r') as f:
+                paths = json.load(f)
+            wm_matrix_entry = paths.get("wm_matrix.npy", "")
+            if isinstance(wm_matrix_entry, dict):
+                return wm_matrix_entry.get("source_path", "")
+            return wm_matrix_entry
+        else:
+            logger.warning(f"Combination output paths file {json_path} does not exist.")
+            return ""
+
+    @property
+    def input_wm_bits(self) -> str:
+        json_path = Path(self.combination_output) / "fin_output_paths.json"
+        if json_path.exists():
+            with open(json_path, 'r') as f:
+                paths = json.load(f)
+            wm_bits_entry = paths.get("wm_bits.npy", "")
+            if isinstance(wm_bits_entry, dict):
+                return wm_bits_entry.get("source_path", "")
+            return wm_bits_entry
+        else:
+            logger.warning(f"Combination output paths file {json_path} does not exist.")
+            return ""
+
+    def extract_defense_types_from_tools(self, tools_by_stage) -> List[str]:
+        """Extract defense types from tool configurations based on Docker image labels"""
+        defense_types = set()
+        
+        for stage, tools in tools_by_stage.items():
+            for tool in tools:
+                try:
+                    # Handle both tool objects and string names
+                    tool_name = tool.name if hasattr(tool, 'name') else str(tool)
+                    
+                    # Get defense type from Docker image labels
+                    if hasattr(tool, 'tool_defense_type'):
+                        defense_type = tool.tool_defense_type
+                        if defense_type and defense_type != "unknown":
+                            defense_types.add(defense_type)
+                            logger.info(f"Tool '{tool_name}' has defense_type: {defense_type}")
+                        else:
+                            logger.warning(f"Tool '{tool_name}' has no defense_type or unknown defense_type")
+                    else:
+                        logger.warning(f"Tool '{tool_name}' does not have tool_defense_type property")
+                except Exception as e:
+                    logger.error(f"Error extracting defense type from tool '{tool}': {e}")
+        
+        return list(defense_types)
+
+    def determine_applicable_attacks(self, defense_types: List[str]) -> List[str]:
+        """Map defense types to applicable attack types for evaluation"""
+        attack_types = set()
+        
+        # Always include clean evaluation
+        attack_types.add("clean")
+        attack_types.add("adversarial")
+        attack_types.add("carlini")
+        
+        for defense_type in defense_types:
+            defense_type_lower = defense_type.lower()
+            
+            if defense_type_lower == "adversarial":
+                attack_types.add("adversarial")
+                attack_types.add("pgd")
+            elif defense_type_lower == "outlier":
+                attack_types.add("outlier")
+                attack_types.add("ood")
+            elif defense_type_lower == "differential_privacy":
+                attack_types.add("privacy")
+            elif defense_type_lower == "watermarking":
+                attack_types.add("watermark")
+            elif defense_type_lower == "fingerprinting":
+                attack_types.add("fingerprinting")
+            elif defense_type_lower == "backdoor":
+                attack_types.add("backdoor")
+            elif defense_type_lower == "carlini":
+                attack_types.add("carlini")
+            else:
+                logger.warning(f"Unknown defense type: {defense_type}, adding general evaluation")
+                attack_types.add("general")
+        
+        # If no specific defense types found, run comprehensive evaluation
+        if len(attack_types) == 1:  # Only "clean"
+            attack_types.update(["adversarial", "outlier", "backdoor", "fingerprinting"])
+            logger.info("No specific defense types detected, running comprehensive evaluation")
+        
+        return list(attack_types)
+
+    def get_dataset_directory_from_paths(self) -> str:
+        """Get the directory containing the dataset files from the paths"""
+        train_data_path = self.input_train_dataset
+        if train_data_path and train_data_path != "":
+            return str(Path(train_data_path).parent)
+        
+        test_data_path = self.input_test_dataset
+        if test_data_path and test_data_path != "":
+            return str(Path(test_data_path).parent)
+        
+        logger.warning("No dataset paths found in fin_output_paths.json")
+        return ""
+
+
+    def _get_model_path(self, model_name: str = "model.pt") -> str:
+        """Get model path from fin_output_paths.json"""
+        return self.input_model
+
     def evaluate_model(self, dataset_path: str) -> Dict[str, float]:
-        print(self.device.count)
+        """Evaluate model using attacks determined by tool defense types"""
+        logger.info(f"Starting model evaluation...")
+        
+        # Extract defense types from tools
+        defense_types = self.extract_defense_types_from_tools(self.tools_by_stage)
+        logger.info(f"Detected defense types: {defense_types}")
+        
+        # Determine applicable attacks based on defense types
+        applicable_attacks = self.determine_applicable_attacks(defense_types)
+        logger.info(f"Running attacks: {applicable_attacks}")
+        
+        # Get dataset directory from combination output paths
+        dataset_dir = self.get_dataset_directory_from_paths()
+        if not dataset_dir:
+            logger.warning("Using provided dataset_path as fallback")
+            dataset_dir = dataset_path
+        
+        # Get model path from combination output
+        model_path = self._get_model_path()
+        if not model_path or not os.path.exists(model_path):
+            logger.error(f"Model not found at {model_path}")
+            return {"clean_test_accuracy": 0.0}
+        
+        logger.info(f"Evaluating model {model_path} on dataset {dataset_dir}")
         
         metrics = {}
-        model_path = self._get_model_path("model.pt")
-        logger.info(f"Evaluating model {model_path} on dataset {dataset_path}")
+        
         if model_path.endswith('.pt'):
-            metrics = self._evaluate_pytorch_model(model_path, dataset_path)
+            metrics = self._evaluate_pytorch_model(applicable_attacks)
         elif model_path.endswith('.h5'):
-            metrics = self._evaluate_tensorflow_model(model_path, dataset_path)
+            metrics = self._evaluate_tensorflow_model(model_path, dataset_dir)
         else:
             logger.warning(f"Unsupported model format: {model_path}")
             metrics = {"clean_test_accuracy": 0.0}
+        
         for name, value in metrics.items():
-            print(f"Metric {name}")
             logger.info(f"Metric {name}: {value}")
                 
         return metrics
     
-    def _evaluate_pytorch_model(self, model_path: str, dataset_path: str):
+    def _evaluate_pytorch_model(self, applicable_attacks: List[str]):
+        """Evaluate PyTorch model with attacks based on defense types"""
+        # Get model and dataset paths from class properties
+        model_path = self.input_model
+        dataset_path = self.get_dataset_directory_from_paths()
+        
+        logger.info(f"Model path: {model_path} (type: {type(model_path)})")
+        logger.info(f"Dataset path: {dataset_path} (type: {type(dataset_path)})")
+        
+        if not dataset_path:
+            logger.error("No valid dataset path found, cannot proceed with evaluation")
+            return {"clean_test_accuracy": 0.0}
+        
         config = load_config_from_script(self.model_config)
-
         model = config().to(self.device)
-
-        model.load_state_dict(torch.load(model_path, map_location=self.device), strict=False)
+        
+        # Load model state dict with proper device mapping
+        try:
+            state_dict = torch.load(model_path, map_location=self.device)
+            model.load_state_dict(state_dict, strict=False)
+        except Exception as e:
+            logger.debug(f"Direct device loading failed for {model_path}: {e}")
+            # Try loading with CPU mapping first, then move to device
+            try:
+                state_dict = torch.load(model_path, map_location='cpu')
+                model.load_state_dict(state_dict, strict=False)
+                model = model.to(self.device)
+                logger.info(f"Successfully loaded model with CPU mapping and moved to {self.device}")
+            except Exception as e2:
+                logger.error(f"Failed to load model even with CPU mapping: {e2}")
+                return {"clean_test_accuracy": 0.0}
+        
         model.eval()
             
         clean_train_loader, clean_test_loader = self._load_dataset(dataset_path)
-        print(f"dataset_path: {dataset_path}")
+        logger.info(f"Loading dataset from: {dataset_path}")
             
         metrics = {}
-        logger.info(f"model path: {model_path}") 
-        clean_train_acc = self.evaluate_clean(model, clean_train_loader)
-        metrics["clean_train_accuracy"] = clean_train_acc
-        clean_test_acc = self.evaluate_clean(model, clean_test_loader)
-        metrics["clean_test_accuracy"] = clean_test_acc
-
-        # outlier test
-        ood_loader =  self.generate_ood_samples(dataset_path)
-        if ood_loader is not None:
-            try:
-                ood_auc = self.evaluate_outlier(model, clean_test_loader, ood_loader)
-                metrics["ood_auc"] = ood_auc
-            except Exception as e:
-                logger.warning(f"Could not evaluate outlier detection: {e}")
+        logger.info(f"Evaluating model: {model_path}") 
+        
+        # ALWAYS run core evaluations regardless of defense types
+        # These metrics should always be present in results
+        
+        # 1. Clean train and test accuracy (always performed)
+        if clean_train_loader is not None:
+            clean_train_acc = self.evaluate_clean(model, clean_train_loader)
+            metrics["clean_train_accuracy"] = clean_train_acc
         else:
-            metrics["ood_auc"] = 0.0
-            
-        # TODO: check for the dataset as well as the pipeline tool types if type is backdoor then evaluate_backdoor
+            metrics["clean_train_accuracy"] = 0.0
             
         if clean_test_loader is not None:
+            clean_test_acc = self.evaluate_clean(model, clean_test_loader)
+            metrics["clean_test_accuracy"] = clean_test_acc
+        else:
+            metrics["clean_test_accuracy"] = 0.0
+
+        if "adversarial" in applicable_attacks:
             try:
                 robust_acc = self.evaluate_pgd(model, clean_test_loader)
-                metrics["robust_accuracy"] = robust_acc
+                metrics["pgd_acc"] = robust_acc
+                logger.info(f"Adversarial evaluation completed: {robust_acc}")
             except Exception as e:
                 logger.warning(f"Could not evaluate robust accuracy: {e}")
-        else:
-            metrics["robust_accuracy"] = 0.0
-        if self.dataset_manager.poisoned_dataset_dir:
-            poisoned_loader = None
-            if os.path.exists(self.dataset_manager.poisoned_dataset_dir):
-                poisoned_loader = self._load_dataset(self.dataset_manager.poisoned_dataset_dir)[1]
-            if poisoned_loader is not None:
+                metrics["pgd_acc"] = 0.0
+
+        if "carlini" in applicable_attacks:
+            try:
+                carlini_acc = self.evaluate_carlini_l2(model, clean_test_loader, confidence=0)
+                metrics["carlini_l2_accuracy"] = carlini_acc
+                logger.info(f"Carlini L2 evaluation completed: {carlini_acc}")
+                
+            except Exception as e:
+                logger.warning(f"Could not evaluate Carlini L2 accuracy: {e}")
+                metrics["carlini_l2_accuracy"] = 0.0
+
+        # Run outlier detection if outlier defense detected
+        if any(attack in applicable_attacks for attack in ["outlier", "ood"]):
+            ood_loader = self.generate_ood_samples("cifar100")
+            if ood_loader is not None:
                 try:
-                    target_class = 0
-                    backdoor_asr = self.evaluate_backdoor(model, poisoned_loader, target_class)
-                    metrics["backdoor_asr"] = backdoor_asr
+                    ood_auc = self.evaluate_outlier(model, clean_test_loader, ood_loader)
+                    metrics["ood_auc"] = ood_auc
+                    logger.info(f"Outlier detection evaluation completed: {ood_auc}")
                 except Exception as e:
-                    logger.warning(f"Could not evaluate backdoor ASR: {e}")
-        else:
-            metrics["backdoor_asr"] = 0.0
-        metrics["fingerprinting"] = evaluate_fingerprinting_mingd(model, clean_test_loader)
-        metrics["privacy_epsilon"] = self.extract_privacy_epsilon(self.outputs)
-        metrics["dp_accuracy"] = self.extract_dp_accuracy(self.outputs)
+                    logger.warning(f"Could not evaluate outlier detection: {e}")
+                    metrics["ood_auc"] = 0.0
+            else:
+                metrics["ood_auc"] = 0.0
+
+        # Run backdoor evaluation if backdoor defense detected
+        if "backdoor" in applicable_attacks:
+            if hasattr(self, 'dataset_manager') and self.dataset_manager.poisoned_dataset_dir:
+                poisoned_loader = None
+                if os.path.exists(self.dataset_manager.poisoned_dataset_dir):
+                    poisoned_loader = self._load_dataset(self.dataset_manager.poisoned_dataset_dir)[1]
+                if poisoned_loader is not None:
+                    try:
+                        target_class = 0
+                        backdoor_asr = self.evaluate_backdoor(model, poisoned_loader, target_class)
+                        metrics["backdoor_asr"] = backdoor_asr
+                        logger.info(f"Backdoor evaluation completed: {backdoor_asr}")
+                    except Exception as e:
+                        logger.warning(f"Could not evaluate backdoor ASR: {e}")
+                        metrics["backdoor_asr"] = 0.0
+                else:
+                    metrics["backdoor_asr"] = 0.0
+            else:
+                logger.info("No poisoned dataset available for backdoor evaluation")
+                metrics["backdoor_asr"] = 0.0
+
+        # Run fingerprinting if fingerprinting defense detected
+        if "fingerprinting" in applicable_attacks:
+            try:
+                fingerprint_score = evaluate_fingerprinting_mingd(model, clean_test_loader)
+                metrics["fingerprinting"] = fingerprint_score
+                logger.info(f"Fingerprinting evaluation completed: {fingerprint_score}")
+            except Exception as e:
+                logger.warning(f"Could not evaluate fingerprinting: {e}")
+                metrics["fingerprinting"] = 0.0
+
+        # Run watermarking evaluation if watermarking defense detected
+        if "watermark" in applicable_attacks:
+            try:
+                watermark_accuracy = self.evaluate_watermark(model)
+                metrics["watermark_accuracy"] = watermark_accuracy
+                logger.info(f"Watermarking evaluation completed: {watermark_accuracy}")
+            except Exception as e:
+                logger.warning(f"Could not evaluate watermarking: {e}")
+                metrics["watermark_accuracy"] = 0.0
+
+        # Run privacy evaluation if differential privacy defense detected  
+        if "privacy" in applicable_attacks:
+            try:
+                metrics["privacy_epsilon"] = self.extract_privacy_epsilon()
+                # Use clean test accuracy as dp_accuracy when DP is in pipeline
+                if "clean_test_accuracy" in metrics:
+                    metrics["dp_accuracy"] = metrics["clean_test_accuracy"]
+                else:
+                    metrics["dp_accuracy"] = -1.0
+                logger.info(f"Privacy evaluation completed - dp_accuracy set to clean_test_accuracy: {metrics.get('dp_accuracy', -1.0)}")
+            except Exception as e:
+                logger.warning(f"Could not evaluate privacy metrics: {e}")
+                metrics["privacy_epsilon"] = -1.0
+                metrics["dp_accuracy"] = -1.0
              
         return metrics
     
@@ -183,10 +451,41 @@ class ModelEvaluator:
             logger.warning(f"Could not evaluate TensorFlow model: {e}")
             return {"clean_test_accuracy": 0.0}
         
-    #New Load dataset function to include NormalizedDataset
-    def _load_dataset(self, dataset_path: str) -> Tuple[Optional[DataLoader], Optional[DataLoader]]:
-        clean_train_loader, clean_test_loader = None, None
+    # def _load_dataset(self, dataset_path: str) -> Tuple[Optional[DataLoader], Optional[DataLoader]]:
+    #     clean_train_loader, clean_test_loader = None, None
 
+    #     if dataset_path:
+    #         if not isinstance(dataset_path, (str, os.PathLike)):
+    #             logger.error(f"dataset_path is not a string or PathLike object: {type(dataset_path)} = {dataset_path}")
+    #             return clean_train_loader, clean_test_loader
+            
+    #         try:
+    #             files = os.listdir(dataset_path)
+    #         except Exception as e:
+    #             logger.error(f"Failed to list directory {dataset_path}: {e}")
+    #             return clean_train_loader, clean_test_loader
+                
+    #         if 'test_data.npy' in files and 'test_labels.npy' in files:
+    #             X_train = np.load(os.path.join(dataset_path, 'data.npy'))
+    #             y_train = np.load(os.path.join(dataset_path, 'labels.npy'))
+    #             X_test = np.load(os.path.join(dataset_path, 'test_data.npy'))
+    #             y_test = np.load(os.path.join(dataset_path, 'test_labels.npy'))
+
+    #             train_dataset = NormalizedDataset(X_train, y_train, normalize=True)
+    #             test_dataset = NormalizedDataset(X_test, y_test, normalize=True)
+
+    #             clean_train_loader = DataLoader(train_dataset, batch_size=128, shuffle=False)
+    #             clean_test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
+
+    #     else:
+    #         logger.warning(f"Unsupported dataset format: {dataset_path}")
+
+    #     return clean_train_loader, clean_test_loader
+
+
+    def _load_dataset(self, dataset_path: str) -> Tuple[Optional[DataLoader], Optional[DataLoader], Optional[DataLoader]]:
+        clean_train_loader, clean_test_loader = None, None
+             
         if dataset_path:
             files = os.listdir(dataset_path)
             if 'test_data.npy' in files and 'test_labels.npy' in files:
@@ -194,37 +493,13 @@ class ModelEvaluator:
                 y_train = np.load(os.path.join(dataset_path, 'labels.npy'))
                 X_test = np.load(os.path.join(dataset_path, 'test_data.npy'))
                 y_test = np.load(os.path.join(dataset_path, 'test_labels.npy'))
-
-                # Apply normalization consistent with training
-                train_dataset = NormalizedDataset(X_train, y_train, normalize=True)
-                test_dataset = NormalizedDataset(X_test, y_test, normalize=True)
-
-                clean_train_loader = DataLoader(train_dataset, batch_size=128, shuffle=False)
-                clean_test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
-
+                clean_train_dataset = TensorDataset(torch.tensor(X_train).float(), torch.tensor(y_train).long())
+                clean_train_loader = DataLoader(clean_train_dataset, batch_size=128, shuffle=False)
+                clean_test_dataset = TensorDataset(torch.tensor(X_test).float(), torch.tensor(y_test).long())
+                clean_test_loader = DataLoader(clean_test_dataset, batch_size=128 , shuffle=False)
         else:
             logger.warning(f"Unsupported dataset format: {dataset_path}")
-
         return clean_train_loader, clean_test_loader
-
-
-    # def _load_dataset(self, dataset_path: str) -> Tuple[Optional[DataLoader], Optional[DataLoader], Optional[DataLoader]]:
-    #     clean_train_loader, clean_test_loader = None, None
-             
-    #     if dataset_path:
-    #         files = os.listdir(dataset_path)
-    #         if 'test_data.npy' in files and 'test_labels.npy' in files:
-    #             X_train = np.load(os.path.join(dataset_path, 'data.npy'))
-    #             y_train = np.load(os.path.join(dataset_path, 'labels.npy'))
-    #             X_test = np.load(os.path.join(dataset_path, 'test_data.npy'))
-    #             y_test = np.load(os.path.join(dataset_path, 'test_labels.npy'))
-    #             clean_train_dataset = TensorDataset(torch.tensor(X_train).float(), torch.tensor(y_train).long())
-    #             clean_train_loader = DataLoader(clean_train_dataset, batch_size=128, shuffle=False)
-    #             clean_test_dataset = TensorDataset(torch.tensor(X_test).float(), torch.tensor(y_test).long())
-    #             clean_test_loader = DataLoader(clean_test_dataset, batch_size=128 , shuffle=False)
-    #     else:
-    #         logger.warning(f"Unsupported dataset format: {dataset_path}")
-    #     return clean_train_loader, clean_test_loader
     
     def evaluate_clean(self, model, loader):
         model.eval()
@@ -237,18 +512,106 @@ class ModelEvaluator:
                 total += y.size(0)
         return correct / total if total > 0 else 0.0
 
+    # def evaluate_pgd(self, model, loader):
+    #     model.eval()
+    #     atk = PGD(model, eps=8/255, alpha=2/255, steps=10)
+    #     correct, total = 0, 0
+    #     for X, y in loader:
+    #         X, y = X.to(self.device), y.to(self.device)
+    #         adv_X = atk(X, y)
+    #         with torch.no_grad():
+    #             pred = model(adv_X).argmax(1)
+    #             correct += (pred == y).sum().item()
+    #             total += y.size(0)
+    #     return correct / total if total > 0 else 0.0
+
+    #Replace pgd
     def evaluate_pgd(self, model, loader):
+        import torch
+        import torch.nn as nn
+        from torchattacks import PGD
+        from contextlib import nullcontext
+
         model.eval()
-        atk = PGD(model, eps=8/255, alpha=2/255, steps=10)
+
+        # --- helpers kept local to avoid changing other files ---
+        def _to_pixel_nchw(X: torch.Tensor) -> torch.Tensor:
+            X = X.float()
+            if X.max() > 1.5:  # handle uint8-like arrays
+                X = X / 255.0
+            if X.ndim == 4 and X.shape[1] != 3 and X.shape[-1] == 3:  # NHWC -> NCHW
+                X = X.permute(0, 3, 1, 2).contiguous()
+            return X
+
+        class NormalizeWrapper(nn.Module):
+            def __init__(self, base, mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)):
+                super().__init__()
+                self.base = base
+                m = torch.tensor(mean).view(1, 3, 1, 1)
+                s = torch.tensor(std).view(1, 3, 1, 1)
+                self.register_buffer("mean", m)
+                self.register_buffer("std", s)
+            def forward(self, x_pix):
+                return self.base((x_pix - self.mean) / self.std)
+
+        @torch.no_grad()
+        def _probe_clean_acc(m_like: nn.Module, max_batches=3):
+            m_like.eval()
+            seen = correct = 0
+            for bi, (Xb, yb) in enumerate(loader):
+                if bi >= max_batches: break
+                Xb = _to_pixel_nchw(Xb).to(self.device)
+                yb = yb.to(self.device)
+                pred = m_like(Xb).argmax(1)
+                correct += (pred == yb).sum().item()
+                seen += yb.size(0)
+            return correct / max(seen, 1)
+
+        # --- pick preprocessing once (no norm / 0.5 norm / CIFAR-10 stats) ---
+        candidates = [
+            (lambda m: m),  # pixel [0,1]
+            (lambda m: NormalizeWrapper(m, (0.5, 0.5, 0.5), (0.5, 0.5, 0.5))),
+            (lambda m: NormalizeWrapper(m, (0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616))),
+        ]
+        best_model, best_acc = None, -1.0
+        for wrap in candidates:
+            wrapped = wrap(model).to(self.device)
+            acc = _probe_clean_acc(wrapped, max_batches=3)
+            if acc > best_acc:
+                best_model, best_acc = wrapped, acc
+        atk_model = best_model  # this model always expects pixel [0,1] inputs
+
+        # --- your PGD-old settings ---
+        atk = PGD(atk_model, eps=8/255, alpha=2/255, steps=10, random_start=True)
+
         correct, total = 0, 0
+        # disable AMP during adversarial generation
+        use_cuda = isinstance(self.device, torch.device) and self.device.type == "cuda"
+        ctx = torch.amp.autocast("cuda", enabled=False) if use_cuda else nullcontext()
+
         for X, y in loader:
-            X, y = X.to(self.device), y.to(self.device)
-            adv_X = atk(X, y)
+            X = _to_pixel_nchw(X).to(self.device)  # ensure pixel [0,1], NCHW
+            y = y.to(self.device)
+            with ctx:
+                adv_X = atk(X, y)
             with torch.no_grad():
-                pred = model(adv_X).argmax(1)
+                pred = atk_model(adv_X).argmax(1)
                 correct += (pred == y).sum().item()
                 total += y.size(0)
+
         return correct / total if total > 0 else 0.0
+
+
+    def evaluate_carlini_l2(self, model, loader, confidence=0):
+        """
+        Evaluate model against Carlini L2 attack (primary attack for MagNet)
+        """
+        try:
+            from landseer_pipeline.evaluator.carlini_attack import evaluate_carlini_l2
+            return evaluate_carlini_l2(model, loader, self.device, confidence)
+        except ImportError:
+            logger.warning("Carlini L2 attack not available")
+            return -1.0
 
     def evaluate_outlier(self, model, clean_loader, ood_loader):
         model.eval()
@@ -282,36 +645,272 @@ class ModelEvaluator:
                 target_hits += (pred == target_class).sum().item()
                 total += X.size(0)
         return target_hits / total
+
+    def find_uchida_style_conv2d(self, model):
+        """Find appropriate Conv2D layer for watermark embedding (adapted from watermarking.py)"""
+        conv_layers = []
+        for name, module in model.named_modules():
+            if isinstance(module, torch.nn.Conv2d):
+                conv_layers.append((name, module))
+        
+        if not conv_layers:
+            return None
+
+        # Prefer second-last conv if exists, else fallback to last
+        if len(conv_layers) >= 2:
+            selected_idx = -2
+        else:
+            selected_idx = -1
+
+        selected_name, selected_layer = conv_layers[selected_idx]
+        logger.info(f"Selected Conv2D layer for watermark evaluation: {selected_name}")
+        return selected_layer
+
+    def decode_watermark(self, conv_layer, wm_matrix, wm_bits):
+        """Decode watermark from Conv2D layer (adapted from watermarking.py)"""
+        with torch.no_grad():
+            weight = conv_layer.weight
+            mean_weight = weight.mean(dim=[2, 3])
+            flat = mean_weight.view(1, -1)
+            projection = torch.sigmoid(flat @ wm_matrix)
+            decoded_bits = (projection > 0.5).float()
+            accuracy = (decoded_bits == wm_bits).float().mean().item()
+            return accuracy, decoded_bits.cpu().numpy()
+
+    def evaluate_watermark(self, model) -> float:
+        """Evaluate watermark detection accuracy - supports both weight-based and trigger-based watermarking"""
+        # Check for weight-based watermarking (existing tool)
+        wm_matrix_path = self.input_wm_matrix
+        wm_bits_path = self.input_wm_bits
+        
+        if wm_matrix_path and wm_bits_path and os.path.exists(wm_matrix_path) and os.path.exists(wm_bits_path):
+            return self._evaluate_weight_based_watermark(model, wm_matrix_path, wm_bits_path)
+        
+        # Check for trigger-based watermarking (WatermarkNN)
+        watermark_trigger_accuracy = self._evaluate_trigger_based_watermark(model)
+        if watermark_trigger_accuracy is not None:
+            return watermark_trigger_accuracy
+        
+        logger.warning("No watermarking evaluation method found - neither weight-based nor trigger-based")
+        return 0.0
     
+    def _evaluate_weight_based_watermark(self, model, wm_matrix_path: str, wm_bits_path: str) -> float:
+        """Evaluate weight-based watermarking (existing watermark tool)"""
+        try:
+            logger.info("Evaluating weight-based watermarking...")
+            # Load watermark matrix and bits
+            wm_matrix = torch.tensor(np.load(wm_matrix_path), dtype=torch.float32).to(self.device)
+            wm_bits = torch.tensor(np.load(wm_bits_path), dtype=torch.float32).to(self.device)
+            
+            # Find appropriate Conv2D layer
+            conv_layer = self.find_uchida_style_conv2d(model)
+            if conv_layer is None:
+                logger.warning("No Conv2D layer found for watermark evaluation")
+                return 0.0
+            
+            # Decode watermark
+            accuracy, _ = self.decode_watermark(conv_layer, wm_matrix, wm_bits)
+            logger.info(f"Weight-based watermark decoding accuracy: {accuracy * 100:.2f}%")
+            return accuracy
+            
+        except Exception as e:
+            logger.error(f"Error during weight-based watermark evaluation: {e}")
+            return 0.0
+    
+    def _evaluate_trigger_based_watermark(self, model) -> float:
+        """Evaluate trigger-based watermarking (WatermarkNN style)"""
+        try:
+            # Look for watermark triggers directory and training summary
+            watermark_triggers_path = self._find_watermark_triggers_path()
+            training_summary_path = self._find_training_summary_path()
+            
+            if not watermark_triggers_path:
+                logger.debug("No watermark triggers found - not trigger-based watermarking")
+                return None
+            
+            logger.info(f"Evaluating trigger-based watermarking using triggers from: {watermark_triggers_path}")
+            
+            # Load watermark trigger data
+            watermark_loader = self._load_watermark_triggers(watermark_triggers_path)
+            if watermark_loader is None:
+                logger.warning("Failed to load watermark triggers")
+                return 0.0
+            
+            # Evaluate watermark trigger accuracy
+            model.eval()
+            correct, total = 0, 0
+            
+            with torch.no_grad():
+                for data, targets in watermark_loader:
+                    data, targets = data.to(self.device), targets.to(self.device)
+                    outputs = model(data)
+                    _, predicted = torch.max(outputs.data, 1)
+                    total += targets.size(0)
+                    correct += (predicted == targets).sum().item()
+            
+            watermark_accuracy = correct / total if total > 0 else 0.0
+            logger.info(f"Trigger-based watermark accuracy: {watermark_accuracy * 100:.2f}%")
+            return watermark_accuracy
+            
+        except Exception as e:
+            logger.error(f"Error during trigger-based watermark evaluation: {e}")
+            return None
+    
+    def _find_watermark_triggers_path(self) -> str:
+        """Find watermark triggers directory in combination output"""
+        # Check combination output directory for watermark_triggers folder
+        combination_dir = Path(self.combination_output)
+        
+        # Look for watermark_triggers in the final tool output
+        watermark_triggers_dir = combination_dir / "watermark_triggers"
+        if watermark_triggers_dir.exists() and watermark_triggers_dir.is_dir():
+            return str(watermark_triggers_dir)
+        
+        return None
+    
+    def _find_training_summary_path(self) -> str:
+        """Find training summary JSON file"""
+        combination_dir = Path(self.combination_output)
+        summary_path = combination_dir / "training_summary.json"
+        return str(summary_path) if summary_path.exists() else None
+    
+    def _load_watermark_triggers(self, watermark_triggers_path: str):
+        """Load watermark trigger images and labels for evaluation"""
+        try:
+            # Use the same transforms as WatermarkNN
+            transform_wm = transforms.Compose([
+                transforms.CenterCrop(32),
+                transforms.ToTensor(),
+                transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+            ])
+            
+            # Check for labels file (support multiple naming conventions)
+            labels_file = None
+            for labels_name in ["labels.txt", "labels-cifar.txt"]:
+                potential_path = os.path.join(watermark_triggers_path, labels_name)
+                if os.path.exists(potential_path):
+                    labels_file = potential_path
+                    break
+            
+            if not labels_file:
+                logger.warning(f"Labels file not found in: {watermark_triggers_path}")
+                return None
+            
+            # Load labels
+            wm_targets = np.loadtxt(labels_file)
+            logger.info(f"Loaded {len(wm_targets)} watermark trigger labels from {labels_file}")
+            
+            # Create custom dataset similar to WatermarkNN's approach
+            class WatermarkTriggerDataset(torch.utils.data.Dataset):
+                def __init__(self, root_dir, targets, transform=None):
+                    self.root_dir = root_dir
+                    self.targets = targets
+                    self.transform = transform
+                    
+                    # Get all image files (check both root and pics subdirectory)
+                    import glob
+                    self.image_paths = []
+                    
+                    # First check pics subdirectory (WatermarkNN format)
+                    pics_dir = os.path.join(root_dir, "pics")
+                    if os.path.exists(pics_dir):
+                        search_dir = pics_dir
+                    else:
+                        search_dir = root_dir
+                    
+                    for ext in ['*.png', '*.jpg', '*.jpeg']:
+                        self.image_paths.extend(glob.glob(os.path.join(search_dir, ext)))
+                    self.image_paths.sort()  # Ensure consistent ordering
+                
+                def __len__(self):
+                    return min(len(self.image_paths), len(self.targets))
+                
+                def __getitem__(self, idx):
+                    from PIL import Image
+                    img_path = self.image_paths[idx]
+                    image = Image.open(img_path).convert('RGB')
+                    
+                    if self.transform:
+                        image = self.transform(image)
+                    
+                    target = int(self.targets[idx])
+                    return image, target
+            
+            dataset = WatermarkTriggerDataset(watermark_triggers_path, wm_targets, transform_wm)
+            
+            if len(dataset) == 0:
+                logger.warning("No watermark trigger images found")
+                return None
+            
+            watermark_loader = DataLoader(dataset, batch_size=32, shuffle=False, num_workers=2)
+            logger.info(f"Loaded {len(dataset)} watermark trigger samples")
+            return watermark_loader
+            
+        except Exception as e:
+            logger.error(f"Error loading watermark triggers: {e}")
+            return None
+    
+    # def generate_ood_samples(self, dataset_path: str):
+    #     ood_loader = None
+    #     if dataset_path:
+    #         files = os.listdir(dataset_path)
+    #         if 'test_data.npy' in files and 'test_labels.npy' in files:
+    #             X_train = np.load(os.path.join(dataset_path, 'data.npy'))
+    #             y_train = np.load(os.path.join(dataset_path, 'labels.npy'))
+    #             X_test = np.load(os.path.join(dataset_path, 'test_data.npy'))
+    #             y_test = np.load(os.path.join(dataset_path, 'test_labels.npy'))
+    #             X_train = torch.tensor(X_train).float()
+    #             y_train = torch.tensor(y_train).long()
+    #             X_test = torch.tensor(X_test).float()
+    #             y_test = torch.tensor(y_test).long()
+    #             ood_loader = DataLoader(TensorDataset(torch.rand_like(X_test), y_test), batch_size=64, shuffle=False)
+    #     return ood_loader
+
     def generate_ood_samples(self, dataset_path: str):
+        """
+        Load a selected OOD dataset for CIFAR-10 evaluation.
+        
+        dataset_path: str — one of ['cifar100', 'svhn', 'tinyimagenet']
+        """
         ood_loader = None
-        if dataset_path:
-            files = os.listdir(dataset_path)
-            if 'test_data.npy' in files and 'test_labels.npy' in files:
-                X_train = np.load(os.path.join(dataset_path, 'data.npy'))
-                y_train = np.load(os.path.join(dataset_path, 'labels.npy'))
-                X_test = np.load(os.path.join(dataset_path, 'test_data.npy'))
-                y_test = np.load(os.path.join(dataset_path, 'test_labels.npy'))
-                X_train = torch.tensor(X_train).float()
-                y_train = torch.tensor(y_train).long()
-                X_test = torch.tensor(X_test).float()
-                y_test = torch.tensor(y_test).long()
-                ood_loader = DataLoader(TensorDataset(torch.rand_like(X_test), y_test), batch_size=64, shuffle=False)
+
+        # CIFAR-10 normalization
+        transform = transforms.Compose([
+            transforms.Resize(32),
+            transforms.CenterCrop(32),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=(0.4914, 0.4822, 0.4465),
+                                std=(0.2023, 0.1994, 0.2010)),
+        ])
+
+        if dataset_path.lower() == 'cifar100':
+            ood_dataset = datasets.CIFAR100(root='./data', train=False, download=True, transform=transform)
+
+        elif dataset_path.lower() == 'svhn':
+            ood_dataset = datasets.SVHN(root='./data', split='test', download=True, transform=transform)
+
+        else:
+            raise ValueError(f"Unsupported OOD dataset: {dataset_path}. Choose from ['cifar100', 'svhn']")
+
+        ood_loader = DataLoader(ood_dataset, batch_size=64, shuffle=False)
         return ood_loader
     
-    def extract_privacy_epsilon(self, output_by_stages: Dict) -> float:
-        #check for all stages as key the list of directories to find privacy_metrics file
-        for stage, outputs in output_by_stages.items():
-            for output in outputs:
-                if isinstance(output, str):
-                    output = Path(output)
-                if isinstance(output, Path) and output.is_dir():
-                    params_file = output / "privacy_metrics.txt"
-                    if params_file.exists():
-                        epsilon = self._parse_privacy_params(params_file)
-                        if epsilon >= 0:
-                            return (epsilon, stage)
-        logger.warning("No privacy metrics file found in outputs.")
+    def extract_privacy_epsilon(self) -> float:
+        """Extract privacy epsilon from privacy_metrics.txt file specified in fin_output_paths.json"""
+        json_path = Path(self.combination_output) / "fin_output_paths.json"
+        if json_path.exists():
+            with open(json_path, 'r') as f:
+                paths = json.load(f)
+            
+            # Look for privacy_metrics.txt in the paths
+            privacy_file_path = paths.get("privacy_metrics.txt", "").get("source_path", "")
+            if privacy_file_path and os.path.exists(privacy_file_path):
+                epsilon = self._parse_privacy_params(Path(privacy_file_path))
+                if epsilon >= 0:
+                    logger.info(f"Found privacy epsilon: {epsilon} in {privacy_file_path}")
+                    return epsilon
+        
+        logger.warning("No privacy metrics file found in fin_output_paths.json or file does not exist.")
         return -1.0
         
     def _parse_privacy_params(self, params_file: Path) -> float:
@@ -327,19 +926,22 @@ class ModelEvaluator:
             logger.warning(f"Could not parse privacy parameters from {params_file}: {e}")
         return -1.0
     
-    def extract_dp_accuracy(self, output_by_stages: Dict) -> float:
-        #check for all stages as key the list of directories to find privacy_metrics file
-        for stage, outputs in output_by_stages.items():
-            for output in outputs:
-                if isinstance(output, str):
-                    output = Path(output)
-                if isinstance(output, Path) and output.is_dir():
-                    params_file = output / "privacy_metrics.txt"
-                    if params_file.exists():
-                        acc = self._get_dp_accuracy(params_file)
-                        if acc >= 0:
-                            return (acc, stage)
-        logger.warning("No privacy metrics file found in outputs.")
+    def extract_dp_accuracy(self) -> float:
+        """Extract DP accuracy from privacy_metrics.txt file specified in fin_output_paths.json"""
+        json_path = Path(self.combination_output) / "fin_output_paths.json"
+        if json_path.exists():
+            with open(json_path, 'r') as f:
+                paths = json.load(f)
+            
+            # Look for privacy_metrics.txt in the paths
+            privacy_file_path = paths.get("privacy_metrics.txt", "").get("source_path", "")
+            if privacy_file_path and os.path.exists(privacy_file_path):
+                acc = self._get_dp_accuracy(Path(privacy_file_path))
+                if acc >= 0:
+                    logger.info(f"Found DP accuracy: {acc} in {privacy_file_path}")
+                    return acc
+        
+        logger.warning("No privacy metrics file found in fin_output_paths.json or file does not exist.")
         return -1.0
         
     def _get_dp_accuracy(self, params_file: Path) -> float:

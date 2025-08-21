@@ -5,8 +5,8 @@ logger = logging.getLogger(__name__)
 
 class AttackTypes(BaseModel):
     backdoor: bool
-    evasion: bool
-    extraction: bool
+    adversarial: bool
+    outlier: bool
     inference: bool
     other: bool
 
