@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 from typing import Dict
 import shutil
+import json
+import errno
 from landseer_pipeline.docker_handler import DockerRunner
 from landseer_pipeline.utils import ResultLogger
 from landseer_pipeline.utils.files import merge_directories
@@ -20,14 +22,15 @@ class ToolRunner:
     tool_name: str
     tool_stage: str
 
-    def __init__(self, settings, ToolConfig, stage, dataset_dir, input_path, output_path, gpu_id):
+    def __init__(self, settings, ToolConfig, stage, context, combination_obj, output_path, gpu_id):
         self.settings = settings
         self.tool_config = ToolConfig
-        
+        self.context = context
+        self.combination_obj = combination_obj
+        self.combination_id = combination_obj.id
         self.tool_name = self.tool_config.name
         self.tool_stage = stage
-        self.dataset_dir = dataset_dir
-        self.input_path = input_path
+        self.input_path = self.create_input_directory()
         output_path = f"{output_path}"
         #if output_path does not exist, create it
         self.output_path =  Path(output_path)
@@ -35,9 +38,61 @@ class ToolRunner:
         self.docker_manager = DockerRunner(self.settings)
         self.gpu_id = gpu_id
         
-        # Initialize auxiliary file manager
         self.auxiliary_manager = AuxiliaryFileManager(self.output_path.parent)
         self.model_script = self._resolve_model_script()
+
+    def _provenance_file(self) -> Path:
+        return self.combination_obj.combo_output_dir / "fin_output_paths.json"
+
+    def _load_provenance(self) -> Dict[str, Dict]:
+        prov_file = self._provenance_file()
+        if prov_file.exists():
+            try:
+                return json.loads(prov_file.read_text())
+            except Exception:
+                logger.warning(f"Failed to parse provenance file: {prov_file}")
+        return {}
+
+    def _select_files(self, provenance: Dict[str, Dict]) -> Dict[str, Path]:
+        names = provenance.keys()
+        selected = []
+        if getattr(self.tool_config, "required_inputs", None):
+            for req in self.tool_config.required_inputs:
+                if req in names:
+                    selected.append(req)
+                elif req == "model_composite.pt" and "model.pt" in names:
+                    selected.append("model.pt")
+                else:
+                    logger.warning(f"{self.combination_id}: Required input '{req}' missing for tool {self.tool_name}")
+        else:
+            selected = list(names)
+        return {name: Path(provenance[name]["source_path"]) for name in selected if name in provenance}
+
+    def create_input_directory(self) -> Path:
+        """Create a temporary input directory populated with selected files from provenance.
+        Falls back to current_input (dataset) if no provenance yet (first stage)."""
+        provenance = self._load_provenance()
+        if not provenance:
+            return merge_directories(self.context["current_input"], self.context["dataset_dir"])
+        selected = self._select_files(provenance)
+        staging_root = self.settings.results_dir / "staged_inputs" / self.combination_id
+        staging_dir = staging_root / f"{self.tool_stage}_{self.tool_name.replace(' ', '_')}"
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir)
+        staging_dir.mkdir(parents=True, exist_ok=True)
+        for name, src in selected.items():
+            if not src.exists() or not src.is_file():
+                continue
+            dest = staging_dir / Path(name).name
+            try:
+                os.link(src, dest)
+            except OSError as e:
+                if e.errno in (errno.EXDEV, errno.EPERM, errno.EACCES):
+                    shutil.copy2(src, dest)
+                else:
+                    raise
+        logger.debug(f"{self.combination_id}/{self.tool_name}: Prepared staged input dir {staging_dir} with {len(list(staging_dir.iterdir()))} files")
+        return staging_dir
 
     def _resolve_model_script(self) -> str:
         """Determine which model script to mount: tool override (deprecated) or top-level model."""
@@ -52,74 +107,75 @@ class ToolRunner:
             return os.path.abspath(top_level)
         return None
 
-    def run_tool(self, combination_id) -> str:
+    def run_tool(self) -> str:
         tool_name = self.tool_name
         stage = self.tool_stage
-        dataset_dir = self.dataset_dir
+        dataset_dir = self.context["dataset_dir"]
         input_path = self.input_path
         output_dir_path = self.output_path
         command = self.tool_config.docker.command
         image_name = self.tool_config.docker.image
         
-        logger.info(f"{combination_id}/{tool_name}: Image to run {image_name}")
-        logger.debug(f"{combination_id}/{tool_name}: Output path: {output_dir_path}")
+        logger.info(f"{self.combination_id}/{tool_name}: Image to run {image_name}")
+        logger.debug(f"{self.combination_id}/{tool_name}: Output path: {output_dir_path}")
 
         env ={}
         env["CUDA_VISIBLE_DEVICES"] = str(self.gpu_id)
-        logger.debug(f"{combination_id}/{tool_name}: Setting CUDA_VISIBLE_DEVICES to {env['CUDA_VISIBLE_DEVICES']}")
+        logger.debug(f"{self.combination_id}/{tool_name}: Setting CUDA_VISIBLE_DEVICES to {env['CUDA_VISIBLE_DEVICES']}")
 
         data_dir = None  # Initialize to avoid UnboundLocalError
         auxiliary_staging_dir = None  # Track auxiliary staging for cleanup
         
         try:
-            data_dir = merge_directories(input_path, dataset_dir)
-            logger.debug(f"{combination_id}/{tool_name}: Temporary input directory created at: {data_dir}")
+            data_dir = self.input_path
+            logger.debug(f"{self.combination_id}/{tool_name}: Temporary input directory created at: {data_dir}")
             
             # Prepare auxiliary files if configured
             if self.tool_config.has_auxiliary_files():
                 auxiliary_staging_dir = self.auxiliary_manager.prepare_auxiliary_directory(
                     tool_name, self.tool_config.auxiliary_files
                 )
-                logger.info(f"{combination_id}/{tool_name}: Prepared auxiliary files in {auxiliary_staging_dir}")
+                logger.info(f"{self.combination_id}/{tool_name}: Prepared auxiliary files in {auxiliary_staging_dir}")
             
+            # Ensure host paths are absolute for Docker volume mounts
+            host_data_dir = os.path.abspath(str(data_dir))
+            host_output_dir = os.path.abspath(str(output_dir_path))
+
             if stage != "pre_training":
                 # Use resolved model script if available
                 volumes = {
-                    data_dir: {"bind": "/data", "mode": "ro"},
-                    os.path.abspath(output_dir_path): {"bind": "/output", "mode": "rw"},
+                    host_data_dir: {"bind": "/data", "mode": "ro"},
+                    host_output_dir: {"bind": "/output", "mode": "rw"},
                 }
                 if self.model_script:
                     volumes[self.model_script] = {"bind": "/app/config_model.py", "mode": "ro"}
-                    logger.debug(f"{combination_id}/{tool_name}: Mounting model script: {self.model_script}")
+                    logger.debug(f"{self.combination_id}/{tool_name}: Mounting model script: {self.model_script}")
             else:
                 volumes = {
-                    os.path.abspath(data_dir): {"bind": "/data", "mode": "ro"},
-                    os.path.abspath(output_dir_path): {"bind": "/output", "mode": "rw"},
+                    host_data_dir: {"bind": "/data", "mode": "ro"},
+                    host_output_dir: {"bind": "/output", "mode": "rw"},
                 }
                 if self.model_script:
                     volumes[self.model_script] = {"bind": "/app/config_model.py", "mode": "ro"}
-                    logger.debug(f"{combination_id}/{tool_name}: Mounting model script (pre_training): {self.model_script}")
+                    logger.debug(f"{self.combination_id}/{tool_name}: Mounting model script (pre_training): {self.model_script}")
             
-            # Add auxiliary file volumes using hybrid approach
             if auxiliary_staging_dir:
-                # Standardized auxiliary directory mount
                 aux_volumes = self.auxiliary_manager.get_standard_volume_mount(auxiliary_staging_dir)
                 volumes.update(aux_volumes)
-                logger.info(f"{combination_id}/{tool_name}: Added standardized auxiliary mount: {aux_volumes}")
+                logger.info(f"{self.combination_id}/{tool_name}: Added standardized auxiliary mount: {aux_volumes}")
             
-            # Add declarative auxiliary file mounts
             if self.tool_config.has_auxiliary_files():
                 try:
                     declarative_volumes = self.tool_config.get_auxiliary_volume_mounts()
                     volumes.update(declarative_volumes)
                     if declarative_volumes:
-                        logger.info(f"{combination_id}/{tool_name}: Added declarative auxiliary mounts: {declarative_volumes}")
+                        logger.info(f"{self.combination_id}/{tool_name}: Added declarative auxiliary mounts: {declarative_volumes}")
                 except Exception as e:
-                    logger.warning(f"{combination_id}/{tool_name}: Failed to add declarative auxiliary mounts: {e}")
+                    logger.warning(f"{self.combination_id}/{tool_name}: Failed to add declarative auxiliary mounts: {e}")
             
             tool_args = self.tool_config.docker.command
             command = f"{tool_args} --output /output"
-            logger.info(f"{combination_id}/{tool_name}: Container command: {command}")
+            logger.info(f"{self.combination_id}/{tool_name}: Container command: {command}")
             start = time.time()
             exit_code = None
             logs = None    
@@ -149,26 +205,26 @@ class ToolRunner:
             
             if exit_code != 0:
                 raise RuntimeError(
-                f"{combination_id}/{tool_name}: Failed with exit code {exit_code}")
+                f"{self.combination_id}/{tool_name}: Failed with exit code {exit_code}")
             logger.info(
-                f"{combination_id}/{tool_name}: Completed successfully and output saved to {output_dir_path}")
+                f"{self.combination_id}/{tool_name}: Completed successfully and output saved to {output_dir_path}")
         #exception of ctrl+c
         except KeyboardInterrupt:
-            logger.error(f"{combination_id}/{tool_name}: Execution interrupted by user.")
+            logger.error(f"{self.combination_id}/{tool_name}: Execution interrupted by user.")
             raise 
         finally:
             # Always cleanup temporary directory if it was created
             if data_dir is not None:
-                logger.debug(f"{combination_id}/{tool_name}: Cleaning up temporary directory: {data_dir}")
+                logger.debug(f"{self.combination_id}/{tool_name}: Cleaning up temporary directory: {data_dir}")
                 temp_manager.cleanup_temp_dir(data_dir)
             else:
-                logger.debug(f"{combination_id}/{tool_name}: No temporary directory to clean up")
-            
+                logger.debug(f"{self.combination_id}/{tool_name}: No temporary directory to clean up")
+
             # Cleanup auxiliary staging
             if auxiliary_staging_dir is not None:
                 try:
                     self.auxiliary_manager.cleanup_staging(tool_name)
-                    logger.debug(f"{combination_id}/{tool_name}: Cleaned up auxiliary staging")
+                    logger.debug(f"{self.combination_id}/{tool_name}: Cleaned up auxiliary staging")
                 except Exception as e:
-                    logger.warning(f"{combination_id}/{tool_name}: Failed to cleanup auxiliary staging: {e}")    
+                    logger.warning(f"{self.combination_id}/{tool_name}: Failed to cleanup auxiliary staging: {e}")
         return output_dir_path, duration

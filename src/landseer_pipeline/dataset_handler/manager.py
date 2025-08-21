@@ -80,7 +80,6 @@ class DatasetManager:
             metadata = self.load_dataset_func(
                 output_dir=str(clean_directory),
                 download_dir=str(download_directory),
-                params=params
             ) or {}
             # Persist metadata merged with params & config subset
             enriched_meta = {

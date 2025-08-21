@@ -92,6 +92,10 @@ def parse_arguments():
     parser.add_argument('--max-temp', type=float, default=80.0, help='Maximum GPU temperature')
     parser.add_argument('--cooldown-time', type=int, default=300, help='GPU cooldown time in seconds')
 
+    # Docker resource controls
+    parser.add_argument('--docker-shm-size', type=str, default='1g', help='Set Docker shared memory size (e.g. 512m, 1g, 2g)')
+    parser.add_argument('--docker-mem-limit', type=str, default=None, help='Set Docker container memory limit (e.g. 8g). Omit for no explicit limit')
+
     return parser.parse_args()
 
 def setup_logging(log_file: Optional[str] = None):
@@ -131,14 +135,76 @@ def main():
         use_cache=not args.no_cache,
         log_level=log_level
     )
+    # Inject docker resource overrides (not part of original frozen dataclass signature; using object.__setattr__)
+    try:
+        object.__setattr__(settings, 'docker_shm_size', args.docker_shm_size)
+        object.__setattr__(settings, 'docker_mem_limit', args.docker_mem_limit)
+    except Exception as _e:
+        logging.getLogger().warning(f"Failed to set docker resource attributes: {_e}")
 
-    # Setup logging
+    # Setup secondary per-(config,attack) log (legacy run_logs) in addition to unified pipeline log
     log_dir = Path('run_logs')
     log_dir.mkdir(exist_ok=True)
     config_name = Path(args.config).stem
     attack_name = Path(args.attack_config).stem
     log_file = log_dir / f"{config_name}__{attack_name}.log"
     setup_logging(str(log_file))
+
+    # --- Context / provenance logging block ---
+    try:
+        root_logger = logging.getLogger()  # root logger already has file + console handlers
+        root_logger.info("\n========== PIPELINE CONTEXT ==========")
+        root_logger.info(f"Pipeline ID          : {pipeline_id}")
+        root_logger.info(f"Timestamp            : {timestamp}")
+        root_logger.info(f"Config file          : {Path(args.config).resolve()}")
+        root_logger.info(f"Attack config file   : {Path(args.attack_config).resolve()}")
+        # Dataset details
+        ds = config.dataset
+        root_logger.info("-- Dataset --")
+        root_logger.info(f"  Name               : {ds.name}")
+        root_logger.info(f"  Variant            : {getattr(ds, 'variant', 'clean')}")
+        if getattr(ds, 'version', None):
+            root_logger.info(f"  Version            : {ds.version}")
+        if ds.params:
+            # Limit extremely long param dumps
+            import json as _json
+            params_json = _json.dumps(ds.params, sort_keys=True)
+            if len(params_json) > 400:
+                params_json = params_json[:400] + "... (truncated)"
+            root_logger.info(f"  Params             : {params_json}")
+        # Model details
+        model_cfg = config.model
+        root_logger.info("-- Model --")
+        root_logger.info(f"  Script             : {model_cfg.script}")
+        root_logger.info(f"  Framework          : {model_cfg.framework}")
+        root_logger.info(f"  Script hash        : {model_cfg.content_hash}")
+        if model_cfg.params:
+            import json as _json
+            mparams_json = _json.dumps(model_cfg.params, sort_keys=True)
+            if len(mparams_json) > 400:
+                mparams_json = mparams_json[:400] + "... (truncated)"
+            root_logger.info(f"  Params             : {mparams_json}")
+        # Tools by stage
+        root_logger.info("-- Tools By Stage --")
+        # To preserve stage order use enum ordering from schemas.pipeline.Stage
+        from .config.schemas.pipeline import Stage as _Stage
+        for stage in _Stage:
+            stage_cfg = config.pipeline.get(stage)
+            if not stage_cfg:
+                root_logger.warning(f"  {stage.value}: <missing stage config>")
+                continue
+            tool_entries = []
+            for t in (stage_cfg.tools or []):
+                # include docker image short name and (optional) dataset label
+                image = getattr(t.docker, 'image', '')
+                image_short = image.split('/')[-1]
+                tool_entries.append(f"{t.name}[{image_short}]")
+            if not tool_entries:
+                tool_entries = ["<none>"]
+            root_logger.info(f"  {stage.value:15s}: {', '.join(tool_entries)}")
+        root_logger.info("======================================\n")
+    except Exception as _ctx_e:
+        logging.getLogger().warning(f"Failed to log pipeline context: {_ctx_e}")
 
     # Initialize GPU manager
     gpu_manager = GPUManager(max_temp=args.max_temp, cooldown_time=args.cooldown_time) 

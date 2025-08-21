@@ -82,17 +82,6 @@ class Dataset(BaseModel):
             raise ValueError(f"Dataset '{v}' is not supported. Supported datasets: {dataset_preprocess_files}")
         return v
 
-    @field_validator("link", mode="after")
-    def check_link(cls, v):
-        logger.debug(f"Validating dataset link: {v}")
-        if not v:
-            raise ValueError("Dataset link cannot be empty")
-        v = str(v)
-        if not v.startswith("http"):
-            raise ValueError("Dataset link must start with http or https")
-        print(f"Dataset link is valid: {v}")
-        return v
-
 class DockerConfig(BaseModel):
     image: Annotated[str, "TODO: Validate the link for image"] = Field(description="Docker image name")
     command: str = Field(description="Command to run the tool")
@@ -232,7 +221,7 @@ class StageConfig(BaseModel):
 class PipelineStructure(BaseModel):
     dataset: Dataset = Field(description="Dataset Info")
     model: ModelConfig = Field(description="Central model configuration")
-    pipeline: Dict[Stage, StageConfig]
+    pipeline: Optional[Dict[Stage, StageConfig]]
 
     @field_validator("pipeline")
     def must_have_all_stages(cls, v):
@@ -251,14 +240,26 @@ class PipelineStructure(BaseModel):
 
     @model_validator(mode="after")
     def fetch_and_validate_labels(self):
-        for stage in self.pipeline.keys():
-            values = self.pipeline[stage].tools
-            for tool in values:
-                docker = tool.docker
-                labels = docker.get_labels
-                print(f"Labels: {labels}")
+        # Accept multiple synonyms for stage labels in docker images
+        stage_synonyms = {
+            Stage.PRE_TRAINING.value: {"pre_training", "pre", "pretrain", "pre_defense"},
+            Stage.DURING_TRAINING.value: {"during_training", "during", "in", "train", "training", "in_training", "in_defense", "during_defense"},
+            Stage.POST_TRAINING.value: {"post_training", "post", "after", "posttrain", "post_defense"},
+            Stage.DEPLOYMENT.value: {"deployment", "deploy", "inference", "deploy_defense"},
+        }
+        for stage_enum, stage_cfg in self.pipeline.items():
+            normalized_stage = stage_enum.value  # e.g. 'post_training'
+            tools = stage_cfg.tools
+            for tool in tools:
+                labels = tool.docker.get_labels
                 label_stage = labels.get("org.opencontainers.image.stage") or labels.get("org.opencontainers.image.defense_stage")
-                if stage and label_stage and label_stage.lower() != stage:
-                    raise ValueError(f"Tool '{tool.tool_name}' is placed under stage '{stage}', but its Docker label says '{label_stage}'")
-                print(f"Tool {tool.tool_name}' is correctly placed under stage '{stage}'")
+                if label_stage:
+                    ls_norm = label_stage.strip().lower()
+                    allowed = stage_synonyms.get(normalized_stage, {normalized_stage})
+                    if ls_norm not in allowed:
+                        raise ValueError(
+                            f"Tool '{tool.tool_name}' is placed under stage '{normalized_stage}', "
+                            f"but its Docker label says '{label_stage}'. Allowed synonyms: {sorted(allowed)}"
+                        )
+                logger.debug(f"Tool '{tool.tool_name}' labels validated for stage '{normalized_stage}'")
         return self
