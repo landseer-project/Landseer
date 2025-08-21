@@ -10,6 +10,8 @@ import shutil
 from landseer_pipeline.docker_handler import DockerRunner
 from landseer_pipeline.utils import ResultLogger
 from landseer_pipeline.utils.files import merge_directories
+from landseer_pipeline.utils.temp_manager import temp_manager
+from landseer_pipeline.utils.auxiliary import AuxiliaryFileManager
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -32,6 +34,23 @@ class ToolRunner:
         print(f"Output path: {self.output_path}")
         self.docker_manager = DockerRunner(self.settings)
         self.gpu_id = gpu_id
+        
+        # Initialize auxiliary file manager
+        self.auxiliary_manager = AuxiliaryFileManager(self.output_path.parent)
+        self.model_script = self._resolve_model_script()
+
+    def _resolve_model_script(self) -> str:
+        """Determine which model script to mount: tool override (deprecated) or top-level model."""
+        override = self.tool_config.docker.config_script
+        top_level = getattr(self.settings, "config_model_path", None)
+        if override and top_level and os.path.abspath(override) != os.path.abspath(top_level):
+            logger.warning(f"Tool '{self.tool_name}' uses per-tool config_script override: {override}")
+            return os.path.abspath(override)
+        if override and not top_level:
+            return os.path.abspath(override)
+        if top_level:
+            return os.path.abspath(top_level)
+        return None
 
     def run_tool(self, combination_id) -> str:
         tool_name = self.tool_name
@@ -49,24 +68,55 @@ class ToolRunner:
         env["CUDA_VISIBLE_DEVICES"] = str(self.gpu_id)
         logger.debug(f"{combination_id}/{tool_name}: Setting CUDA_VISIBLE_DEVICES to {env['CUDA_VISIBLE_DEVICES']}")
 
+        data_dir = None  # Initialize to avoid UnboundLocalError
+        auxiliary_staging_dir = None  # Track auxiliary staging for cleanup
+        
         try:
             data_dir = merge_directories(input_path, dataset_dir)
             logger.debug(f"{combination_id}/{tool_name}: Temporary input directory created at: {data_dir}")
+            
+            # Prepare auxiliary files if configured
+            if self.tool_config.has_auxiliary_files():
+                auxiliary_staging_dir = self.auxiliary_manager.prepare_auxiliary_directory(
+                    tool_name, self.tool_config.auxiliary_files
+                )
+                logger.info(f"{combination_id}/{tool_name}: Prepared auxiliary files in {auxiliary_staging_dir}")
+            
             if stage != "pre_training":
-                config_script_path = self.tool_config.docker.config_script
-                logging.debug(f"{combination_id}/{tool_name}: Config script path: {config_script_path}")
+                # Use resolved model script if available
                 volumes = {
                     data_dir: {"bind": "/data", "mode": "ro"},
                     os.path.abspath(output_dir_path): {"bind": "/output", "mode": "rw"},
-                    config_script_path: {"bind": "/app/config_model.py", "mode": "rw"},
-                    }
-                logger.debug(f"{combination_id}/{tool_name}: Mounting config script: {config_script_path}")
+                }
+                if self.model_script:
+                    volumes[self.model_script] = {"bind": "/app/config_model.py", "mode": "ro"}
+                    logger.debug(f"{combination_id}/{tool_name}: Mounting model script: {self.model_script}")
             else:
                 volumes = {
                     os.path.abspath(data_dir): {"bind": "/data", "mode": "ro"},
                     os.path.abspath(output_dir_path): {"bind": "/output", "mode": "rw"},
-                    }
-                logger.debug(f"{combination_id}/{tool_name}: Volume bindings: {volumes}")
+                }
+                if self.model_script:
+                    volumes[self.model_script] = {"bind": "/app/config_model.py", "mode": "ro"}
+                    logger.debug(f"{combination_id}/{tool_name}: Mounting model script (pre_training): {self.model_script}")
+            
+            # Add auxiliary file volumes using hybrid approach
+            if auxiliary_staging_dir:
+                # Standardized auxiliary directory mount
+                aux_volumes = self.auxiliary_manager.get_standard_volume_mount(auxiliary_staging_dir)
+                volumes.update(aux_volumes)
+                logger.info(f"{combination_id}/{tool_name}: Added standardized auxiliary mount: {aux_volumes}")
+            
+            # Add declarative auxiliary file mounts
+            if self.tool_config.has_auxiliary_files():
+                try:
+                    declarative_volumes = self.tool_config.get_auxiliary_volume_mounts()
+                    volumes.update(declarative_volumes)
+                    if declarative_volumes:
+                        logger.info(f"{combination_id}/{tool_name}: Added declarative auxiliary mounts: {declarative_volumes}")
+                except Exception as e:
+                    logger.warning(f"{combination_id}/{tool_name}: Failed to add declarative auxiliary mounts: {e}")
+            
             tool_args = self.tool_config.docker.command
             command = f"{tool_args} --output /output"
             logger.info(f"{combination_id}/{tool_name}: Container command: {command}")
@@ -107,7 +157,18 @@ class ToolRunner:
             logger.error(f"{combination_id}/{tool_name}: Execution interrupted by user.")
             raise 
         finally:
-            # Always cleanup temporary directory
-            logger.debug(f"{combination_id}/{tool_name}: Cleaning up temporary directory: {data_dir}")
-            shutil.rmtree(data_dir, ignore_errors=True)    
+            # Always cleanup temporary directory if it was created
+            if data_dir is not None:
+                logger.debug(f"{combination_id}/{tool_name}: Cleaning up temporary directory: {data_dir}")
+                temp_manager.cleanup_temp_dir(data_dir)
+            else:
+                logger.debug(f"{combination_id}/{tool_name}: No temporary directory to clean up")
+            
+            # Cleanup auxiliary staging
+            if auxiliary_staging_dir is not None:
+                try:
+                    self.auxiliary_manager.cleanup_staging(tool_name)
+                    logger.debug(f"{combination_id}/{tool_name}: Cleaned up auxiliary staging")
+                except Exception as e:
+                    logger.warning(f"{combination_id}/{tool_name}: Failed to cleanup auxiliary staging: {e}")    
         return output_dir_path, duration

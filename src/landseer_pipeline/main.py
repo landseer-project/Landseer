@@ -16,6 +16,7 @@ from .dataset_handler import DatasetManager
 from .pipeline import PipelineExecutor
 from .config import Settings, validate_and_load_pipeline_config, validate_and_load_attack_config
 from .utils import hash_file, setup_logger
+from .utils.temp_manager import temp_manager
 from .gpu_manager import GPUManager
 
 def parse_arguments():
@@ -140,7 +141,9 @@ def main():
     setup_logging(str(log_file))
 
     # Initialize GPU manager
-    gpu_manager = GPUManager(max_temp=args.max_temp, cooldown_time=args.cooldown_time)
+    gpu_manager = GPUManager(max_temp=args.max_temp, cooldown_time=args.cooldown_time) 
+    # Clean up any leftover temporary directories from previous runs
+    temp_manager.cleanup_existing_temp_dirs()
     
     try:
         # Get available GPU
@@ -148,22 +151,17 @@ def main():
         if gpu_id is None:
             logger.error("No available GPU found that meets temperature requirements")
             sys.exit(1)
-
         logger.info(f"Using GPU {gpu_id}")
         os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
-
         dataset_manager = DatasetManager(settings)
-        # tool_runner = ToolRunner(settings)
-        # model_evaluator = ModelEvaluator(settings)
-        pipeline_executor = PipelineExecutor(settings, dataset_manager=dataset_manager)
-        # components = create_components(settings)
         dataset_manager.prepare_dataset()
-        #go to pipeline handler and let it run the pipeline
+        pipeline_executor = PipelineExecutor(settings, dataset_manager=dataset_manager)
         pipeline_executor.run_all_combinations_parallel()
         Path(settings.results_dir, ".success").touch()
-        # pipeline_executor.run_pipeline()
     except KeyboardInterrupt:
         logger.error("Pipeline interrupted by user!")
+        # Ensure cleanup of temporary directories
+        temp_manager.cleanup_all()
         Path(settings.results_dir, ".failed").touch()
         raise
     except Exception as e:
