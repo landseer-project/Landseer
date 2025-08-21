@@ -22,6 +22,8 @@ torchattacks = ">=3.5.1,<4.0.0"
 filelock = "^3.18.0"
 pynvml = "^12.0.0"
 colorlogs = "^0.1"
+fastapi = "^0.111.0"
+uvicorn = { version = "^0.30.0", extras = ["standard"] }
 
 [tool.poetry.scripts]
 landseer = "landseer_pipeline.main:main"

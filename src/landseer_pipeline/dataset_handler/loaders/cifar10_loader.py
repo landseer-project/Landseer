@@ -10,18 +10,36 @@ def load_dataset(output_dir: str, download_dir: str):
     
     output_dir = os.path.abspath(output_dir)
     download_dir = os.path.abspath(download_dir)
-    # 1. Dynamically download CIFAR-10
+    
+    # Define comprehensive training transforms (same as DP training)
+    transform_train = transforms.Compose([
+        transforms.RandomCrop(32, padding=4),      # Random crop with padding
+        transforms.RandomHorizontalFlip(),         # Random horizontal flip
+        transforms.RandomErasing(p=0.2),           # Random erasing (cutout)
+        transforms.ToTensor(),                     # Convert to tensor
+        transforms.Normalize((0.5,) * 3, (0.5,) * 3),  # Normalization
+    ])
+    
+    # Define test transforms (no augmentation, only normalization)
+    transform_test = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.5,) * 3, (0.5,) * 3),
+    ])
+    
+    # 1. Load datasets with transforms
     dataset = torchvision.datasets.CIFAR10(
         root=download_dir,
         train=True,
         download=True,
         transform=transforms.ToTensor()
+        #transform=transform_train  # Use augmented transforms for training
     )
     test_dataset = torchvision.datasets.CIFAR10(
         root=download_dir,
         train=False,
         download=True,
         transform=transforms.ToTensor()
+        #transform=transform_test
     )
 
     X = np.stack([np.array(img) for img, _ in dataset]) 

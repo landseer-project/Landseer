@@ -4,7 +4,7 @@ from typing import Optional, List
 import logging
 
 class GPUManager:
-    def __init__(self, max_temp: float = 80.0, cooldown_time: int = 300):
+    def __init__(self, max_temp: float = 60.0, cooldown_time: int = 300):
         self.max_temp = max_temp
         self.cooldown_time = cooldown_time
         self.gpu_states = {}

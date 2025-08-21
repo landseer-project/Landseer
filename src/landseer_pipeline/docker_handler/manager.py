@@ -24,22 +24,32 @@ class DockerRunner:
                       environment: Dict[str, str], volumes: Dict[str, Dict], gpu_id) -> Tuple[int, str]:
         container = None
         
-        device_requests = None
+        # Use nvidia runtime instead of device_requests to avoid CDI conflicts
+        runtime = None
         if self.device == "cuda":
-            device_requests = [docker.types.DeviceRequest(
-                    count=-1, capabilities=[["gpu"]])]
+            runtime = "nvidia"
+        
         try:
-            container = self.client.containers.run(
-                image_name,
-                command=command,
-                environment=environment,
-                volumes=volumes,
-                detach=True,
-                tty=True,
-                stdout=True,
-                stderr=True,
-                device_requests=device_requests,
-            )
+            run_kwargs = {
+                'command': command,
+                'environment': environment,
+                'volumes': volumes,
+                'detach': True,
+                'tty': True,
+                'stdout': True,
+                'stderr': True,
+                'runtime': runtime,  # Use nvidia runtime instead of device_requests
+            }
+            # Resource limits (optional)
+            shm_size = getattr(self.settings, 'docker_shm_size', None)
+            if shm_size:
+                run_kwargs['shm_size'] = shm_size
+            mem_limit = getattr(self.settings, 'docker_mem_limit', None)
+            if mem_limit:
+                run_kwargs['mem_limit'] = mem_limit
+
+            logger.debug(f"Running container {image_name} with runtime={runtime} shm_size={run_kwargs.get('shm_size')} mem_limit={run_kwargs.get('mem_limit')}")
+            container = self.client.containers.run(image_name, **run_kwargs)
             result = container.wait()
             exit_code = result.get("StatusCode", 0)
             logs = container.logs(stdout=True, stderr=True).decode('utf-8')

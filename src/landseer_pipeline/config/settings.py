@@ -20,6 +20,14 @@ class Settings():
     use_gpu: bool = True
     use_cache : bool = True
     log_level: str = "INFO"
+    # Experimental content-addressable artifact cache (opt-in): when True uses new global artifact cache
+    experimental_artifact_cache: bool = False
+    # Global (cross-pipeline) artifact store root (content-addressable). Kept outside pipeline_id for reuse.
+    artifact_store_root: str = "./artifact_store"
+    # Dynamically added (post-init) docker resource knobs (can also be provided after construction)
+    # docker_shm_size: e.g. '1g', '2g'; docker_mem_limit: e.g. '8g'. Declared here for introspection / IDEs.
+    docker_shm_size: str = '1g'
+    docker_mem_limit: str | None = None
 
     def __post_init__(self):        
         object.__setattr__(self, "device", "cuda" if self.use_gpu and torch.cuda.is_available() else "cpu")
@@ -38,8 +46,8 @@ class Settings():
         self._create_directories()
     
     def _create_directories(self):
-        directories = [self.data_dir, self.logs_dir, self.output_dir, self.results_dir]
-        
+        artifact_root_path = Path(self.artifact_store_root)
+        directories = [self.data_dir, self.logs_dir, self.output_dir, self.results_dir, artifact_root_path]
         for directory in directories:
             directory.mkdir(parents=True, exist_ok=True)
 
