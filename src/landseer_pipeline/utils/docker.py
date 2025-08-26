@@ -21,7 +21,7 @@ def get_labels_from_image(image: str) -> Dict[str, str]:
 
         if not token:
             # Try to fetch public token if not set
-            logger.info(f"No GHCR_TOKEN found. Attempting to fetch public token for {repo}")
+            #logger.info(f"No GHCR_TOKEN found. Attempting to fetch public token for {repo}")
             token_resp = requests.get(
                 f"https://ghcr.io/token?scope=repository:{repo}:pull&service=ghcr.io"
             )

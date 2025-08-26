@@ -9,13 +9,14 @@ import numpy as np
 import h5py
 from torch.utils.data import TensorDataset, DataLoader
 from torchattacks import PGD
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, roc_curve
 from typing import Dict, Optional, Tuple, Any, List
 from pathlib import Path
 
 from landseer_pipeline.evaluator.fingerprinting import evaluate_fingerprinting_mingd
 from landseer_pipeline.config import Stage
 from landseer_pipeline.utils import load_config_from_script
+import torch.nn.functional as F
 
 import json
 from torchvision import datasets, transforms
@@ -56,9 +57,11 @@ class ModelEvaluator:
         except Exception:
             pass
         if not self.model_script_path:
-            logger.warning("ModelEvaluator: No model script found (central or noop). Model reconstruction may fail.")
+            logger.error("ModelEvaluator: No model script found (central or noop). Model reconstruction may fail.")
         self.tools_by_stage = tools_by_stage
+        #print(f"ModelEvaluator: CUDA devices available - {torch.cuda.device_count()}")
         self.device = f"cuda:{gpu_id}" if torch.cuda.is_available() and gpu_id is not None else "cpu"
+        self.combination_id = combination_id
         self.combination_id = combination_id
         self.combination_output = combination_output
 
@@ -182,7 +185,7 @@ class ModelEvaluator:
                     else:
                         logger.warning(f"{self.combination_id}: Tool '{tool_name}' does not have tool_defense_type property")
                 except Exception as e:
-                    logger.error(f"{self.combination_id}: Error extracting defense type from tool '{tool}': {e}")
+                    logger.warning(f"{self.combination_id}: Error extracting defense type from tool '{tool}': {e}")
 
         return list(defense_types)
 
@@ -201,7 +204,7 @@ class ModelEvaluator:
             if defense_type_lower == "adversarial":
                 attack_types.add("adversarial")
                 attack_types.add("pgd")
-            elif defense_type_lower == "outlier":
+            elif defense_type_lower == "outlier_removal":
                 attack_types.add("outlier")
                 attack_types.add("ood")
             elif defense_type_lower == "differential_privacy":
@@ -271,7 +274,8 @@ class ModelEvaluator:
                 logger.warning(f"{self.combination_id}: input_model missing in provenance JSON; using discovered model: {model_path}")
         if not model_path or not os.path.exists(model_path):
             logger.error(f"{self.combination_id}: Model file not found. Searched provenance key and discovery; got '{model_path}'. Skipping evaluation.")
-            return {"clean_test_accuracy": 0.0}
+            # mark combo as failure
+            return None
 
         logger.info(f"{self.combination_id}: Evaluating model {model_path} on dataset {dataset_dir}")
         
@@ -336,9 +340,6 @@ class ModelEvaluator:
 
         metrics = {}
         logger.info(f"{self.combination_id}: Evaluating model: {model_path}")
-
-        # ALWAYS run core evaluations regardless of defense types
-        # These metrics should always be present in results
         
         # 1. Clean train and test accuracy (always performed)
         if clean_train_loader is not None:
@@ -350,74 +351,38 @@ class ModelEvaluator:
         if clean_test_loader is not None:
             clean_test_acc = self.evaluate_clean(model, clean_test_loader)
             metrics["clean_test_accuracy"] = clean_test_acc
-        else:
-            metrics["clean_test_accuracy"] = 0.0
-
-        if "adversarial" in applicable_attacks:
-            try:
-                robust_acc = self.evaluate_pgd(model, clean_test_loader)
-                metrics["pgd_acc"] = robust_acc
-                logger.info(f"{self.combination_id}: Adversarial evaluation completed: {robust_acc}")
-            except Exception as e:
-                logger.warning(f"{self.combination_id}: Could not evaluate robust accuracy: {e}")
-                metrics["pgd_acc"] = 0.0
-
-        if "carlini" in applicable_attacks:
-            try:
-                
-                carlini_acc = self.evaluate_carlini_l2(model, clean_test_loader, confidence=0)
-                metrics["carlini_l2_accuracy"] = carlini_acc
-                logger.info(f"{self.combination_id}: Carlini L2 evaluation completed: {carlini_acc}")
-
-            except Exception as e:
-                logger.warning(f"{self.combination_id}: Could not evaluate Carlini L2 accuracy: {e}")
-                metrics["carlini_l2_accuracy"] = 0.0
-
-        # Run outlier detection if outlier defense detected
-        if any(attack in applicable_attacks for attack in ["outlier", "ood"]):
+            robust_acc = self.evaluate_pgd(model, clean_test_loader)
+            metrics["pgd_acc"] = robust_acc
+            carlini_acc = self.evaluate_carlini_l2(model, clean_test_loader, confidence=0)
+            metrics["carlini_l2_accuracy"] = carlini_acc
             ood_loader = self.generate_ood_samples("cifar100")
-            if ood_loader is not None:
-                try:
-                    ood_auc = self.evaluate_outlier(model, clean_test_loader, ood_loader)
-                    metrics["ood_auc"] = ood_auc
-                    logger.info(f"{self.combination_id}: Outlier detection evaluation completed: {ood_auc}")
-                except Exception as e:
-                    logger.warning(f"{self.combination_id}: Could not evaluate outlier detection: {e}")
-                    metrics["ood_auc"] = 0.0
-            else:
-                metrics["ood_auc"] = 0.0
+            ood_auc = self.evaluate_outlier(model, clean_test_loader, ood_loader)
+            metrics["ood_auc"] = ood_auc
+            metrics["mia_auc"], metrics["eps_estimate"] = self.margin_auc_from_loaders(model, clean_train_loader, clean_test_loader, delta_dp=1e-5, device=self.device)
+            fingerprint_score = evaluate_fingerprinting_mingd(model, clean_test_loader)
+            metrics["fingerprinting"] = fingerprint_score
+            logger.info(f"{self.combination_id}: Fingerprinting evaluation completed: {fingerprint_score}")
 
-        # Run backdoor evaluation if backdoor defense detected
-        if "backdoor" in applicable_attacks:
             if hasattr(self, 'dataset_manager') and self.dataset_manager.poisoned_dataset_dir:
                 poisoned_loader = None
                 if os.path.exists(self.dataset_manager.poisoned_dataset_dir):
                     poisoned_loader = self._load_dataset(self.dataset_manager.poisoned_dataset_dir)[1]
-                if poisoned_loader is not None:
-                    try:
+                    if poisoned_loader is not None:
                         target_class = 0
                         backdoor_asr = self.evaluate_backdoor(model, poisoned_loader, target_class)
                         metrics["backdoor_asr"] = backdoor_asr
                         logger.info(f"{self.combination_id}: Backdoor evaluation completed: {backdoor_asr}")
-                    except Exception as e:
-                        logger.warning(f"{self.combination_id}: Could not evaluate backdoor ASR: {e}")
-                        metrics["backdoor_asr"] = 0.0
-                else:
-                    metrics["backdoor_asr"] = 0.0
-            else:
-                logger.info(f"{self.combination_id}: No poisoned dataset available for backdoor evaluation")
-                metrics["backdoor_asr"] = 0.0
-
+        else:
+            metrics["clean_test_accuracy"] = -1.0
+            metrics["pgd_acc"] = -1.0
+            metrics["carlini_l2_accuracy"] = -1.0
+            metrics["ood_auc"] = -1.0
+            metrics["mia_auc"] = -1.0
+            metrics["eps_estimate"] = -1.0
+            metrics["backdoor_asr"] = -1.0
+            metrics["fingerprinting"] = -1.0
         # Run fingerprinting if fingerprinting defense detected
-        if "fingerprinting" in applicable_attacks:
-            try:
-                fingerprint_score = evaluate_fingerprinting_mingd(model, clean_test_loader)
-                metrics["fingerprinting"] = fingerprint_score
-                logger.info(f"{self.combination_id}: Fingerprinting evaluation completed: {fingerprint_score}")
-            except Exception as e:
-                logger.warning(f"{self.combination_id}: Could not evaluate fingerprinting: {e}")
-                metrics["fingerprinting"] = 0.0
-
+        
         # Run watermarking evaluation if watermarking defense detected
         if "watermark" in applicable_attacks:
             try:
@@ -426,23 +391,23 @@ class ModelEvaluator:
                 logger.info(f"{self.combination_id}: Watermarking evaluation completed: {watermark_accuracy}")
             except Exception as e:
                 logger.warning(f"{self.combination_id}: Could not evaluate watermarking: {e}")
-                metrics["watermark_accuracy"] = 0.0
+                metrics["watermark_accuracy"] = -1.0
 
         # Run privacy evaluation if differential privacy defense detected  
         if "privacy" in applicable_attacks:
             try:
                 metrics["privacy_epsilon"] = self.extract_privacy_epsilon()
+                metrics["dp_accuracy"] = self.extract_dp_accuracy()
                 # Use clean test accuracy as dp_accuracy when DP is in pipeline
-                if "clean_test_accuracy" in metrics:
-                    metrics["dp_accuracy"] = metrics["clean_test_accuracy"]
-                else:
-                    metrics["dp_accuracy"] = -1.0
+                #check if instage tool is dp
+                #if "clean_test_accuracy" in metrics:
+                #    metrics["clean_test_accuracy"] = metrics["dp_accuracy"]
                 logger.info(f"{self.combination_id}: Privacy evaluation completed - dp_accuracy set to clean_test_accuracy: {metrics.get('dp_accuracy', -1.0)}")
             except Exception as e:
                 logger.warning(f"{self.combination_id}: Could not evaluate privacy metrics: {e}")
                 metrics["privacy_epsilon"] = -1.0
                 metrics["dp_accuracy"] = -1.0
-             
+
         return metrics
     
     def _evaluate_tensorflow_model(self, model_path: str, dataset_path: str) -> Dict[str, float]:
@@ -517,9 +482,9 @@ class ModelEvaluator:
                 X_test = np.load(os.path.join(dataset_path, 'test_data.npy'))
                 y_test = np.load(os.path.join(dataset_path, 'test_labels.npy'))
                 clean_train_dataset = TensorDataset(torch.tensor(X_train).float(), torch.tensor(y_train).long())
-                clean_train_loader = DataLoader(clean_train_dataset, batch_size=512, shuffle=False, num_workers=4, pin_memory=True)
+                clean_train_loader = DataLoader(clean_train_dataset, batch_size=512, shuffle=False)
                 clean_test_dataset = TensorDataset(torch.tensor(X_test).float(), torch.tensor(y_test).long())
-                clean_test_loader = DataLoader(clean_test_dataset, batch_size=512, shuffle=False, num_workers=4, pin_memory=True)
+                clean_test_loader = DataLoader(clean_test_dataset, batch_size=512 , shuffle=False)
         else:
             logger.warning(f"{self.combination_id}: Unsupported dataset format: {dataset_path}")
         return clean_train_loader, clean_test_loader
@@ -527,12 +492,9 @@ class ModelEvaluator:
     def evaluate_clean(self, model, loader):
         model.eval()
         correct, total = 0, 0
-        
-        # Use mixed precision for faster inference
-        device_obj = torch.device(self.device) if isinstance(self.device, str) else self.device
-        with torch.no_grad(), torch.amp.autocast("cuda", enabled=device_obj.type == "cuda"):
+        with torch.no_grad():
             for X, y in loader:
-                X, y = X.to(self.device, non_blocking=True), y.to(self.device, non_blocking=True)
+                X, y = X.to(self.device), y.to(self.device)
                 pred = model(X).argmax(1)
                 correct += (pred == y).sum().item()
                 total += y.size(0)
@@ -611,34 +573,19 @@ class ModelEvaluator:
         atk = PGD(atk_model, eps=8/255, alpha=2/255, steps=10, random_start=True)
 
         correct, total = 0, 0
-        # disable AMP during adversarial generation but enable efficient batching
-        device_obj = torch.device(self.device) if isinstance(self.device, str) else self.device
-        use_cuda = device_obj.type == "cuda"
+        # disable AMP during adversarial generation
+        use_cuda = isinstance(self.device, torch.device) and self.device.type == "cuda"
         ctx = torch.amp.autocast("cuda", enabled=False) if use_cuda else nullcontext()
 
-        # Process in larger batches for better GPU utilization
-        batch_accumulator_X, batch_accumulator_y = [], []
-        max_batch_accumulation = 4  # Accumulate up to 4 batches before processing
-
-        for batch_idx, (X, y) in enumerate(loader):
-            batch_accumulator_X.append(_to_pixel_nchw(X))
-            batch_accumulator_y.append(y)
-            
-            # Process accumulated batches when we reach the limit or at the end
-            if len(batch_accumulator_X) >= max_batch_accumulation or batch_idx == len(loader) - 1:
-                # Concatenate accumulated batches
-                X_combined = torch.cat(batch_accumulator_X, dim=0).to(self.device, non_blocking=True)
-                y_combined = torch.cat(batch_accumulator_y, dim=0).to(self.device, non_blocking=True)
-                
-                with ctx:
-                    adv_X = atk(X_combined, y_combined)
-                with torch.no_grad():
-                    pred = atk_model(adv_X).argmax(1)
-                    correct += (pred == y_combined).sum().item()
-                    total += y_combined.size(0)
-                
-                # Clear accumulators
-                batch_accumulator_X, batch_accumulator_y = [], []
+        for X, y in loader:
+            X = _to_pixel_nchw(X).to(self.device)  # ensure pixel [0,1], NCHW
+            y = y.to(self.device)
+            with ctx:
+                adv_X = atk(X, y)
+            with torch.no_grad():
+                pred = atk_model(adv_X).argmax(1)
+                correct += (pred == y).sum().item()
+                total += y.size(0)
 
         return correct / total if total > 0 else 0.0
 
@@ -653,6 +600,72 @@ class ModelEvaluator:
         except ImportError:
             logger.warning("Carlini L2 attack not available")
             return -1.0
+        
+    @torch.no_grad()
+    def margin_auc_from_loaders(
+        self,
+        model: torch.nn.Module,
+        member_loader: torch.utils.data.DataLoader,
+        nonmember_loader: torch.utils.data.DataLoader,
+        device: Optional[torch.device] = None,
+        # eps_dp: Optional[float] = None,   # accepted for compatibility, unused
+        delta_dp: Optional[float] = 1e-5,  # choose δ to match your training claim
+    ) -> Tuple[float, float]:
+        """
+        Returns:
+            (auc_margin, eps_hat)
+          - auc_margin: AUROC of margin (p_top1 - p_top2)
+          - eps_hat: empirical lower bound on ε at δ=delta_dp (>= 0)
+        """
+
+        was_training = model.training
+        model.eval()
+
+        def collect_margins(loader):
+            vals = []
+            for x, _ in loader:
+                x = x.to(self.device, non_blocking=True)
+                logits = model(x)
+                probs = F.softmax(logits, dim=1)
+                top2 = probs.topk(2, dim=1).values
+                margin = (top2[:, 0] - top2[:, 1]).detach().cpu().numpy()
+                vals.append(margin)
+            return np.concatenate(vals, axis=0) if vals else np.array([])
+
+        m_scores = collect_margins(member_loader)
+        nm_scores = collect_margins(nonmember_loader)
+
+        if was_training:
+            model.train()
+
+        if m_scores.size == 0 or nm_scores.size == 0:
+            return float("nan"), 0.0
+
+        y_true = np.concatenate([np.ones_like(m_scores, dtype=int),
+                                 np.zeros_like(nm_scores, dtype=int)])
+        y_scores = np.concatenate([m_scores, nm_scores])
+
+        # AUROC
+        auc_margin = float(roc_auc_score(y_true, y_scores))
+
+        # ε lower bound via DP hypothesis testing inequalities
+        fpr, tpr, _ = roc_curve(y_true, y_scores)
+        delta = 1e-5 if (delta_dp is None) else float(delta_dp)
+        eps_vals = []
+        tiny = 1e-12
+        for a, b in zip(fpr, tpr):
+            # β ≤ e^ε α + δ  -> ε ≥ ln((β-δ)/α)
+            if a > tiny and (b - delta) > tiny:
+                eps_vals.append(np.log((b - delta) / a))
+            # (1-β) ≤ e^ε (1-α) + δ -> ε ≥ ln(((1-β)-δ)/(1-α))
+            if (1 - a) > tiny and ((1 - b) - delta) > tiny:
+                eps_vals.append(np.log(((1 - b) - delta) / (1 - a)))
+
+        eps_hat = max(eps_vals) if eps_vals else float("-inf")
+        if not np.isfinite(eps_hat) or eps_hat < 0.0:
+            eps_hat = 0.0  # ε is nonnegative by definition
+
+        return auc_margin, float(eps_hat)
 
     def evaluate_outlier(self, model, clean_loader, ood_loader):
         model.eval()
@@ -687,7 +700,7 @@ class ModelEvaluator:
         device_obj = torch.device(self.device) if isinstance(self.device, str) else self.device
         with torch.no_grad(), torch.amp.autocast("cuda", enabled=device_obj.type == "cuda"):
             for X, _ in poisoned_loader:
-                X = X.to(self.device, non_blocking=True)
+                X = X.to(self.device)
                 pred = model(X).argmax(1)
                 target_hits += (pred == target_class).sum().item()
                 total += X.size(0)
@@ -715,14 +728,38 @@ class ModelEvaluator:
 
     def decode_watermark(self, conv_layer, wm_matrix, wm_bits):
         """Decode watermark from Conv2D layer (adapted from watermarking.py)"""
-        with torch.no_grad():
-            weight = conv_layer.weight
-            mean_weight = weight.mean(dim=[2, 3])
-            flat = mean_weight.view(1, -1)
-            projection = torch.sigmoid(flat @ wm_matrix)
-            decoded_bits = (projection > 0.5).float()
-            accuracy = (decoded_bits == wm_bits).float().mean().item()
-            return accuracy, decoded_bits.cpu().numpy()
+        #with torch.no_grad():
+            #weight = conv_layer.weight
+            #mean_weight = weight.mean(dim=[2, 3])
+            #flat = mean_weight.view(1, -1)
+            #projection = torch.sigmoid(flat @ wm_matrix)
+            #decoded_bits = (projection > 0.5).float()
+            #accuracy = (decoded_bits == wm_bits).float().mean().item()
+            #return accuracy, decoded_bits.cpu().numpy()
+        try:
+            with torch.no_grad():
+                weight = conv_layer.weight
+                mean_weight = weight.mean(dim=[2, 3])
+                flat = mean_weight.view(1, -1)
+                # Check dimension compatibility
+                if flat.shape[1] != wm_matrix.shape[0]:
+                    logger.warning(f"{self.combination_id}: Dimension mismatch: flat shape {flat.shape} vs wm_matrix shape {wm_matrix.shape}")
+                    # Try to reshape or truncate to match
+                    expected_dim = wm_matrix.shape[0]
+                    if flat.shape[1] > expected_dim:
+                        flat = flat[:, :expected_dim]
+                    else:
+                        # Pad with zeros if too small
+                        padding_size = expected_dim - flat.shape[1]
+                        flat = torch.cat([flat, torch.zeros(1, padding_size, device=flat.device)], dim=1)
+                projection = torch.sigmoid(flat @ wm_matrix)
+                decoded_bits = (projection > 0.5).float
+                accuracy = (decoded_bits == wm_bits).float().mean().item()
+                return accuracy, decoded_bits.cpu().numpy()
+        except Exception as e:
+            logger.error(f"{self.combination_id}: Error in watermark decoding: {e}")
+        return 0.0, None
+        return 0.0, None
 
     def evaluate_watermark(self, model) -> float:
         """Evaluate watermark detection accuracy - supports both weight-based and trigger-based watermarking"""
@@ -930,14 +967,14 @@ class ModelEvaluator:
                                 std=(0.2023, 0.1994, 0.2010)),
         ])
 
-        if dataset_path.lower() == 'cifar10':
-            ood_dataset = datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
+        #if dataset_path.lower() == 'cifar10':
+        ood_dataset = datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
 
-        elif dataset_path.lower() == 'svhn':
-            ood_dataset = datasets.SVHN(root='./data', split='test', download=True, transform=transform)
+        #elif dataset_path.lower() == 'svhn':
+        #    ood_dataset = datasets.SVHN(root='./data', split='test', download=True, transform=transform)
 
-        else:
-            raise ValueError(f"Unsupported OOD dataset: {dataset_path}. Choose from ['cifar100', 'svhn']")
+        #else:
+        #    raise ValueError(f"Unsupported OOD dataset: {dataset_path}. Choose from ['cifar100', 'svhn']")
 
         ood_loader = DataLoader(ood_dataset, batch_size=64, shuffle=False)
         return ood_loader
@@ -950,7 +987,11 @@ class ModelEvaluator:
                 paths = json.load(f)
             
             # Look for privacy_metrics.txt in the paths
-            privacy_file_path = paths.get("privacy_metrics.txt", "").get("source_path", "")
+            privacy_entry = paths.get("privacy_metrics.txt", {})
+            if isinstance(privacy_entry, dict):
+                privacy_file_path = privacy_entry.get("source_path", "")
+            else:
+                privacy_file_path = ""
             if privacy_file_path and os.path.exists(privacy_file_path):
                 epsilon = self._parse_privacy_params(Path(privacy_file_path))
                 if epsilon >= 0:
