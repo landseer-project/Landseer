@@ -212,13 +212,6 @@ def main():
     temp_manager.cleanup_existing_temp_dirs()
     
     try:
-        # Get available GPU
-        gpu_id = gpu_manager.get_available_gpu()
-        if gpu_id is None:
-            logger.error("No available GPU found that meets temperature requirements")
-            sys.exit(1)
-        logger.info(f"Using GPU {gpu_id}")
-        os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
         dataset_manager = DatasetManager(settings)
         dataset_manager.prepare_dataset()
         pipeline_executor = PipelineExecutor(settings, dataset_manager=dataset_manager)
@@ -234,9 +227,6 @@ def main():
         logger.error(f"Pipeline execution failed: {e}")
         Path(settings.results_dir, ".failed").touch()
         raise e
-    finally:
-        if 'gpu_id' in locals():
-            gpu_manager.release_gpu(gpu_id)
 
 if __name__ == "__main__":
     main()

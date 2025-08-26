@@ -14,7 +14,6 @@ from landseer_pipeline.evaluator import ModelEvaluator
 from landseer_pipeline.pipeline.cache import CacheManager
 from landseer_pipeline.pipeline.artifact_cache import ArtifactCache
 from landseer_pipeline.utils import ResultLogger, GPUAllocator, temp_manager
-from landseer_pipeline.gpu_manager import GPUManager
 from landseer_pipeline.utils.files import copy_or_link_log
 from landseer_pipeline.config import ToolConfig, Stage
 from landseer_pipeline.dataset_handler import DatasetManager
@@ -55,31 +54,52 @@ class Combination:
 				logger.warning(f"Invalid JSON in {json_file}, starting fresh")
 				data = {}
 		
-		# Copy files and track their sources
+		# Instead of copying files immediately, just track their locations
+		# This reduces I/O overhead during pipeline execution
 		if tool_output_path.is_file():
-			dest_file = self.combo_output_dir / tool_output_path.name
-			shutil.copy2(tool_output_path, dest_file)
 			data[tool_output_path.name] = {
 				"source_path": str(tool_output_path.resolve()),
 				"stage": stage,
-				"tool_name": tool_name
+				"tool_name": tool_name,
+				"copied": False  # Mark as not copied yet
 			}
 		elif tool_output_path.is_dir():
 			for file_path in tool_output_path.rglob("*"):
 				if file_path.is_file():
 					relative_path = file_path.relative_to(tool_output_path)
-					dest_file = self.combo_output_dir / relative_path
-					dest_file.parent.mkdir(parents=True, exist_ok=True)
-					shutil.copy2(file_path, dest_file)
 					data[str(relative_path)] = {
 						"source_path": str(file_path.resolve()),
 						"stage": stage,
-						"tool_name": tool_name
+						"tool_name": tool_name,
+						"copied": False  # Mark as not copied yet
 					}
 		
-		# Save updated tracking file
+		# Save updated tracking file (fast operation)
 		json_file.write_text(json.dumps(data, indent=4))
-		logger.debug(f"Copied outputs from {tool_name} ({stage}) to {self.combo_output_dir}")
+		logger.debug(f"Tracked outputs from {tool_name} ({stage}) in {self.combo_output_dir}")
+		
+	def copy_tracked_files(self) -> None:
+		"""Copy all tracked files at the end of combination execution"""
+		json_file = self.combo_output_dir / "fin_output_paths.json"
+		if not json_file.exists():
+			return
+			
+		try:
+			data = json.loads(json_file.read_text())
+			for relative_path, info in data.items():
+				if not info.get("copied", False):
+					source_path = Path(info["source_path"])
+					if source_path.exists():
+						dest_file = self.combo_output_dir / relative_path
+						dest_file.parent.mkdir(parents=True, exist_ok=True)
+						shutil.copy2(source_path, dest_file)
+						info["copied"] = True
+			
+			# Update the tracking file
+			json_file.write_text(json.dumps(data, indent=4))
+			logger.debug(f"Copied all tracked files to {self.combo_output_dir}")
+		except Exception as e:
+			logger.warning(f"Failed to copy tracked files: {e}")
 
 class PipelineExecutor:
 	
@@ -169,15 +189,80 @@ class PipelineExecutor:
 			raise ValueError(f"Combination '{combination}' not found.")
 		return self.combinations[combination].tools_by_stage.get(stage, [])
 	
-	def run_all_combinations_parallel(self) -> None:
-		"""Execute all combinations in parallel using ThreadPoolExecutor"""
+	def run_all_combinations_parallel_new(self) -> None:
+		"""Execute all combinations using dependency-aware scheduling"""
 		self.make_combinations()
 		
+		logger.info(f"🚀 Starting enhanced parallel execution with dependency-aware scheduling")
+		logger.info(f"💪 Available resources: {self.gpu_allocator.num_gpus} GPUs")
+		
+		try:
+			# Import enhanced scheduler
+			from ..scheduler.enhanced_runner import create_enhanced_runner
+			from ..scheduler.monitor import start_monitoring
+			
+			# Create enhanced runner with current GPU allocator
+			enhanced_runner = create_enhanced_runner(self, self.gpu_allocator)
+			
+			# Start monitoring
+			monitor = start_monitoring(enhanced_runner.scheduler, dashboard=False)
+			
+			# Progress callback for status updates
+			def progress_callback(status):
+				completed = status["completed_tasks"]
+				total = status["total_tasks"]
+				running = status["running_tasks"]
+				throughput = status["throughput"]["tasks_per_hour"]
+				gpu_util = status["throughput"]["gpu_utilization"]
+				logger.info(f"📊 Progress: {completed}/{total} tasks completed, {running} running")
+				logger.info(f"   Throughput: {throughput:.1f} tasks/hr, GPU util: {gpu_util:.1%}")
+			
+			# Execute with enhanced scheduling
+			results = enhanced_runner.run_all_combinations_parallel(
+				self.combinations,
+				progress_callback=progress_callback,
+				timeout=7200  # 2 hour timeout
+			)
+			
+			# Stop monitoring and get final report
+			monitor.stop_monitoring()
+			
+			# Log execution summary
+			if results["success"]:
+				logger.info("🎉 Enhanced parallel execution completed successfully!")
+				logger.info(f"   Total execution time: {results['execution_time']:.1f} seconds")
+				logger.info(f"   Tasks completed: {len(results['completed_tasks'])}")
+				logger.info(f"   Tasks failed: {len(results['failed_tasks'])}")
+			else:
+				logger.error("❌ Enhanced parallel execution failed or timed out")
+				
+		except KeyboardInterrupt:
+			logger.warning("Enhanced parallel execution interrupted by user. Cleaning up...")
+			if 'enhanced_runner' in locals():
+				enhanced_runner.stop_execution()
+			raise
+		except ImportError as e:
+			logger.warning(f"Enhanced scheduler not available ({e}), falling back to basic execution")
+			self._run_basic_parallel_execution()
+		except Exception as e:
+			logger.error(f"Enhanced scheduler failed ({e}), falling back to basic execution")
+			self._run_basic_parallel_execution()
+		
+		logger.info("Parallel execution completed")
+		
+		# Run post-pipeline analysis
+		self._run_post_pipeline_analysis()
+
+	def run_all_combinations_parallel(self) -> None:
+		"""Fallback to basic ThreadPoolExecutor execution"""
 		# Limit workers to available GPUs to prevent blocking
+		self.make_combinations()
+
 		available_gpus = self.gpu_allocator.num_gpus
+		print(f"Pipeline_Runner: available gpus - {torch.cuda.device_count()}")
 		max_workers = min(len(self.combinations), available_gpus)
 		
-		logger.info(f"Starting parallel execution with {max_workers} workers (GPU-limited from {available_gpus} GPUs)")
+		logger.info(f"Starting basic parallel execution with {max_workers} workers (GPU-limited from {available_gpus} GPUs)")
 		
 		try:
 			with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -202,11 +287,9 @@ class PipelineExecutor:
 						logger.error(f"✗ [{completed}/{total}] Combination {combo_id} failed: {e}")
 		
 		except KeyboardInterrupt:
-			logger.warning("Parallel execution interrupted by user. Cleaning up...")
+			logger.warning("Basic parallel execution interrupted by user. Cleaning up...")
 			# The temp_manager will handle cleanup via signal handlers
 			raise
-		
-		logger.info("Parallel execution completed")
 
 	
 	def get_tools_for_combination(self, combination: str, stage: str) -> List[Dict]:
@@ -251,6 +334,9 @@ class PipelineExecutor:
 				self._print_combination_summary_simple(self._load_statuses_from_csv())
 			except Exception as csv_e:  # noqa: BLE001
 				logger.error(f"Failed to produce combination summary from CSV: {csv_e}")
+		
+		# Run post-pipeline analysis
+		self._run_post_pipeline_analysis()
 
 	def _print_combination_summary_simple(self, statuses: Dict[str, str]) -> None:
 		"""Print counts and for failures: combination id, failing tool name, and its log file."""
@@ -295,6 +381,60 @@ class PipelineExecutor:
 		# Extract tool name: file pattern '<stage>_<toolname>.log'
 		tool_name = best.stem.split('_', 1)[1] if '_' in best.stem else best.stem
 		return str(best), tool_name
+
+	def _run_post_pipeline_analysis(self) -> None:
+		"""Run post-pipeline analysis including global interference analysis."""
+		logger.info("\n" + "="*60)
+		logger.info("STARTING POST-PIPELINE ANALYSIS")
+		logger.info("="*60)
+		
+		try:
+			from ..analysis.global_interference_analyzer import GlobalInterferenceAnalyzer
+			
+			# Check if we have results to analyze
+			results_csv = self.settings.results_dir / "results_combinations.csv"
+			if not results_csv.exists():
+				logger.warning("No results CSV found, skipping analysis")
+				return
+				
+			# Create analysis output directory
+			analysis_dir = self.settings.results_dir / "analysis"
+			analysis_dir.mkdir(exist_ok=True)
+			
+			logger.info(f"Running global interference analysis on {results_csv}")
+			
+			# Initialize analyzer with reasonable defaults for Landseer
+			analyzer = GlobalInterferenceAnalyzer(
+				t1=0.02,  # 2% threshold for negligible vs moderate
+				t2=0.05   # 5% threshold for moderate vs severe
+			)
+			
+			# Run analysis
+			results = analyzer.analyze(
+				input_csv=str(results_csv),
+				output_dir=str(analysis_dir)
+			)
+			
+			if results["success"]:
+				logger.info(f"✓ Global interference analysis completed successfully!")
+				logger.info(f"  Combinations analyzed: {results['combinations_analyzed']}")
+				logger.info(f"  Tools analyzed: {results['tools_analyzed']}")
+				logger.info(f"  Interference rate: {results['summary'].get('interference_rate', 0):.1%}")
+				logger.info(f"  Mean composability: {results['summary'].get('mean_composability', 0):.3f}")
+				logger.info(f"  Output files:")
+				for output_file in results['output_files']:
+					logger.info(f"    - {output_file}")
+			else:
+				logger.error("Global interference analysis failed")
+				
+		except ImportError as e:
+			logger.warning(f"Analysis module not available: {e}")
+		except Exception as e:
+			logger.error(f"Post-pipeline analysis failed: {e}", exc_info=True)
+			
+		logger.info("="*60)
+		logger.info("POST-PIPELINE ANALYSIS COMPLETED")
+		logger.info("="*60)
 
 	def _load_statuses_from_csv(self) -> Dict[str, str]:
 		csv_path = self.settings.results_dir / "results_combinations.csv"
@@ -386,6 +526,9 @@ class PipelineExecutor:
 			# Execute all stages
 			for stage in [stage.value for stage in Stage]:
 				self._execute_stage(combination, stage, combination_obj, context)
+			
+			# Copy all tracked files at the end (reduces I/O during execution)
+			#combination_obj.copy_tracked_files()
 			
 			# Evaluate final model
 			duration = time.time() - context["start_time"]
@@ -540,7 +683,9 @@ class PipelineExecutor:
 			gpu_id = None
 			tool_output_path = output_dir  # default for failure path
 			try:
+				print(f"Before gpu allocator: {torch.cuda.device_count()}")
 				gpu_id = self.gpu_allocator.allocate_gpu()
+				print(f"After gpu allocator: {torch.cuda.device_count()}")
 				tool_runner = ToolRunner(
 					self.settings, tool, stage,
 					context,
@@ -571,6 +716,7 @@ class PipelineExecutor:
 			finally:
 				if gpu_id is not None:
 					self.gpu_allocator.release_gpu(gpu_id)
+					print(f"After gpu release: {torch.cuda.device_count()}")
 
 			# Build manifest (lightweight)
 			manifest = {
@@ -692,7 +838,11 @@ class PipelineExecutor:
 			)
 			
 			final_acc = model_evaluator.evaluate_model(str(self.pipeline_dataset_dir))
-			
+
+			if final_acc == None:
+				status = "failure"
+				final_acc = {"clean_accuracy": -1, "adversarial_accuracy": -1}
+
 			self.logger.log_combination(
 				combination,
 				tools_by_stage=context["toolnames_by_stage"],

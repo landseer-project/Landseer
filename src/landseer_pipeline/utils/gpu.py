@@ -4,10 +4,10 @@ import threading
 import pynvml
 
 class GPUAllocator:
-    def __init__(self, max_utilization=60, max_memory_mb=8000, cooldown_sec=10, verbose=False):
-        self.max_util = max_utilization
-        self.max_mem = max_memory_mb
-        self.cooldown = cooldown_sec
+    def __init__(self, max_utilization=40, max_memory_mb=6000, cooldown_sec=5, verbose=False):
+        self.max_util = max_utilization  # Reduced from 60% to 40%
+        self.max_mem = max_memory_mb      # Reduced from 8000MB to 6000MB  
+        self.cooldown = cooldown_sec      # Reduced from 10s to 5s
         self.verbose = verbose
 
         self.lock = threading.Lock()
@@ -52,7 +52,7 @@ class GPUAllocator:
 
                     self.next_idx = (self.next_idx + 1) % self.num_gpus
 
-            time.sleep(1)
+            time.sleep(1)        
 
     def release_gpu(self, idx):
         with self.lock:

@@ -15,6 +15,7 @@ from landseer_pipeline.utils.files import merge_directories
 from landseer_pipeline.utils.temp_manager import temp_manager
 from landseer_pipeline.utils.auxiliary import AuxiliaryFileManager
 from dataclasses import dataclass
+import torch
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ class ToolRunner:
         
         self.auxiliary_manager = AuxiliaryFileManager(self.output_path.parent)
         self.model_script = self._resolve_model_script()
+        print(f"{combination_obj.id}: Initialised {self.tool_stage} toolrunner for {self.tool_name}:\n\tUsing GPU: {gpu_id}\n\tInput dir: {self.input_path}\n\tOutput dir: {self.output_path}\n\tModel script: {self.model_script}")
 
     def _provenance_file(self) -> Path:
         return self.combination_obj.combo_output_dir / "fin_output_paths.json"
@@ -120,8 +122,13 @@ class ToolRunner:
         logger.debug(f"{self.combination_id}/{tool_name}: Output path: {output_dir_path}")
 
         env ={}
-        env["CUDA_VISIBLE_DEVICES"] = str(self.gpu_id)
-        logger.debug(f"{self.combination_id}/{tool_name}: Setting CUDA_VISIBLE_DEVICES to {env['CUDA_VISIBLE_DEVICES']}")
+        print(f"Before environment setting gpus - {torch.cuda.device_count()}")
+        #env["CUDA_VISIBLE_DEVICES"] = str(self.gpu_id)
+        env["NVIDIA_VISIBLE_DEVICES"] = str(self.gpu_id)
+        #env["NVIDIA_DRIVER_CAPABILITIES"] = "compute,utility"
+        env["NVIDIA_DRIVER_CAPABILITIES"] = "all"
+        logger.debug(f"{self.combination_id}/{tool_name}: Setting NVIDIA_VISIBLE_DEVICES to {env['NVIDIA_VISIBLE_DEVICES']}")
+        print(f"After environment setting gpus - {torch.cuda.device_count()}")
 
         data_dir = None  # Initialize to avoid UnboundLocalError
         auxiliary_staging_dir = None  # Track auxiliary staging for cleanup
@@ -142,7 +149,6 @@ class ToolRunner:
             host_output_dir = os.path.abspath(str(output_dir_path))
 
             if stage != "pre_training":
-                # Use resolved model script if available
                 volumes = {
                     host_data_dir: {"bind": "/data", "mode": "ro"},
                     host_output_dir: {"bind": "/output", "mode": "rw"},
@@ -179,12 +185,11 @@ class ToolRunner:
             start = time.time()
             exit_code = None
             logs = None    
-            exit_code, logs, container = self.docker_manager.run_container(
+            exit_code, logs = self.docker_manager.run_container(self.combination_id,
                 image_name=image_name,
                 command=command,
                 environment=env,
-                volumes=volumes,
-                gpu_id=self.gpu_id
+                volumes=volumes
             )
         
             

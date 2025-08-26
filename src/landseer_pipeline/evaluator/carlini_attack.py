@@ -161,7 +161,7 @@ def evaluate_carlini_l2(model, loader, device, confidence=0, sample_size=500):
     model.eval()
     attack = CarliniL2Attack(
         model, device, confidence=confidence,
-        max_iterations=25,  # Very reduced
+        max_iterations=50,  # Very reduced
         binary_search_steps=1  # Single search
     )
     
