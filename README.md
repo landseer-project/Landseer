@@ -104,14 +104,8 @@ landseer-pipeline/
 # Run pipeline with configuration files
 poetry run landseer -c configs/pipeline/test_config.yaml -a configs/attack/test_config_1.yaml
 
-# With custom output directory
-poetry run landseer -c configs/pipeline/test_config.yaml -a configs/attack/test_config_1.yaml -o ./my_results
-
-# Disable caching (run all tools fresh)
-poetry run landseer -c configs/pipeline/test_config.yaml -a configs/attack/test_config_1.yaml --no-cache
-
-# CPU-only execution
-poetry run landseer -c configs/pipeline/test_config.yaml -a configs/attack/test_config_1.yaml --no-gpu
+# to spin up web interface
+poetry run uvicorn landseer_ui.server:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ### Configuration Options
@@ -119,23 +113,34 @@ poetry run landseer -c configs/pipeline/test_config.yaml -a configs/attack/test_
 **Pipeline Configuration** (`configs/pipeline/*.yaml`):
 ```yaml
 dataset:
-  name: cifar10
-  link: https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz
-  format: pickle
-  sha1: c58f30108f718f92721af3b95e74349a
+  name: cifar10                    # Required: Dataset name (cifar10, mnist, celeba, etc.)
+  variant: clean                   # Optional: clean, poisoned (default: clean)
+  version: "1.0"                   # Optional: Dataset version
+  params:                          # Optional: Dataset-specific parameters
+    subset_size: 1000
+    seed: 42
+    poison_fraction: 0.1
 
+# Model Configuration  
+model:
+  script: /path/to/model_config.py # Required: Path to model definition script
+  framework: pytorch               # Required: pytorch, tensorflow, etc.
+  params:                          # Optional: Model hyperparameters
+    learning_rate: 0.001
+    batch_size: 32
+    epochs: 100
+
+# Pipeline Stages Configuration
 pipeline:
+  # Pre-training stage (data preprocessing, outlier detection, etc.)
   pre_training:
     tools:
-      - name: feature-squeeze
-        docker:
-          image: ghcr.io/landseer-project/pre_squeeze:v1
-          command: python main.py --bit-depth 4
-    noop:
-      name: noop
+    - name: pre_xgbod              # Tool name
       docker:
-        image: ghcr.io/landseer-project/pre_noop:v1
-        command: python main.py
+        image: ghcr.io/landseer-project/pre_xgbod:v2
+        command: python3 main.py
+        config_script: configs/model/config_model.py  # Optional: tool-specific model config
+      auxiliar
   # ... during_training and post_training sections
 ```
 
