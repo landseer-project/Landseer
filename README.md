@@ -34,14 +34,16 @@ Landseer is a modular framework to systematically explore, compose, and evaluate
 
 ```
 landseer-pipeline/
-├── src/landseer_pipeline/
-│   ├── config/                 # Configuration management
-│   ├── dataset_handler/        # Dataset loading and preprocessing
-│   ├── docker_handler/         # Docker container management
-│   ├── evaluator/             # Model evaluation and metrics
-│   ├── pipeline/              # Pipeline execution logic
-│   ├── tools/                 # Tool execution framework
-│   └── utils/                 # Utilities (logging, GPU, files)
+├── src/
+|   ├── landseer_pipeline/
+│      ├── config/                 # Configuration management
+│      ├── dataset_handler/        # Dataset loading and preprocessing
+│      ├── docker_handler/         # Docker container management
+│      ├── evaluator/             # Model evaluation and metrics
+│      ├── pipeline/              # Pipeline execution logic
+│      ├── tools/                 # Tool execution framework
+│      └── utils/                 # Utilities (logging, GPU, files)
+|   └── landseer_ui/              
 ├── configs/
 │   ├── pipeline/              # Pipeline configuration files
 │   ├── attack/                # Attack configuration files
