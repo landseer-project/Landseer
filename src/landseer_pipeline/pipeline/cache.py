@@ -4,7 +4,8 @@ from pathlib import Path
 from typing import List
 
 from filelock import FileLock
-from landseer_pipeline.utils.docker import get_image_digest
+from landseer_pipeline.container_handler import get_image_digest
+from typing import List
 
 class CacheManager:
     def __init__(self, settings):

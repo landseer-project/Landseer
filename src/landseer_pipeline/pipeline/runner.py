@@ -17,7 +17,7 @@ from landseer_pipeline.utils import ResultLogger, GPUAllocator, temp_manager
 from landseer_pipeline.utils.files import copy_or_link_log
 from landseer_pipeline.config import ToolConfig, Stage
 from landseer_pipeline.dataset_handler import DatasetManager
-from landseer_pipeline.config import ToolConfig, DockerConfig
+from landseer_pipeline.config import ToolConfig, ContainerConfig
 import time
 import csv
 import torch
@@ -61,7 +61,7 @@ class Combination:
 				"source_path": str(tool_output_path.resolve()),
 				"stage": stage,
 				"tool_name": tool_name,
-				"copied": False  # Mark as not copied yet
+				"copied": False
 			}
 		elif tool_output_path.is_dir():
 			for file_path in tool_output_path.rglob("*"):
@@ -71,7 +71,7 @@ class Combination:
 						"source_path": str(file_path.resolve()),
 						"stage": stage,
 						"tool_name": tool_name,
-						"copied": False  # Mark as not copied yet
+						"copied": False
 					}
 		
 		# Save updated tracking file (fast operation)
@@ -474,11 +474,8 @@ class PipelineExecutor:
 			
 			# Create noop if it doesn't exist
 			if noop is None:
-				dummy_docker = DockerConfig(
-					image="ghcr.io/landseer-project/post_noop:v1", 
-					command="python main.py"
-				)
-				noop = ToolConfig(name="noop", docker=dummy_docker)
+				dummy_container = ContainerConfig(image="ghcr.io/landseer-project/post_noop:v1", command="python main.py")
+				noop = ToolConfig(name="noop", container=dummy_container)
 			
 			# Initialize stage options with noop
 			stage_options = [(noop,)]
