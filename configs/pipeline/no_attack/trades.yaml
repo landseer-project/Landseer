@@ -4,6 +4,11 @@ dataset:
   format: pickle
   sha1: c58f30108f718f92721af3b95e74349a
 
+model:
+  script: configs/model/config_model.py
+  framework: pytorch
+  params: {}
+
 pipeline:
   pre_training:
     tools:
@@ -51,6 +56,6 @@ pipeline:
         config_script: configs/model/config_model.py
         image: ghcr.io/landseer-project/post_dp:v4
     - name: post_magnet
-      docker:
+      container:
         image: ghcr.io/landseer-project/post_magnet:v2
         command: python3 main.py

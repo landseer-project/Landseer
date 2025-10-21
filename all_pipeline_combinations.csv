@@ -1,161 +1,101 @@
-combination_id,pre_training,during_training,post_training
-comb_000,noop,in_noop,noop
-comb_005,noop,in-trades,noop
-comb_001,noop,in_noop,fine pruning
-comb_002,noop,in_noop,post_dp
-comb_003,noop,in_noop,fine pruning → post_dp
-comb_004,noop,in_noop,post_dp → fine pruning
-comb_006,noop,in-trades,fine pruning
-comb_007,noop,in-trades,post_dp
-comb_008,noop,in-trades,fine pruning → post_dp
-comb_009,noop,in-trades,post_dp → fine pruning
-comb_010,pre-squeeze,in_noop,noop
-comb_015,pre-squeeze,in-trades,noop
-comb_020,pre-xgbod,in_noop,noop
-comb_025,pre-xgbod,in-trades,noop
-comb_030,pre-dp,in_noop,noop
-comb_035,pre-dp,in-trades,noop
-comb_040,pre-squeeze → pre-xgbod,in_noop,noop
-comb_045,pre-squeeze → pre-xgbod,in-trades,noop
-comb_050,pre-squeeze → pre-dp,in_noop,noop
-comb_055,pre-squeeze → pre-dp,in-trades,noop
-comb_060,pre-xgbod → pre-squeeze,in_noop,noop
-comb_065,pre-xgbod → pre-squeeze,in-trades,noop
-comb_070,pre-xgbod → pre-dp,in_noop,noop
-comb_075,pre-xgbod → pre-dp,in-trades,noop
-comb_080,pre-dp → pre-squeeze,in_noop,noop
-comb_085,pre-dp → pre-squeeze,in-trades,noop
-comb_090,pre-dp → pre-xgbod,in_noop,noop
-comb_095,pre-dp → pre-xgbod,in-trades,noop
-comb_100,pre-squeeze → pre-xgbod → pre-dp,in_noop,noop
-comb_105,pre-squeeze → pre-xgbod → pre-dp,in-trades,noop
-comb_110,pre-squeeze → pre-dp → pre-xgbod,in_noop,noop
-comb_115,pre-squeeze → pre-dp → pre-xgbod,in-trades,noop
-comb_120,pre-xgbod → pre-squeeze → pre-dp,in_noop,noop
-comb_125,pre-xgbod → pre-squeeze → pre-dp,in-trades,noop
-comb_130,pre-xgbod → pre-dp → pre-squeeze,in_noop,noop
-comb_135,pre-xgbod → pre-dp → pre-squeeze,in-trades,noop
-comb_140,pre-dp → pre-squeeze → pre-xgbod,in_noop,noop
-comb_145,pre-dp → pre-squeeze → pre-xgbod,in-trades,noop
-comb_150,pre-dp → pre-xgbod → pre-squeeze,in_noop,noop
-comb_155,pre-dp → pre-xgbod → pre-squeeze,in-trades,noop
-comb_011,pre-squeeze,in_noop,fine pruning
-comb_012,pre-squeeze,in_noop,post_dp
-comb_013,pre-squeeze,in_noop,fine pruning → post_dp
-comb_014,pre-squeeze,in_noop,post_dp → fine pruning
-comb_016,pre-squeeze,in-trades,fine pruning
-comb_017,pre-squeeze,in-trades,post_dp
-comb_018,pre-squeeze,in-trades,fine pruning → post_dp
-comb_019,pre-squeeze,in-trades,post_dp → fine pruning
-comb_021,pre-xgbod,in_noop,fine pruning
-comb_022,pre-xgbod,in_noop,post_dp
-comb_023,pre-xgbod,in_noop,fine pruning → post_dp
-comb_024,pre-xgbod,in_noop,post_dp → fine pruning
-comb_026,pre-xgbod,in-trades,fine pruning
-comb_027,pre-xgbod,in-trades,post_dp
-comb_028,pre-xgbod,in-trades,fine pruning → post_dp
-comb_029,pre-xgbod,in-trades,post_dp → fine pruning
-comb_031,pre-dp,in_noop,fine pruning
-comb_032,pre-dp,in_noop,post_dp
-comb_033,pre-dp,in_noop,fine pruning → post_dp
-comb_034,pre-dp,in_noop,post_dp → fine pruning
-comb_036,pre-dp,in-trades,fine pruning
-comb_037,pre-dp,in-trades,post_dp
-comb_038,pre-dp,in-trades,fine pruning → post_dp
-comb_039,pre-dp,in-trades,post_dp → fine pruning
-comb_041,pre-squeeze → pre-xgbod,in_noop,fine pruning
-comb_042,pre-squeeze → pre-xgbod,in_noop,post_dp
-comb_043,pre-squeeze → pre-xgbod,in_noop,fine pruning → post_dp
-comb_044,pre-squeeze → pre-xgbod,in_noop,post_dp → fine pruning
-comb_046,pre-squeeze → pre-xgbod,in-trades,fine pruning
-comb_047,pre-squeeze → pre-xgbod,in-trades,post_dp
-comb_048,pre-squeeze → pre-xgbod,in-trades,fine pruning → post_dp
-comb_049,pre-squeeze → pre-xgbod,in-trades,post_dp → fine pruning
-comb_051,pre-squeeze → pre-dp,in_noop,fine pruning
-comb_052,pre-squeeze → pre-dp,in_noop,post_dp
-comb_053,pre-squeeze → pre-dp,in_noop,fine pruning → post_dp
-comb_054,pre-squeeze → pre-dp,in_noop,post_dp → fine pruning
-comb_056,pre-squeeze → pre-dp,in-trades,fine pruning
-comb_057,pre-squeeze → pre-dp,in-trades,post_dp
-comb_058,pre-squeeze → pre-dp,in-trades,fine pruning → post_dp
-comb_059,pre-squeeze → pre-dp,in-trades,post_dp → fine pruning
-comb_061,pre-xgbod → pre-squeeze,in_noop,fine pruning
-comb_062,pre-xgbod → pre-squeeze,in_noop,post_dp
-comb_063,pre-xgbod → pre-squeeze,in_noop,fine pruning → post_dp
-comb_064,pre-xgbod → pre-squeeze,in_noop,post_dp → fine pruning
-comb_066,pre-xgbod → pre-squeeze,in-trades,fine pruning
-comb_067,pre-xgbod → pre-squeeze,in-trades,post_dp
-comb_068,pre-xgbod → pre-squeeze,in-trades,fine pruning → post_dp
-comb_069,pre-xgbod → pre-squeeze,in-trades,post_dp → fine pruning
-comb_071,pre-xgbod → pre-dp,in_noop,fine pruning
-comb_072,pre-xgbod → pre-dp,in_noop,post_dp
-comb_073,pre-xgbod → pre-dp,in_noop,fine pruning → post_dp
-comb_074,pre-xgbod → pre-dp,in_noop,post_dp → fine pruning
-comb_076,pre-xgbod → pre-dp,in-trades,fine pruning
-comb_077,pre-xgbod → pre-dp,in-trades,post_dp
-comb_078,pre-xgbod → pre-dp,in-trades,fine pruning → post_dp
-comb_079,pre-xgbod → pre-dp,in-trades,post_dp → fine pruning
-comb_081,pre-dp → pre-squeeze,in_noop,fine pruning
-comb_082,pre-dp → pre-squeeze,in_noop,post_dp
-comb_083,pre-dp → pre-squeeze,in_noop,fine pruning → post_dp
-comb_084,pre-dp → pre-squeeze,in_noop,post_dp → fine pruning
-comb_086,pre-dp → pre-squeeze,in-trades,fine pruning
-comb_087,pre-dp → pre-squeeze,in-trades,post_dp
-comb_088,pre-dp → pre-squeeze,in-trades,fine pruning → post_dp
-comb_089,pre-dp → pre-squeeze,in-trades,post_dp → fine pruning
-comb_091,pre-dp → pre-xgbod,in_noop,fine pruning
-comb_092,pre-dp → pre-xgbod,in_noop,post_dp
-comb_093,pre-dp → pre-xgbod,in_noop,fine pruning → post_dp
-comb_094,pre-dp → pre-xgbod,in_noop,post_dp → fine pruning
-comb_096,pre-dp → pre-xgbod,in-trades,fine pruning
-comb_097,pre-dp → pre-xgbod,in-trades,post_dp
-comb_098,pre-dp → pre-xgbod,in-trades,fine pruning → post_dp
-comb_099,pre-dp → pre-xgbod,in-trades,post_dp → fine pruning
-comb_101,pre-squeeze → pre-xgbod → pre-dp,in_noop,fine pruning
-comb_102,pre-squeeze → pre-xgbod → pre-dp,in_noop,post_dp
-comb_103,pre-squeeze → pre-xgbod → pre-dp,in_noop,fine pruning → post_dp
-comb_104,pre-squeeze → pre-xgbod → pre-dp,in_noop,post_dp → fine pruning
-comb_106,pre-squeeze → pre-xgbod → pre-dp,in-trades,fine pruning
-comb_107,pre-squeeze → pre-xgbod → pre-dp,in-trades,post_dp
-comb_108,pre-squeeze → pre-xgbod → pre-dp,in-trades,fine pruning → post_dp
-comb_109,pre-squeeze → pre-xgbod → pre-dp,in-trades,post_dp → fine pruning
-comb_111,pre-squeeze → pre-dp → pre-xgbod,in_noop,fine pruning
-comb_112,pre-squeeze → pre-dp → pre-xgbod,in_noop,post_dp
-comb_113,pre-squeeze → pre-dp → pre-xgbod,in_noop,fine pruning → post_dp
-comb_114,pre-squeeze → pre-dp → pre-xgbod,in_noop,post_dp → fine pruning
-comb_116,pre-squeeze → pre-dp → pre-xgbod,in-trades,fine pruning
-comb_117,pre-squeeze → pre-dp → pre-xgbod,in-trades,post_dp
-comb_118,pre-squeeze → pre-dp → pre-xgbod,in-trades,fine pruning → post_dp
-comb_119,pre-squeeze → pre-dp → pre-xgbod,in-trades,post_dp → fine pruning
-comb_121,pre-xgbod → pre-squeeze → pre-dp,in_noop,fine pruning
-comb_122,pre-xgbod → pre-squeeze → pre-dp,in_noop,post_dp
-comb_123,pre-xgbod → pre-squeeze → pre-dp,in_noop,fine pruning → post_dp
-comb_124,pre-xgbod → pre-squeeze → pre-dp,in_noop,post_dp → fine pruning
-comb_126,pre-xgbod → pre-squeeze → pre-dp,in-trades,fine pruning
-comb_127,pre-xgbod → pre-squeeze → pre-dp,in-trades,post_dp
-comb_128,pre-xgbod → pre-squeeze → pre-dp,in-trades,fine pruning → post_dp
-comb_129,pre-xgbod → pre-squeeze → pre-dp,in-trades,post_dp → fine pruning
-comb_131,pre-xgbod → pre-dp → pre-squeeze,in_noop,fine pruning
-comb_132,pre-xgbod → pre-dp → pre-squeeze,in_noop,post_dp
-comb_133,pre-xgbod → pre-dp → pre-squeeze,in_noop,fine pruning → post_dp
-comb_134,pre-xgbod → pre-dp → pre-squeeze,in_noop,post_dp → fine pruning
-comb_136,pre-xgbod → pre-dp → pre-squeeze,in-trades,fine pruning
-comb_137,pre-xgbod → pre-dp → pre-squeeze,in-trades,post_dp
-comb_138,pre-xgbod → pre-dp → pre-squeeze,in-trades,fine pruning → post_dp
-comb_139,pre-xgbod → pre-dp → pre-squeeze,in-trades,post_dp → fine pruning
-comb_141,pre-dp → pre-squeeze → pre-xgbod,in_noop,fine pruning
-comb_142,pre-dp → pre-squeeze → pre-xgbod,in_noop,post_dp
-comb_143,pre-dp → pre-squeeze → pre-xgbod,in_noop,fine pruning → post_dp
-comb_144,pre-dp → pre-squeeze → pre-xgbod,in_noop,post_dp → fine pruning
-comb_146,pre-dp → pre-squeeze → pre-xgbod,in-trades,fine pruning
-comb_147,pre-dp → pre-squeeze → pre-xgbod,in-trades,post_dp
-comb_148,pre-dp → pre-squeeze → pre-xgbod,in-trades,fine pruning → post_dp
-comb_149,pre-dp → pre-squeeze → pre-xgbod,in-trades,post_dp → fine pruning
-comb_151,pre-dp → pre-xgbod → pre-squeeze,in_noop,fine pruning
-comb_152,pre-dp → pre-xgbod → pre-squeeze,in_noop,post_dp
-comb_153,pre-dp → pre-xgbod → pre-squeeze,in_noop,fine pruning → post_dp
-comb_154,pre-dp → pre-xgbod → pre-squeeze,in_noop,post_dp → fine pruning
-comb_156,pre-dp → pre-xgbod → pre-squeeze,in-trades,fine pruning
-comb_157,pre-dp → pre-xgbod → pre-squeeze,in-trades,post_dp
-comb_158,pre-dp → pre-xgbod → pre-squeeze,in-trades,fine pruning → post_dp
-comb_159,pre-dp → pre-xgbod → pre-squeeze,in-trades,post_dp → fine pruning
+combination_id,pre_training,during_training,post_training,deployment
+comb_000,noop,in_noop,noop,noop
+comb_010,noop,in-trades,noop,noop
+comb_001,noop,in_noop,noop,post_dp
+comb_002,noop,in_noop,noop,post_magnet
+comb_003,noop,in_noop,noop,post_dp → post_magnet
+comb_004,noop,in_noop,noop,post_magnet → post_dp
+comb_005,noop,in_noop,fine pruning,noop
+comb_011,noop,in-trades,noop,post_dp
+comb_012,noop,in-trades,noop,post_magnet
+comb_013,noop,in-trades,noop,post_dp → post_magnet
+comb_014,noop,in-trades,noop,post_magnet → post_dp
+comb_015,noop,in-trades,fine pruning,noop
+comb_020,pre-xgbod,in_noop,noop,noop
+comb_030,pre-xgbod,in-trades,noop,noop
+comb_040,pre-dp,in_noop,noop,noop
+comb_050,pre-dp,in-trades,noop,noop
+comb_060,pre-xgbod → pre-dp,in_noop,noop,noop
+comb_070,pre-xgbod → pre-dp,in-trades,noop,noop
+comb_080,pre-dp → pre-xgbod,in_noop,noop,noop
+comb_090,pre-dp → pre-xgbod,in-trades,noop,noop
+comb_006,noop,in_noop,fine pruning,post_dp
+comb_007,noop,in_noop,fine pruning,post_magnet
+comb_008,noop,in_noop,fine pruning,post_dp → post_magnet
+comb_009,noop,in_noop,fine pruning,post_magnet → post_dp
+comb_016,noop,in-trades,fine pruning,post_dp
+comb_017,noop,in-trades,fine pruning,post_magnet
+comb_018,noop,in-trades,fine pruning,post_dp → post_magnet
+comb_019,noop,in-trades,fine pruning,post_magnet → post_dp
+comb_021,pre-xgbod,in_noop,noop,post_dp
+comb_022,pre-xgbod,in_noop,noop,post_magnet
+comb_023,pre-xgbod,in_noop,noop,post_dp → post_magnet
+comb_024,pre-xgbod,in_noop,noop,post_magnet → post_dp
+comb_025,pre-xgbod,in_noop,fine pruning,noop
+comb_031,pre-xgbod,in-trades,noop,post_dp
+comb_032,pre-xgbod,in-trades,noop,post_magnet
+comb_033,pre-xgbod,in-trades,noop,post_dp → post_magnet
+comb_034,pre-xgbod,in-trades,noop,post_magnet → post_dp
+comb_035,pre-xgbod,in-trades,fine pruning,noop
+comb_041,pre-dp,in_noop,noop,post_dp
+comb_042,pre-dp,in_noop,noop,post_magnet
+comb_043,pre-dp,in_noop,noop,post_dp → post_magnet
+comb_044,pre-dp,in_noop,noop,post_magnet → post_dp
+comb_045,pre-dp,in_noop,fine pruning,noop
+comb_051,pre-dp,in-trades,noop,post_dp
+comb_052,pre-dp,in-trades,noop,post_magnet
+comb_053,pre-dp,in-trades,noop,post_dp → post_magnet
+comb_054,pre-dp,in-trades,noop,post_magnet → post_dp
+comb_055,pre-dp,in-trades,fine pruning,noop
+comb_061,pre-xgbod → pre-dp,in_noop,noop,post_dp
+comb_062,pre-xgbod → pre-dp,in_noop,noop,post_magnet
+comb_063,pre-xgbod → pre-dp,in_noop,noop,post_dp → post_magnet
+comb_064,pre-xgbod → pre-dp,in_noop,noop,post_magnet → post_dp
+comb_065,pre-xgbod → pre-dp,in_noop,fine pruning,noop
+comb_071,pre-xgbod → pre-dp,in-trades,noop,post_dp
+comb_072,pre-xgbod → pre-dp,in-trades,noop,post_magnet
+comb_073,pre-xgbod → pre-dp,in-trades,noop,post_dp → post_magnet
+comb_074,pre-xgbod → pre-dp,in-trades,noop,post_magnet → post_dp
+comb_075,pre-xgbod → pre-dp,in-trades,fine pruning,noop
+comb_081,pre-dp → pre-xgbod,in_noop,noop,post_dp
+comb_082,pre-dp → pre-xgbod,in_noop,noop,post_magnet
+comb_083,pre-dp → pre-xgbod,in_noop,noop,post_dp → post_magnet
+comb_084,pre-dp → pre-xgbod,in_noop,noop,post_magnet → post_dp
+comb_085,pre-dp → pre-xgbod,in_noop,fine pruning,noop
+comb_091,pre-dp → pre-xgbod,in-trades,noop,post_dp
+comb_092,pre-dp → pre-xgbod,in-trades,noop,post_magnet
+comb_093,pre-dp → pre-xgbod,in-trades,noop,post_dp → post_magnet
+comb_094,pre-dp → pre-xgbod,in-trades,noop,post_magnet → post_dp
+comb_095,pre-dp → pre-xgbod,in-trades,fine pruning,noop
+comb_026,pre-xgbod,in_noop,fine pruning,post_dp
+comb_027,pre-xgbod,in_noop,fine pruning,post_magnet
+comb_028,pre-xgbod,in_noop,fine pruning,post_dp → post_magnet
+comb_029,pre-xgbod,in_noop,fine pruning,post_magnet → post_dp
+comb_036,pre-xgbod,in-trades,fine pruning,post_dp
+comb_037,pre-xgbod,in-trades,fine pruning,post_magnet
+comb_038,pre-xgbod,in-trades,fine pruning,post_dp → post_magnet
+comb_039,pre-xgbod,in-trades,fine pruning,post_magnet → post_dp
+comb_046,pre-dp,in_noop,fine pruning,post_dp
+comb_047,pre-dp,in_noop,fine pruning,post_magnet
+comb_048,pre-dp,in_noop,fine pruning,post_dp → post_magnet
+comb_049,pre-dp,in_noop,fine pruning,post_magnet → post_dp
+comb_056,pre-dp,in-trades,fine pruning,post_dp
+comb_057,pre-dp,in-trades,fine pruning,post_magnet
+comb_058,pre-dp,in-trades,fine pruning,post_dp → post_magnet
+comb_059,pre-dp,in-trades,fine pruning,post_magnet → post_dp
+comb_066,pre-xgbod → pre-dp,in_noop,fine pruning,post_dp
+comb_067,pre-xgbod → pre-dp,in_noop,fine pruning,post_magnet
+comb_068,pre-xgbod → pre-dp,in_noop,fine pruning,post_dp → post_magnet
+comb_069,pre-xgbod → pre-dp,in_noop,fine pruning,post_magnet → post_dp
+comb_076,pre-xgbod → pre-dp,in-trades,fine pruning,post_dp
+comb_077,pre-xgbod → pre-dp,in-trades,fine pruning,post_magnet
+comb_078,pre-xgbod → pre-dp,in-trades,fine pruning,post_dp → post_magnet
+comb_079,pre-xgbod → pre-dp,in-trades,fine pruning,post_magnet → post_dp
+comb_086,pre-dp → pre-xgbod,in_noop,fine pruning,post_dp
+comb_087,pre-dp → pre-xgbod,in_noop,fine pruning,post_magnet
+comb_088,pre-dp → pre-xgbod,in_noop,fine pruning,post_dp → post_magnet
+comb_089,pre-dp → pre-xgbod,in_noop,fine pruning,post_magnet → post_dp
+comb_096,pre-dp → pre-xgbod,in-trades,fine pruning,post_dp
+comb_097,pre-dp → pre-xgbod,in-trades,fine pruning,post_magnet
+comb_098,pre-dp → pre-xgbod,in-trades,fine pruning,post_dp → post_magnet
+comb_099,pre-dp → pre-xgbod,in-trades,fine pruning,post_magnet → post_dp

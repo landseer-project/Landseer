@@ -680,9 +680,7 @@ class PipelineExecutor:
 			gpu_id = None
 			tool_output_path = output_dir  # default for failure path
 			try:
-				print(f"Before gpu allocator: {torch.cuda.device_count()}")
 				gpu_id = self.gpu_allocator.allocate_gpu()
-				print(f"After gpu allocator: {torch.cuda.device_count()}")
 				tool_runner = ToolRunner(
 					self.settings, tool, stage,
 					context,
