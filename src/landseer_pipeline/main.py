@@ -202,7 +202,7 @@ def main():
             tool_entries = []
             for t in (stage_cfg.tools or []):
                 # include docker image short name and (optional) dataset label
-                image = getattr(t.docker, 'image', '')
+                image = getattr(t.container, 'image', '')
                 image_short = image.split('/')[-1]
                 tool_entries.append(f"{t.name}[{image_short}]")
             if not tool_entries:
