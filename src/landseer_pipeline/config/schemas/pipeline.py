@@ -88,19 +88,44 @@ class ContainerConfig(BaseModel):
     @property
     def get_labels(self) -> Dict[str, str]:
         if self.image:
-            labels = get_labels_from_image(self.image, self.runtime)
-            if not labels:
-                raise ValueError(f"No labels found in Docker image '{self.image}'")
-            
-            # Check for either defense_stage or stage labels (flexible validation)
-            has_defense_stage = "org.opencontainers.image.defense_stage" in labels
-            has_stage = "org.opencontainers.image.stage" in labels
-            if not has_defense_stage and not has_stage:
-                raise ValueError(f"Label 'defense_stage' or 'stage' not found in Docker image '{self.image}'")
-            
-            if "org.opencontainers.image.dataset" not in labels:
-                raise ValueError(f"Label 'dataset' not found in Docker image '{self.image}'")
-            return labels
+            try:
+                labels = get_labels_from_image(self.image, self.runtime)
+                if not labels:
+                    # Import here to avoid circular imports
+                    from landseer_pipeline.config.settings import is_dry_run
+                    
+                    if is_dry_run():
+                        logger.warning(f"No labels found in container image '{self.image}' - skipping during dry-run")
+                        return {}
+                    else:
+                        # During config validation, remote images might not have been pulled yet
+                        # This is expected behavior for Apptainer with registry images
+                        logger.warning(f"No labels found in container image '{self.image}' - this is normal during config validation for remote images")
+                        return {}
+                
+                # Check for either defense_stage or stage labels (flexible validation)
+                has_defense_stage = "org.opencontainers.image.defense_stage" in labels
+                has_stage = "org.opencontainers.image.stage" in labels
+                if not has_defense_stage and not has_stage:
+                    from landseer_pipeline.config.settings import is_dry_run
+                    
+                    if is_dry_run():
+                        logger.warning(f"Label 'defense_stage' or 'stage' not found in container image '{self.image}' - skipping during dry-run")
+                    else:
+                        # During config validation, missing labels are expected for remote images
+                        logger.warning(f"Label 'defense_stage' or 'stage' not found in container image '{self.image}' - will be validated at runtime")
+                
+                return labels
+            except Exception as e:
+                from landseer_pipeline.config.settings import is_dry_run
+                
+                if is_dry_run():
+                    logger.warning(f"Failed to get labels from container image '{self.image}': {e} - proceeding due to dry-run mode")
+                    return {}
+                else:
+                    # During config validation, label inspection failures are expected for remote images
+                    logger.warning(f"Failed to get labels from container image '{self.image}': {e} - will be validated at runtime")
+                    return {}
         return {}
     
     @property

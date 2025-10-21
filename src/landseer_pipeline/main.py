@@ -18,6 +18,7 @@ from .config import Settings, validate_and_load_pipeline_config, validate_and_lo
 from .utils import hash_file, setup_logger
 from .utils.temp_manager import temp_manager
 from .gpu_manager import GPUManager
+from .config.settings import set_temp_dry_run
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='ML Defense Pipeline')
@@ -112,6 +113,10 @@ def setup_logging(log_file: Optional[str] = None):
 
 def main():
     args = parse_arguments()
+    
+    # Set temporary dry-run state before config validation
+    if args.dry_run:
+        set_temp_dry_run(True)
 
     pipeline_id = hash_file(args.config)
     timestamp = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
@@ -133,6 +138,7 @@ def main():
         logs_dir=args.log_dir,
         timestamp=timestamp,
         use_cache=not args.no_cache,
+        dry_run=args.dry_run,  # Add dry_run flag
         log_level=log_level
     )
     # Inject docker resource overrides (not part of original frozen dataclass signature; using object.__setattr__)
