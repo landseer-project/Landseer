@@ -86,7 +86,8 @@ class DockerRunner(ContainerRunner):
                      command: Optional[str],
                      environment: Dict[str, str], 
                      volumes: Dict[str, Dict], 
-                     gpu_id: Optional[int] = None) -> Tuple[int, str, Any]:
+                     gpu_id: Optional[int] = None,
+                     combination_id: Optional[str] = None) -> Tuple[int, str, Any]:
         if not DOCKER_AVAILABLE:
             raise RuntimeError("Docker is not available on this system.")
         
@@ -98,6 +99,8 @@ class DockerRunner(ContainerRunner):
                 count=-1, capabilities=[["gpu"]])]
         
         try:
+            combo_prefix = f"{combination_id}: " if combination_id else ""
+            logger.debug(f"{combo_prefix}Running Docker container: {image_name}")
             container = self.client.containers.run(
                 image_name,
                 command=command,
@@ -107,15 +110,18 @@ class DockerRunner(ContainerRunner):
                 tty=True,
                 stdout=True,
                 stderr=True,
+                working_dir="/app",  # Set working directory to /app where main.py is located
                 device_requests=device_requests,
             )
             result = container.wait()
             exit_code = result.get("StatusCode", 0)
             logs = container.logs(stdout=True, stderr=True).decode('utf-8')
+            logger.debug(f"{combo_prefix}Docker container finished with exit code: {exit_code}")
             container.remove()
             return exit_code, logs, container
         except Exception as e:
-            logger.error(f"Error running Docker container: {e}")
+            combo_prefix = f"{combination_id}: " if combination_id else ""
+            logger.error(f"{combo_prefix}Error running Docker container: {e}")
             if container:
                 try:
                     container.remove(force=True)

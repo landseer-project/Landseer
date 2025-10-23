@@ -185,14 +185,15 @@ class ToolRunner:
             start = time.time()
             exit_code = None
             logs = None    
-            exit_code, logs = self.docker_manager.run_container(self.combination_id,
+            exit_code, logs, container_info = self.docker_manager.run_container(
                 image_name=image_name,
                 command=command,
                 environment=env,
-                volumes=volumes
+                volumes=volumes,
+                gpu_id=self.gpu_id,
+                combination_id=self.combination_id
             )
         
-            
             # Force container cleanup to release GPU
             #try:
             #    self.docker_manager.cleanup_container(container)
