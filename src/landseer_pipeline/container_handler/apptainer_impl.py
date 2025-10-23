@@ -137,7 +137,8 @@ class ApptainerRunner(ContainerRunner):
                      command: Optional[str],
                      environment: Dict[str, str], 
                      volumes: Dict[str, Dict], 
-                     gpu_id: Optional[int] = None) -> Tuple[int, str, Any]:
+                     gpu_id: Optional[int] = None,
+                     combination_id: Optional[str] = None) -> Tuple[int, str, Any]:
         """Run an Apptainer container"""
         
         # Convert Docker image to Apptainer format if needed
@@ -148,6 +149,9 @@ class ApptainerRunner(ContainerRunner):
         
         # Build the command
         run_cmd = [self.runtime_cmd, "exec"]
+        
+        # Set working directory to /app where main.py is located
+        run_cmd.extend(["--cwd", "/app"])
         
         # Add GPU support if needed
         if self.device == "cuda" and gpu_id is not None:
@@ -177,7 +181,8 @@ class ApptainerRunner(ContainerRunner):
                 run_cmd.extend(command)
         
         try:
-            logger.debug(f"Running Apptainer command: {' '.join(run_cmd)}")
+            combo_prefix = f"{combination_id}: " if combination_id else ""
+            logger.debug(f"{combo_prefix}Running Apptainer command: {' '.join(run_cmd)}")
             result = subprocess.run(run_cmd, capture_output=True, text=True, timeout=3600)
             
             exit_code = result.returncode
@@ -190,13 +195,16 @@ class ApptainerRunner(ContainerRunner):
                 'logs': logs
             }
             
+            logger.debug(f"{combo_prefix}Apptainer container finished with exit code: {exit_code}")
             return exit_code, logs, container_info
             
         except subprocess.TimeoutExpired:
-            logger.error("Apptainer container execution timed out")
+            combo_prefix = f"{combination_id}: " if combination_id else ""
+            logger.error(f"{combo_prefix}Apptainer container execution timed out")
             raise RuntimeError("Container execution timed out")
         except Exception as e:
-            logger.error(f"Error running Apptainer container: {e}")
+            combo_prefix = f"{combination_id}: " if combination_id else ""
+            logger.error(f"{combo_prefix}Error running Apptainer container: {e}")
             raise
     
     def cleanup_container(self, container: Any) -> None:

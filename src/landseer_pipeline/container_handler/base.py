@@ -45,7 +45,8 @@ class ContainerRunner(ABC):
                      command: Optional[str],
                      environment: Dict[str, str], 
                      volumes: Dict[str, Dict], 
-                     gpu_id: Optional[int] = None) -> Tuple[int, str, Any]:
+                     gpu_id: Optional[int] = None,
+                     combination_id: Optional[str] = None) -> Tuple[int, str, Any]:
         """
         Run a container with the specified configuration
         
