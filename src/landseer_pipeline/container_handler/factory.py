@@ -31,12 +31,16 @@ def get_available_runtimes() -> List[str]:
     Returns:
         List of available runtime names (e.g., ['docker', 'apptainer'])
     """
+    import torch
     available = []
+    
+    # Use proper device detection even for runtime availability checking
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     
     # Check Docker
     if DOCKER_IMPL_AVAILABLE:
         try:
-            docker_runner = DockerRunner(type('Settings', (), {'device': 'cpu'})())
+            docker_runner = DockerRunner(type('Settings', (), {'device': device})())
             if docker_runner.is_available():
                 available.append('docker')
         except Exception:
@@ -45,7 +49,7 @@ def get_available_runtimes() -> List[str]:
     # Check Apptainer/Singularity
     if APPTAINER_IMPL_AVAILABLE:
         try:
-            apptainer_runner = ApptainerRunner(type('Settings', (), {'device': 'cpu'})())
+            apptainer_runner = ApptainerRunner(type('Settings', (), {'device': device})())
             if apptainer_runner.is_available():
                 available.append('apptainer')
         except Exception:
