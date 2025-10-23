@@ -9,7 +9,7 @@ from typing import Dict
 import shutil
 import json
 import errno
-from landseer_pipeline.container_handler import ContainerRunner
+from landseer_pipeline.container_handler.factory import get_container_runner
 from landseer_pipeline.utils import ResultLogger
 from landseer_pipeline.utils.files import merge_directories
 from landseer_pipeline.utils.temp_manager import temp_manager
@@ -36,7 +36,7 @@ class ToolRunner:
         #if output_path does not exist, create it
         self.output_path =  Path(output_path)
         print(f"Output path: {self.output_path}")
-        self.docker_manager = ContainerRunner(self.settings)
+        self.docker_manager = get_container_runner(self.settings)
         self.gpu_id = gpu_id
         
         self.auxiliary_manager = AuxiliaryFileManager(self.output_path.parent)
