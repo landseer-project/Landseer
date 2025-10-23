@@ -1,7 +1,0 @@
-# Ignore large directories
-output/
-cache/
-*logs/
-data/
-__pycache__/
-.env
