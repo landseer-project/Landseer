@@ -150,6 +150,9 @@ class ApptainerRunner(ContainerRunner):
         # Build the command
         run_cmd = [self.runtime_cmd, "exec"]
         
+        # Use clean environment to avoid host system conflicts
+        run_cmd.extend(["--cleanenv"])
+        
         # Set working directory to /app where main.py is located
         run_cmd.extend(["--cwd", "/app"])
         
@@ -160,6 +163,10 @@ class ApptainerRunner(ContainerRunner):
             run_cmd.extend(["--nv"])  # Enable all GPUs
         
         # Add environment variables
+        # Disable XALT to prevent GLIBC compatibility issues
+        run_cmd.extend(["--env", "XALT_DISABLE=1"])
+        run_cmd.extend(["--env", "LD_PRELOAD="])
+        
         for key, value in environment.items():
             run_cmd.extend(["--env", f"{key}={value}"])
         
