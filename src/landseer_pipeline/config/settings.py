@@ -41,6 +41,9 @@ class Settings():
         object.__setattr__(self, "logs_dir", Path(self.logs_dir))
         object.__setattr__(self, "results_dir", Path(self.results_dir) / str(self.pipeline_id) / str(self.timestamp))
         object.__setattr__(self, "output_dir", Path(self.output_dir) / str(self.pipeline_id))
+        
+        # Make artifact_store_root use the same base directory as output_dir to respect --output-dir argument
+        object.__setattr__(self, "artifact_store_root", str(Path(self.output_dir).parent / "artifact_store"))
 
         # New centralized model script path
         model_script_path = self.config.model.script if self.config and self.config.model else None
