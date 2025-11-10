@@ -45,8 +45,8 @@ pipeline:
 
   deployment:
     tools:
-    - name: post_magnet
-      container:
-        image: ghcr.io/landseer-project/post_magnet:v2
-        command: python3 main.py
+        - name: post_magnet
+          container:
+            image: ghcr.io/landseer-project/post_magnet:v2
+            command: python3 main.py
 
