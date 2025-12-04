@@ -19,7 +19,7 @@ class SchedulerConfig:
     cpu_worker_count: int = 4  # Number of CPU-only workers
     
     # Task Management
-    task_timeout: float = 3600.0  # Maximum time per task (1 hour)
+    task_timeout: float = 7200.0  # Maximum time per task (2 hours)
     max_retries: int = 3  # Maximum retries for failed tasks
     priority_boost_threshold: float = 1800.0  # Boost priority after waiting (30 min)
     

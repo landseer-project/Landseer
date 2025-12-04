@@ -5,9 +5,7 @@ dataset:
   sha1: c58f30108f718f92721af3b95e74349a
 
 model:
-  script: configs/model/config_model.py
-  framework: pytorch
-  params: {}
+  script: configs/model/config_model_combined.py
 
 pipeline:
   pre_training:

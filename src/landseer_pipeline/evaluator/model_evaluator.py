@@ -16,6 +16,9 @@ from pathlib import Path
 from landseer_pipeline.evaluator.fingerprinting import evaluate_fingerprinting_mingd
 from landseer_pipeline.config import Stage
 from landseer_pipeline.utils import load_config_from_script
+from ..utils.onnx_converter import get_model_framework
+from ..utils.model_format_manager import get_model_format_manager
+
 import torch.nn.functional as F
 
 import json
@@ -51,6 +54,8 @@ class ModelEvaluator:
         self.attacks = attacks
         # Use centralized model script (fallback to deprecated per-tool noop config_script if absent)
         self.model_script_path = None
+        self.format_manager = get_model_format_manager()
+
         try:
             if getattr(settings.config, 'model', None):
                 self.model_script_path = getattr(settings.config.model, 'script', None)
@@ -72,7 +77,7 @@ class ModelEvaluator:
         if json_path.exists():
             with open(json_path, 'r') as f:
                 paths = json.load(f)
-            model_entry = paths.get("model.pt", "")
+            model_entry = paths.get("model.onnx", "")
             if isinstance(model_entry, dict):
                 return model_entry.get("source_path", "")
             return model_entry
@@ -266,16 +271,20 @@ class ModelEvaluator:
         
         # Get model path from combination output
         model_path = self._get_model_path()
-        if not model_path or not isinstance(model_path, str) or model_path.strip() == "":
-            # Try to discover model.pt in last tool output copied into combination directory
-            discovered = list(Path(self.combination_output).rglob('model.pt'))
-            if discovered:
-                model_path = str(discovered[-1])
-                logger.warning(f"{self.combination_id}: input_model missing in provenance JSON; using discovered model: {model_path}")
-        if not model_path or not os.path.exists(model_path):
-            logger.error(f"{self.combination_id}: Model file not found. Searched provenance key and discovery; got '{model_path}'. Skipping evaluation.")
-            # mark combo as failure
-            return None
+        if not model_path or model_path == "":
+            logger.error(f"{self.combination_id}: No model path found for evaluation")
+            return {"clean_test_accuracy": 0.0}
+        elif not os.path.exists(model_path):
+            logger.error(f"{self.combination_id}: Model path does not exist: {model_path}")
+            return {"clean_test_accuracy": 0.0}
+        elif not (isinstance(model_path, str) and (model_path.endswith('.onnx'))):
+            model_path_converted = self._convert_to_pytorch_for_evaluation(model_path, source_format="onnx")
+            if model_path_converted:
+                model_path = model_path_converted
+                logger.info(f"{self.combination_id}: Converted model to PyTorch for evaluation: {model_path}")
+            else:
+                logger.error(f"{self.combination_id}: Failed to convert model to PyTorch for evaluation")
+                return {"clean_test_accuracy": 0.0}
 
         logger.info(f"{self.combination_id}: Evaluating model {model_path} on dataset {dataset_dir}")
         
@@ -283,8 +292,6 @@ class ModelEvaluator:
         
         if isinstance(model_path, str) and model_path.endswith('.pt'):
             metrics = self._evaluate_pytorch_model(applicable_attacks)
-        elif isinstance(model_path, str) and model_path.endswith('.h5'):
-            metrics = self._evaluate_tensorflow_model(model_path, dataset_dir)
         else:
             logger.warning(f"{self.combination_id}: Unsupported model format: {model_path}")
             metrics = {"clean_test_accuracy": 0.0}
@@ -293,6 +300,27 @@ class ModelEvaluator:
             logger.info(f"{self.combination_id}: Metric {name}: {value}")
 
         return metrics
+
+    def _convert_to_pytorch_for_evaluation(self, model_path: str, source_format: str) -> Optional[str]:
+        """Convert model to PyTorch for evaluation"""
+        try:
+            temp_pytorch_path = os.path.join(
+                self.format_manager.temp_dir,
+                f"eval_model_{self.combination_id}.pt"
+            )
+            
+            success, _ = self.format_manager.converter.convert_model(
+                model_path, temp_pytorch_path,
+                source_framework=source_format,
+                target_framework="pytorch",
+                model_script_path=self.model_script_path
+            )
+            
+            return temp_pytorch_path if success else None
+            
+        except Exception as e:
+            logger.error(f"Failed to convert {source_format} model to PyTorch: {e}")
+            return None
     
     def _evaluate_pytorch_model(self, applicable_attacks: List[str]):
         """Evaluate PyTorch model with attacks based on defense types"""
@@ -410,7 +438,7 @@ class ModelEvaluator:
 
         return metrics
     
-    def _evaluate_tensorflow_model(self, model_path: str, dataset_path: str) -> Dict[str, float]:
+    """ def _evaluate_tensorflow_model(self, model_path: str, dataset_path: str) -> Dict[str, float]:
         try:
             import tensorflow as tf
             with h5py.File(dataset_path, 'r') as ds:
@@ -438,6 +466,7 @@ class ModelEvaluator:
         except ImportError as e:
             logger.warning(f"{self.combination_id}: Could not evaluate TensorFlow model: {e}")
             return {"clean_test_accuracy": 0.0}
+            """
         
     # def _load_dataset(self, dataset_path: str) -> Tuple[Optional[DataLoader], Optional[DataLoader]]:
     #     clean_train_loader, clean_test_loader = None, None

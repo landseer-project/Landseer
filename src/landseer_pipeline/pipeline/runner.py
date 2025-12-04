@@ -18,6 +18,7 @@ from landseer_pipeline.utils.files import copy_or_link_log
 from landseer_pipeline.config import ToolConfig, Stage
 from landseer_pipeline.dataset_handler import DatasetManager
 from landseer_pipeline.config import ToolConfig, ContainerConfig
+from ..utils.model_format_manager import get_model_format_manager
 import time
 import csv
 import torch
@@ -33,7 +34,7 @@ class Combination:
 		self.combo_output_dir = settings.results_dir / "output" / f"{key}"
 		self.tools_by_stage = stage_combo_dict or {}
 		self.file_provenance = {}  # Track which tool created each file
-		
+		self.model_format_manager = get_model_format_manager()
 		# Create the combination output directory
 		self.combo_output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -207,27 +208,25 @@ class PipelineExecutor:
 			# Start monitoring
 			monitor = start_monitoring(enhanced_runner.scheduler, dashboard=False)
 			
-			# Progress callback for status updates
-			def progress_callback(status):
-				completed = status["completed_tasks"]
-				total = status["total_tasks"]
-				running = status["running_tasks"]
-				throughput = status["throughput"]["tasks_per_hour"]
-				gpu_util = status["throughput"]["gpu_utilization"]
-				logger.info(f"📊 Progress: {completed}/{total} tasks completed, {running} running")
-				logger.info(f"   Throughput: {throughput:.1f} tasks/hr, GPU util: {gpu_util:.1%}")
-			
+		# Progress callback for status updates
+		def progress_callback(status):
+			completed = status["completed_tasks"]
+			total = status["total_tasks"]
+			running = status["running_tasks"]
+			throughput = status["throughput"]["tasks_per_hour"]
+			gpu_util = status["throughput"]["gpu_utilization"]
+			logger.info(f"📊 Progress: {completed}/{total} tasks completed, {running} running")
+			logger.info(f"   Throughput: {throughput:.1f} tasks/hr, GPU util: {gpu_util:.1%}")
+		
 			# Execute with enhanced scheduling
 			results = enhanced_runner.run_all_combinations_parallel(
 				self.combinations,
 				progress_callback=progress_callback,
-				timeout=7200  # 2 hour timeout
+				timeout=14400  # 4 hour timeout
 			)
 			
 			# Stop monitoring and get final report
-			monitor.stop_monitoring()
-			
-			# Log execution summary
+			monitor.stop_monitoring()			# Log execution summary
 			if results["success"]:
 				logger.info("🎉 Enhanced parallel execution completed successfully!")
 				logger.info(f"   Total execution time: {results['execution_time']:.1f} seconds")
@@ -609,7 +608,8 @@ class PipelineExecutor:
 			
 			# Update context
 			self._update_context_after_tool(context, stage, tool_output_path)
-
+			model_output_path = self.model_format_manager._get_input_model_path(tool_output_path)
+			tool_output_path = self.model_format_manager.standardize_model_output(model_output_path, tool_output_path)
 			# Log outputs to json for combination
 			combination_obj.log_tool_output_dir_path(combination, stage, tool.name, tool_output_path)
 			
@@ -681,6 +681,17 @@ class PipelineExecutor:
 			tool_output_path = output_dir  # default for failure path
 			try:
 				gpu_id = self.gpu_allocator.allocate_gpu()
+				# get the docker label for framework and convert the current_input model to that format
+				framework = self.model_format_manager.detect_tool_framework_requirement(tool.config)
+				if framework:
+					current_input_path = context.get("current_input")
+					if current_input_path:
+						converted_model_path, updated_tool_config = self.model_format_manager.prepare_model_for_tool(
+							current_input_path, tool.config
+						)
+						tool.config = updated_tool_config
+						#TODO: Check if we need to update path
+
 				tool_runner = ToolRunner(
 					self.settings, tool, stage,
 					context,

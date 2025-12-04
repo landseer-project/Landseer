@@ -4,12 +4,16 @@ dataset:
   format: pickle
   sha1: c58f30108f718f92721af3b95e74349a
 
+model:
+  script: configs/model/config_model_combined.py
+  params: {}
+
 pipeline:
   pre_training:
     tools:      
     - docker:
         command: python3 main.py
-        config_script: configs/model/config_model.py
+        config_script: configs/model/config_model_combined.py
         image: ghcr.io/landseer-project/pre_xgbod:v2
       name: pre-xgbod
 
@@ -44,7 +48,7 @@ pipeline:
     - name: post_dp
       docker:
         command: python3 main.py
-        config_script: configs/model/config_model.py
+        config_script: configs/model/config_model_combined.py
         image: ghcr.io/landseer-project/post_dp:v4
     - name: post_magnet
       docker:
