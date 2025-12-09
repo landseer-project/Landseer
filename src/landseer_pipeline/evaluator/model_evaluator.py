@@ -979,6 +979,7 @@ class ModelEvaluator:
         ood_loader = DataLoader(ood_dataset, batch_size=64, shuffle=False)
         return ood_loader
     
+<<<<<<< HEAD
     def extract_privacy_epsilon(self) -> float:
         """Extract privacy epsilon from privacy_metrics.txt file specified in fin_output_paths.json"""
         json_path = Path(self.combination_output) / "fin_output_paths.json"
@@ -999,12 +1000,23 @@ class ModelEvaluator:
                     return epsilon
 
         logger.warning(f"{self.combination_id}: No privacy metrics file found in fin_output_paths.json or file does not exist.")
+=======
+    def extract_privacy_epsilon(self, output_by_stages: Dict) -> float:
+        for stage, outputs in output_by_stages.items():
+            for output in outputs:
+                if isinstance(output, str):
+                    output = Path(output)
+                if isinstance(output, Path) and output.is_dir():
+                    params_file = output / "privacy_metrics.txt"
+                    if params_file.exists():
+                        epsilon = self._parse_privacy_params(params_file)
+                        if epsilon >= 0:
+                            return (epsilon, stage)
+        logger.warning("No privacy metrics file found in outputs.")
+>>>>>>> 5952aee858e19b5693b0bac158b53b7c2bff82cd
         return -1.0
         
     def _parse_privacy_params(self, params_file: Path) -> float:
-        # epsilon=3.0
-        # delta=1e-05
-        # dp_accuracy=0.1017
         try:
             with open(params_file, 'r') as f:
                 for line in f:
@@ -1013,6 +1025,7 @@ class ModelEvaluator:
         except Exception as e:
             logger.warning(f"Could not parse privacy parameters from {params_file}: {e}")
         return -1.0
+<<<<<<< HEAD
     
     def extract_dp_accuracy(self) -> float:
         """Extract DP accuracy from privacy_metrics.txt file specified in fin_output_paths.json"""
@@ -1044,3 +1057,5 @@ class ModelEvaluator:
         except Exception as e:
             logger.warning(f"Could not parse privacy parameters from {params_file}: {e}")
         return -1.0
+=======
+>>>>>>> 5952aee858e19b5693b0bac158b53b7c2bff82cd
