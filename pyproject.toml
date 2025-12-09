@@ -1,15 +1,17 @@
-[project]
-name = "landseer_pipeline"
+[tool.poetry]
+name = "landseer"
 version = "0.1.0"
-description = ""
-authors = []
+description = "Landseer is a framework for combining and analysing multiple trustworthy ML tools"
+authors = ["Rosemary Agbozo <agbozorosemary217@gmail.com>"]
 readme = "README.md"
-packages = [{ include = "*", from = "src" }]
-requires-python = ">=3.11"
+packages = [
+    { include = "landseer_pipeline", from = "src" },
+    { include = "landseer_ui", from = "src" }
+]
 
 [tool.poetry.dependencies]
-torch = { version = ">=2.4.1,<3.0.0", source = "pytorch-cu128" }
 python = ">=3.11"
+torch = { version = ">=2.4.1,<3.0.0", source = "pytorch-cu128" }
 numpy = ">=2.2.6,<3.0.0"
 scipy = ">=1.15.3,<2.0.0"
 pyyaml = ">=6.0.2,<7.0.0"
@@ -22,6 +24,8 @@ torchattacks = ">=3.5.1,<4.0.0"
 filelock = "^3.18.0"
 pynvml = "^12.0.0"
 colorlogs = "^0.1"
+fastapi = "^0.111.0"
+uvicorn = { version = "^0.30.0", extras = ["standard"] }
 
 [tool.poetry.scripts]
 landseer = "landseer_pipeline.main:main"

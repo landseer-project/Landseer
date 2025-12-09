@@ -23,11 +23,16 @@ def copy_or_link_log(src_log_path, dest_log_path, method="copy"):
 def merge_directories(input_path: str, dataset_dir: str) -> str:
     # check if input_path and dataset_dir is same path
     import uuid
+    from .temp_manager import temp_manager
+    
     unique_id = uuid.uuid4().hex
     input_dir = os.path.abspath(f"data/temp_input_{unique_id}")
     # logger.debug(f"Merging directories: {input_path} and {dataset_dir}")
     if not os.path.exists(input_dir):
         os.makedirs(input_dir, exist_ok=True)
+    
+    # Register the temporary directory for cleanup
+    temp_manager.register_temp_dir(input_dir)
     input_path = os.path.abspath(input_path)
     dataset_dir = os.path.abspath(dataset_dir)
     if os.path.isdir(input_path) and os.path.exists(dataset_dir):
