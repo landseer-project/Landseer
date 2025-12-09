@@ -9,7 +9,7 @@ from typing import Dict
 import shutil
 import json
 import errno
-from landseer_pipeline.docker_handler import DockerRunner
+from landseer_pipeline.container_handler.factory import get_container_runner
 from landseer_pipeline.utils import ResultLogger
 from landseer_pipeline.utils.files import merge_directories
 from landseer_pipeline.utils.temp_manager import temp_manager
@@ -36,7 +36,7 @@ class ToolRunner:
         #if output_path does not exist, create it
         self.output_path =  Path(output_path)
         print(f"Output path: {self.output_path}")
-        self.docker_manager = DockerRunner(self.settings)
+        self.docker_manager = get_container_runner(self.settings)
         self.gpu_id = gpu_id
         
         self.auxiliary_manager = AuxiliaryFileManager(self.output_path.parent)
@@ -98,7 +98,7 @@ class ToolRunner:
 
     def _resolve_model_script(self) -> str:
         """Determine which model script to mount: tool override (deprecated) or top-level model."""
-        override = self.tool_config.docker.config_script
+        override = self.tool_config.container.config_script
         top_level = getattr(self.settings, "config_model_path", None)
         if override and top_level and os.path.abspath(override) != os.path.abspath(top_level):
             logger.warning(f"Tool '{self.tool_name}' uses per-tool config_script override: {override}")
@@ -115,8 +115,8 @@ class ToolRunner:
         dataset_dir = self.context["dataset_dir"]
         input_path = self.input_path
         output_dir_path = self.output_path
-        command = self.tool_config.docker.command
-        image_name = self.tool_config.docker.image
+        command = self.tool_config.container.command
+        image_name = self.tool_config.container.image
         
         logger.info(f"{self.combination_id}/{tool_name}: Image to run {image_name}")
         logger.debug(f"{self.combination_id}/{tool_name}: Output path: {output_dir_path}")
@@ -179,20 +179,21 @@ class ToolRunner:
                 except Exception as e:
                     logger.warning(f"{self.combination_id}/{tool_name}: Failed to add declarative auxiliary mounts: {e}")
             
-            tool_args = self.tool_config.docker.command
+            tool_args = self.tool_config.container.command
             command = f"{tool_args} --output /output"
             logger.info(f"{self.combination_id}/{tool_name}: Container command: {command}")
             start = time.time()
             exit_code = None
             logs = None    
-            exit_code, logs = self.docker_manager.run_container(self.combination_id,
+            exit_code, logs, container_info = self.docker_manager.run_container(
                 image_name=image_name,
                 command=command,
                 environment=env,
-                volumes=volumes
+                volumes=volumes,
+                gpu_id=self.gpu_id,
+                combination_id=self.combination_id
             )
         
-            
             # Force container cleanup to release GPU
             #try:
             #    self.docker_manager.cleanup_container(container)

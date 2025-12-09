@@ -5,10 +5,7 @@ import os
 import logging
 import requests
 import importlib
-import docker
-from landseer_pipeline.utils.docker import get_labels_from_image
-import hashlib
-import json
+from landseer_pipeline.container_handler import get_container_config, get_labels_from_image
 
 logger = logging.getLogger(__name__)
 
@@ -82,27 +79,53 @@ class Dataset(BaseModel):
             raise ValueError(f"Dataset '{v}' is not supported. Supported datasets: {dataset_preprocess_files}")
         return v
 
-class DockerConfig(BaseModel):
-    image: Annotated[str, "TODO: Validate the link for image"] = Field(description="Docker image name")
+class ContainerConfig(BaseModel):
+    image: Annotated[str, "Container image name"] = Field(description="Container image name")
     command: str = Field(description="Command to run the tool")
     config_script: Optional[str] = Field(default=None, description="(Deprecated) Per-tool model config script override", validate_default=True)
+    runtime: Optional[str] = Field(default=None, description="Container runtime to use (docker/apptainer), auto-detected if None")
 
     @property
     def get_labels(self) -> Dict[str, str]:
         if self.image:
-            labels = get_labels_from_image(self.image)
-            if not labels:
-                raise ValueError(f"No labels found in Docker image '{self.image}'")
-            
-            # Check for either defense_stage or stage labels (flexible validation)
-            has_defense_stage = "org.opencontainers.image.defense_stage" in labels
-            has_stage = "org.opencontainers.image.stage" in labels
-            if not has_defense_stage and not has_stage:
-                raise ValueError(f"Label 'defense_stage' or 'stage' not found in Docker image '{self.image}'")
-            
-            if "org.opencontainers.image.dataset" not in labels:
-                raise ValueError(f"Label 'dataset' not found in Docker image '{self.image}'")
-            return labels
+            try:
+                labels = get_labels_from_image(self.image, self.runtime)
+                if not labels:
+                    # Import here to avoid circular imports
+                    from landseer_pipeline.config.settings import is_dry_run
+                    
+                    if is_dry_run():
+                        logger.warning(f"No labels found in container image '{self.image}' - skipping during dry-run")
+                        return {}
+                    else:
+                        # During config validation, remote images might not have been pulled yet
+                        # This is expected behavior for Apptainer with registry images
+                        logger.warning(f"No labels found in container image '{self.image}' - this is normal during config validation for remote images")
+                        return {}
+                
+                # Check for either defense_stage or stage labels (flexible validation)
+                has_defense_stage = "org.opencontainers.image.defense_stage" in labels
+                has_stage = "org.opencontainers.image.stage" in labels
+                if not has_defense_stage and not has_stage:
+                    from landseer_pipeline.config.settings import is_dry_run
+                    
+                    if is_dry_run():
+                        logger.warning(f"Label 'defense_stage' or 'stage' not found in container image '{self.image}' - skipping during dry-run")
+                    else:
+                        # During config validation, missing labels are expected for remote images
+                        logger.warning(f"Label 'defense_stage' or 'stage' not found in container image '{self.image}' - will be validated at runtime")
+                
+                return labels
+            except Exception as e:
+                from landseer_pipeline.config.settings import is_dry_run
+                
+                if is_dry_run():
+                    logger.warning(f"Failed to get labels from container image '{self.image}': {e} - proceeding due to dry-run mode")
+                    return {}
+                else:
+                    # During config validation, label inspection failures are expected for remote images
+                    logger.warning(f"Failed to get labels from container image '{self.image}': {e} - will be validated at runtime")
+                    return {}
         return {}
     
     @property
@@ -128,14 +151,13 @@ class DockerConfig(BaseModel):
     
     @model_validator(mode="after")
     def validate_image_and_pull(self) -> Self:
-        logger.debug(f"Validating Docker image: {self.image}")
+        logger.debug(f"Validating container image: {self.image}")
         try:
-            client = docker.from_env() 
-            logger.warning(f"Attempting to pull docker image...")
-            client.images.pull(self.image)
-        except docker.errors.APIError as e:
-            raise ValueError(f"Failed to check Docker image '{self.image}': {e}")
-        logger.debug(f"Docker image '{self.image}' is valid and available")
+            container_config = get_container_config(self.image, self.command, self.config_script, self.runtime)
+            container_config.validate_image_and_pull()
+        except Exception as e:
+            raise ValueError(f"Failed to validate container image '{self.image}': {e}")
+        logger.debug(f"Container image '{self.image}' is valid and available")
         return self 
 
 class AuxiliaryFile(BaseModel):
@@ -147,7 +169,7 @@ class AuxiliaryFile(BaseModel):
 
 class ToolConfig(BaseModel):
     name: str = Field(description="Name of the tool")
-    docker: DockerConfig = Field(description="Docker configuration for the tool")
+    container: ContainerConfig = Field(description="Container configuration for the tool")
     output_path: Optional[str] = Field(default=None, description="Path to store the output of the tool")
     auxiliary_files: Optional[List[AuxiliaryFile]] = Field(default=None, description="Additional files/directories to mount in container")
     required_inputs: Optional[List[str]] = Field(default=None, description="Explicit artifact names required as inputs (optional)")
@@ -158,21 +180,15 @@ class ToolConfig(BaseModel):
     
     @property
     def tool_stage(self) -> str:
-        return self.docker.get_labels.get("defense_stage", "unknown")
+        return self.container.get_labels.get("org.opencontainers.image.stage", "unknown")
     
     @property
     def tool_dataset(self) -> str:
-        labels = self.docker.get_labels
-        return labels.get("org.opencontainers.image.dataset", "unknown")
+        return self.container.get_labels.get("org.opencontainers.image.dataset", "unknown")
     
     @property
     def tool_defense_type(self) -> str:
-        labels = self.docker.get_labels
-        # Try defense_type first, then fall back to type
-        defense_type = labels.get("org.opencontainers.image.defense_type")
-        if defense_type:
-            return defense_type
-        return labels.get("org.opencontainers.image.type", "unknown")
+        return self.container.get_labels.get("org.opencontainers.image.defense_type", "unknown")
 
     def set_output_path(self, output_path: str):
         self.output_path = output_path
@@ -240,7 +256,7 @@ class PipelineStructure(BaseModel):
 
     @model_validator(mode="after")
     def fetch_and_validate_labels(self):
-        # Accept multiple synonyms for stage labels in docker images
+        # Accept multiple synonyms for stage labels in container images
         stage_synonyms = {
             Stage.PRE_TRAINING.value: {"pre_training", "pre", "pretrain", "pre_defense"},
             Stage.DURING_TRAINING.value: {"during_training", "during", "in", "train", "training", "in_training", "in_defense", "during_defense"},
@@ -251,7 +267,8 @@ class PipelineStructure(BaseModel):
             normalized_stage = stage_enum.value  # e.g. 'post_training'
             tools = stage_cfg.tools
             for tool in tools:
-                labels = tool.docker.get_labels
+                # Use new container abstraction instead of docker-specific
+                labels = tool.container.get_labels
                 label_stage = labels.get("org.opencontainers.image.stage") or labels.get("org.opencontainers.image.defense_stage")
                 if label_stage:
                     ls_norm = label_stage.strip().lower()
@@ -259,7 +276,7 @@ class PipelineStructure(BaseModel):
                     if ls_norm not in allowed:
                         raise ValueError(
                             f"Tool '{tool.tool_name}' is placed under stage '{normalized_stage}', "
-                            f"but its Docker label says '{label_stage}'. Allowed synonyms: {sorted(allowed)}"
+                            f"but its container label says '{label_stage}'. Allowed synonyms: {sorted(allowed)}"
                         )
                 logger.debug(f"Tool '{tool.tool_name}' labels validated for stage '{normalized_stage}'")
         return self

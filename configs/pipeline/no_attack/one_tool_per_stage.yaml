@@ -1,0 +1,52 @@
+dataset:
+  name: cifar10
+  link: https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz
+  format: pickle
+  sha1: c58f30108f718f92721af3b95e74349a
+
+model:
+  script: configs/model/config_model_resnet20.py
+  framework: pytorch
+  params: {}
+
+pipeline:
+  pre_training:
+    tools:
+    - container:
+        command: python3 main.py
+        image: ghcr.io/landseer-project/pre_xgbod:v2
+      name: pre-xgbod
+    noop:
+      name: noop
+      container:
+        image: docker://ghcr.io/landseer-project/pre_noop:v1
+        command: python main.py
+
+
+  during_training:
+    tools:
+    - name: in-trades
+      container:
+        image: ghcr.io/landseer-project/in_trades:v2
+        command: python3 main.py  
+    noop:
+      name: in_noop
+      container:
+        image: docker://ghcr.io/landseer-project/in_noop:v5
+        command: python main.py
+
+  post_training:
+    tools:
+        - name: fine pruning
+          container:
+            image: ghcr.io/landseer-project/post_fineprune:v1
+            command: python3 main.py --prune-percentage 0.1
+
+
+  deployment:
+    tools:
+        - name: post_magnet
+          container:
+            image: ghcr.io/landseer-project/post_magnet:v2
+            command: python3 main.py
+

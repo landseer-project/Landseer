@@ -47,7 +47,7 @@ class GPUAllocator:
                         self.active[idx] = True
                         self.next_idx = (idx + 1) % self.num_gpus
                         if self.verbose:
-                            print(f"[GPU Allocator] Allocated GPU {idx}")
+                            logger.info(f"Assigned GPU {idx}")
                         return idx
 
                     self.next_idx = (self.next_idx + 1) % self.num_gpus
@@ -58,7 +58,7 @@ class GPUAllocator:
         with self.lock:
             self.active[idx] = False
             if self.verbose:
-                print(f"[GPU Allocator] Released GPU {idx}")
+                logger.info(f"Released GPU {idx}")
 
     def __del__(self):
         pynvml.nvmlShutdown()
