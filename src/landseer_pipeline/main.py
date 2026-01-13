@@ -77,6 +77,19 @@ def parse_arguments():
     )
 
     parser.add_argument(
+        '--combo-id',
+        type=str,
+        default=None,
+        help='Run only a specific combination by ID (e.g., comb_001)'
+    )
+
+    parser.add_argument(
+        '--interactive', '-i',
+        action='store_true',
+        help='Interactive mode: prompt to select which combination to run'
+    )
+
+    parser.add_argument(
         '--log-dir',
         type=Path,
         default=Path("./logs"),
@@ -221,7 +234,19 @@ def main():
         dataset_manager = DatasetManager(settings)
         dataset_manager.prepare_dataset()
         pipeline_executor = PipelineExecutor(settings, dataset_manager=dataset_manager)
-        pipeline_executor.run_all_combinations_parallel()
+        
+        # Handle single combination modes
+        if args.interactive:
+            # Interactive mode: prompt user to select combination
+            combo_id = pipeline_executor.interactive_select_combination()
+            pipeline_executor.run_single_combination(combo_id)
+        elif args.combo_id:
+            # Direct combo ID specified
+            pipeline_executor.run_single_combination(args.combo_id)
+        else:
+            # Normal mode: run all combinations
+            pipeline_executor.run_all_combinations_parallel()
+        
         Path(settings.results_dir, ".success").touch()
     except KeyboardInterrupt:
         logger.error("Pipeline interrupted by user!")

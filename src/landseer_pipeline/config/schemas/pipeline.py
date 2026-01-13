@@ -232,7 +232,7 @@ class DefenseType(str, Enum):
 
 class StageConfig(BaseModel):
     tools: List[ToolConfig] = Field(default_factory=list, description="List of tools to be used in the stage")
-    noop: Optional[ToolConfig] = Field(default=None, description="Noop tool for the stage")
+    noop: ToolConfig = Field(default=None, description="Noop tool for the stage")
 
 class PipelineStructure(BaseModel):
     dataset: Dataset = Field(description="Dataset Info")

@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 import shutil
 from pathlib import Path
 from filelock import FileLock
@@ -14,11 +15,12 @@ from landseer_pipeline.evaluator import ModelEvaluator
 from landseer_pipeline.pipeline.cache import CacheManager
 from landseer_pipeline.pipeline.artifact_cache import ArtifactCache
 from landseer_pipeline.utils import ResultLogger, GPUAllocator, temp_manager
+from landseer_pipeline.database.db_result_logger import DatabaseResultLogger, create_result_logger
 from landseer_pipeline.utils.files import copy_or_link_log
 from landseer_pipeline.config import ToolConfig, Stage
 from landseer_pipeline.dataset_handler import DatasetManager
 from landseer_pipeline.config import ToolConfig, ContainerConfig
-from ..utils.model_format_manager import get_model_format_manager
+from ..model_handler import get_model_format_manager
 import time
 import csv
 import torch
@@ -34,7 +36,9 @@ class Combination:
 		self.combo_output_dir = settings.results_dir / "output" / f"{key}"
 		self.tools_by_stage = stage_combo_dict or {}
 		self.file_provenance = {}  # Track which tool created each file
-		self.model_format_manager = get_model_format_manager()
+		# Get input shape from dataset manager
+		input_shape = dataset_manager.get_input_shape() if dataset_manager else None
+		self.model_format_manager = get_model_format_manager(input_shape=input_shape)
 		# Create the combination output directory
 		self.combo_output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -114,7 +118,22 @@ class PipelineExecutor:
 		# Global artifact store independent of pipeline_id for cross-pipeline reuse
 		self.artifact_cache = ArtifactCache(Path(settings.artifact_store_root))
 		self._use_artifact_cache = True  # Legacy pipeline cache removed; always use artifact cache
-		self.logger = ResultLogger(settings.results_dir, settings.pipeline_id)
+		
+		# Use database-enabled logger if MySQL is configured (via LANDSEER_DB_* env vars)
+		# Falls back to CSV-only if database not available
+		dataset_name = self.config.dataset.name if self.config and self.config.dataset else "unknown"
+		dataset_variant = self.config.dataset.variant if self.config and self.config.dataset else "clean"
+		config_path = str(settings.config_file) if hasattr(settings, 'config_file') and settings.config_file else None
+		
+		self.logger = create_result_logger(
+			results_dir=settings.results_dir,
+			pipeline_id=settings.pipeline_id,
+			dataset_name=dataset_name,
+			dataset_variant=dataset_variant,
+			config_file_path=config_path,
+			enable_database=True  # Will auto-disable if DB not configured
+		)
+		
 		self.gpu_allocator = GPUAllocator()
 		self.combinations: Dict[str, Combination] = {}
 		# Track failing tool info per combination: combination_id -> (tool_name, artifact_log_path)
@@ -194,8 +213,12 @@ class PipelineExecutor:
 		"""Execute all combinations using dependency-aware scheduling"""
 		self.make_combinations()
 		
-		logger.info(f"🚀 Starting enhanced parallel execution with dependency-aware scheduling")
-		logger.info(f"💪 Available resources: {self.gpu_allocator.num_gpus} GPUs")
+		logger.info(f"Starting parallel execution: dependency-aware scheduling, {self.gpu_allocator.num_gpus} GPUs available")
+		
+		# Start database run record if using DatabaseResultLogger
+		total_combinations = len(self.combinations)
+		if hasattr(self.logger, 'start_run'):
+			self.logger.start_run(total_combinations=total_combinations)
 		
 		try:
 			# Import enhanced scheduler
@@ -207,16 +230,15 @@ class PipelineExecutor:
 			
 			# Start monitoring
 			monitor = start_monitoring(enhanced_runner.scheduler, dashboard=False)
-			
-		# Progress callback for status updates
-		def progress_callback(status):
-			completed = status["completed_tasks"]
-			total = status["total_tasks"]
-			running = status["running_tasks"]
-			throughput = status["throughput"]["tasks_per_hour"]
-			gpu_util = status["throughput"]["gpu_utilization"]
-			logger.info(f"📊 Progress: {completed}/{total} tasks completed, {running} running")
-			logger.info(f"   Throughput: {throughput:.1f} tasks/hr, GPU util: {gpu_util:.1%}")
+			# Progress callback for status updates
+			def progress_callback(status):
+				completed = status["completed_tasks"]
+				total = status["total_tasks"]
+				running = status["running_tasks"]
+				throughput = status["throughput"]["tasks_per_hour"]
+				gpu_util = status["throughput"]["gpu_utilization"]
+				logger.info(f"📊 Progress: {completed}/{total} tasks completed, {running} running")
+				logger.info(f"   Throughput: {throughput:.1f} tasks/hr, GPU util: {gpu_util:.1%}")
 		
 			# Execute with enhanced scheduling
 			results = enhanced_runner.run_all_combinations_parallel(
@@ -228,15 +250,21 @@ class PipelineExecutor:
 			# Stop monitoring and get final report
 			monitor.stop_monitoring()			# Log execution summary
 			if results["success"]:
-				logger.info("🎉 Enhanced parallel execution completed successfully!")
-				logger.info(f"   Total execution time: {results['execution_time']:.1f} seconds")
-				logger.info(f"   Tasks completed: {len(results['completed_tasks'])}")
-				logger.info(f"   Tasks failed: {len(results['failed_tasks'])}")
+				logger.info("Parallel execution completed successfully")
+				logger.info(f"  Total time: {results['execution_time']:.1f}s, Completed: {len(results['completed_tasks'])}, Failed: {len(results['failed_tasks'])}")
+				run_status = "completed" if len(results['failed_tasks']) == 0 else "partial"
 			else:
-				logger.error("❌ Enhanced parallel execution failed or timed out")
+				logger.error("ERROR: Parallel execution failed or timed out")
+				run_status = "failed"
+			
+			# Finish database run record
+			if hasattr(self.logger, 'finish_run'):
+				self.logger.finish_run(status=run_status)
 				
 		except KeyboardInterrupt:
 			logger.warning("Enhanced parallel execution interrupted by user. Cleaning up...")
+			if hasattr(self.logger, 'finish_run'):
+				self.logger.finish_run(status="failed", error_message="Interrupted by user")
 			if 'enhanced_runner' in locals():
 				enhanced_runner.stop_execution()
 			raise
@@ -263,6 +291,14 @@ class PipelineExecutor:
 		
 		logger.info(f"Starting basic parallel execution with {max_workers} workers (GPU-limited from {available_gpus} GPUs)")
 		
+		# Start database run record if using DatabaseResultLogger
+		total_combinations = len(self.combinations)
+		if hasattr(self.logger, 'start_run'):
+			self.logger.start_run(total_combinations=total_combinations)
+		
+		success_count = 0
+		failure_count = 0
+		
 		try:
 			with ThreadPoolExecutor(max_workers=max_workers) as executor:
 				# Submit all combinations
@@ -281,16 +317,80 @@ class PipelineExecutor:
 					
 					try:
 						future.result()
-						logger.info(f"✓ [{completed}/{total}] Combination {combo_id} completed successfully")
+						logger.info(f"[{completed}/{total}] {combo_id}: Completed")
+						success_count += 1
 					except Exception as e:
-						logger.error(f"✗ [{completed}/{total}] Combination {combo_id} failed: {e}")
+						logger.error(f"[{completed}/{total}] {combo_id}: FAILED - {e}")
+						failure_count += 1
+			
+			# Finish database run record
+			run_status = "completed" if failure_count == 0 else ("partial" if success_count > 0 else "failed")
+			if hasattr(self.logger, 'finish_run'):
+				self.logger.finish_run(status=run_status)
 		
 		except KeyboardInterrupt:
 			logger.warning("Basic parallel execution interrupted by user. Cleaning up...")
+			if hasattr(self.logger, 'finish_run'):
+				self.logger.finish_run(status="failed", error_message="Interrupted by user")
 			# The temp_manager will handle cleanup via signal handlers
 			raise
 
 	
+	def interactive_select_combination(self) -> str:
+		"""Interactive prompt to select a combination"""
+		self.make_combinations()
+		
+		combos = sorted(self.combinations.keys())
+		
+		print("\n" + "="*60)
+		print("AVAILABLE COMBINATIONS")
+		print("="*60)
+		
+		for i, combo_id in enumerate(combos, 1):
+			combo_obj = self.combinations[combo_id]
+		tools_summary = []
+		for stage in ['pre_training', 'during_training', 'post_training', 'deployment']:
+			tools = combo_obj.tools_by_stage.get(stage, [])
+			if tools:
+				if len(tools) == 1 and tools[0].name == 'noop':
+					tools_summary.append('noop')
+				else:
+					tools_summary.append(tools[0].name if tools else 'noop')
+			else:
+				tools_summary.append('noop')
+		
+		print(f"{i:3d}. {combo_id}: {' → '.join(tools_summary)}")
+		
+		print("="*60)
+		
+		while True:
+			try:
+				selection = input("\nEnter combination number or ID (or 'q' to quit): ").strip()
+				
+				if selection.lower() == 'q':
+					print("Exiting...")
+					sys.exit(0)
+				
+				# Try as number first
+				try:
+					num = int(selection)
+					if 1 <= num <= len(combos):
+						return combos[num - 1]
+					else:
+						print(f"Please enter a number between 1 and {len(combos)}")
+						continue
+				except ValueError:
+					# Try as combo ID
+					if selection in combos:
+						return selection
+					else:
+						print(f"Combination '{selection}' not found. Please try again.")
+						continue
+						
+			except KeyboardInterrupt:
+				print("\nExiting...")
+				sys.exit(0)
+
 	def get_tools_for_combination(self, combination: str, stage: str) -> List[Dict]:
 		"""Get the list of tools for a specific combination and stage"""
 		if combination not in self.combinations:
@@ -298,6 +398,32 @@ class PipelineExecutor:
 		tools = self.combinations[combination].get(stage, {})
 		return [tools] if tools else []
 	
+	def run_single_combination(self, combo_id: str) -> None:
+		"""Execute a single combination by ID"""
+		self.make_combinations()
+		
+		if combo_id not in self.combinations:
+			available = ', '.join(sorted(self.combinations.keys()))
+			raise ValueError(f"Combination '{combo_id}' not found. Available: {available}")
+		
+		logger.info("\n" + "="*60)
+		logger.info(f"RUNNING SINGLE COMBINATION: {combo_id}")
+		logger.info("="*60)
+		
+		try:
+			self.run_combination(combo_id)
+			logger.info(f"\n{'='*60}")
+			logger.info(f"COMBINATION {combo_id} COMPLETED SUCCESSFULLY")
+			logger.info("="*60)
+		except Exception as e:
+			logger.error(f"\n{'='*60}")
+			logger.error(f"COMBINATION {combo_id} FAILED: {e}")
+			logger.error("="*60)
+			raise
+		
+		# Run post-pipeline analysis for this single combination
+		self._run_post_pipeline_analysis()
+
 	def run_pipeline(self) -> None:
 		"""Execute the complete pipeline for all combinations"""
 		self.make_combinations()
@@ -306,6 +432,11 @@ class PipelineExecutor:
 		logger.info("="*60)
 		
 		total_combinations = len(self.combinations)
+		
+		# Start database run record if using DatabaseResultLogger
+		if hasattr(self.logger, 'start_run'):
+			self.logger.start_run(total_combinations=total_combinations)
+		
 		# Track statuses in-memory for instant summary
 		combination_statuses = {}
 		
@@ -313,10 +444,10 @@ class PipelineExecutor:
 			logger.info(f"Running combination {i}/{total_combinations}: {combination}")
 			try:
 				self.run_combination(combination)
-				logger.info(f"✓ Completed combination: {combination}")
+				logger.info(f"Completed: {combination}")
 				combination_statuses[combination] = "success"
 			except Exception as e:
-				logger.error(f"✗ Combination {combination} failed: {e}")
+				logger.error(f"FAILED: {combination} - {e}")
 				combination_statuses[combination] = "failure"
 				# Continue with next combination instead of stopping
 				continue
@@ -324,6 +455,14 @@ class PipelineExecutor:
 		logger.info("\n" + "="*60)
 		logger.info("PIPELINE COMPLETED")
 		logger.info("="*60)
+		
+		# Finish database run record
+		success_count = sum(1 for s in combination_statuses.values() if s == "success")
+		failure_count = sum(1 for s in combination_statuses.values() if s == "failure")
+		run_status = "completed" if failure_count == 0 else ("partial" if success_count > 0 else "failed")
+		if hasattr(self.logger, 'finish_run'):
+			self.logger.finish_run(status=run_status)
+		
 		# Summarize results (in-memory + fallback to CSV scan if needed)
 		try:
 			self._print_combination_summary_simple(combination_statuses)
@@ -469,12 +608,7 @@ class PipelineExecutor:
 				raise ValueError(f"Missing StageConfig for stage: {stage}")
 			
 			tools: List[ToolConfig] = stage_config.tools or []
-			noop: Optional[ToolConfig] = stage_config.noop
-			
-			# Create noop if it doesn't exist
-			if noop is None:
-				dummy_container = ContainerConfig(image="ghcr.io/landseer-project/post_noop:v1", command="python main.py")
-				noop = ToolConfig(name="noop", container=dummy_container)
+			noop: ToolConfig = stage_config.noop
 			
 			# Initialize stage options with noop
 			stage_options = [(noop,)]
@@ -507,8 +641,9 @@ class PipelineExecutor:
 		sorted_combos = sorted(combinations.items(), key=lambda x: count_noops(x[1]), reverse=True)
 		self.combinations = dict(sorted_combos)
 		
-		# Export to CSV
-		export_combinations_to_csv("all_pipeline_combinations.csv", self.combinations)
+		# Export to CSV in results directory
+		csv_path = self.settings.results_dir / "all_pipeline_combinations.csv"
+		export_combinations_to_csv(str(csv_path), self.combinations)
 		logger.info(f"Successfully generated {len(self.combinations)} combinations")
 	
 	def run_combination(self, combination: str) -> None:
@@ -588,7 +723,7 @@ class PipelineExecutor:
 	def _execute_stage(self, combination: str, stage: str, combination_obj: Combination, context: Dict) -> List[Path]:
 		"""Execute all tools in a specific stage"""
 		tools_for_stage = combination_obj.tools_by_stage.get(stage, [])
-		logger.info(f"{combination} --- STAGE: {stage.upper()} ---")
+		logger.debug(f"{combination} --- STAGE: {stage.upper()} ---")
 
 		if not tools_for_stage:
 			logger.debug(f"{combination}: No tools for stage '{stage}'. Skipping.")
@@ -608,8 +743,18 @@ class PipelineExecutor:
 			
 			# Update context
 			self._update_context_after_tool(context, stage, tool_output_path)
-			model_output_path = self.model_format_manager._get_input_model_path(tool_output_path)
-			tool_output_path = self.model_format_manager.standardize_model_output(model_output_path, tool_output_path)
+			
+			# Try to standardize model output if a model file exists
+			model_output_path = combination_obj.model_format_manager._get_input_model_path(str(tool_output_path))
+			#if stage == "pre_training":
+			#	print("Skipping model standardization in pre_training stage")
+			#elif model_output_path:
+			#	standardized_path = combination_obj.model_format_manager.standardize_model_output(model_output_path, str(tool_output_path))
+			#	if standardized_path:
+			#		logger.debug(f"Model standardized to ONNX format at {standardized_path}")
+			#else:
+			#	logger.debug(f"No model file found in {tool_output_path}, skipping standardization")
+			
 			# Log outputs to json for combination
 			combination_obj.log_tool_output_dir_path(combination, stage, tool.name, tool_output_path)
 			
@@ -617,7 +762,7 @@ class PipelineExecutor:
 			# Copy tool logs (artifact-aware)
 			self._copy_tool_logs(combination, tool, stage, tool_output_path)
 			
-			logger.info(f"{combination}: Tool '{tool.name}' completed successfully.")
+			logger.debug(f"{combination}: Tool '{tool.name}' completed")
 		
 		return
 
@@ -643,17 +788,17 @@ class PipelineExecutor:
 		success_marker = node_dir / ".success"
 
 		if self.artifact_cache.exists(node_hash) and self.settings.use_cache:
-			logger.info(f"[ARTIFACT CACHE HIT] {tool.name} ({stage}) -> {node_hash[:12]}")
+			logger.debug(f"[CACHE HIT] {tool.name} ({stage}) -> {node_hash[:12]}")
 			parent_hashes.append(node_hash)
 			# Record mapping for UI even on cache hit
 			self._record_artifact_mapping(combination_obj.id, stage, tool.name, node_hash, cache_hit=True)
 			return output_dir
 
-		logger.info(f"[ARTIFACT CACHE MISS] {tool.name} ({stage}) -> {node_hash[:12]}")
+		logger.info(f"[{combination_obj.id}] {tool.name}: Cache miss, executing...")
 		lock = self.artifact_cache.lock(node_hash)
 		try:
 			if self.artifact_cache.exists(node_hash) and self.settings.use_cache:
-				logger.info(f"[ARTIFACT CACHE LATE HIT] {tool.name}")
+				logger.debug(f"[CACHE LATE HIT] {tool.name}")
 				parent_hashes.append(node_hash)
 				return output_dir
 
@@ -666,7 +811,7 @@ class PipelineExecutor:
 					failed_attempts_dir.mkdir(exist_ok=True)
 					import time as _time
 					archive_dir = failed_attempts_dir / _time.strftime("%Y%m%d-%H%M%S")
-					archive_dir.mkdir()
+					archive_dir.mkdir(exist_ok=True)
 					for item in ["output", "tool_logs", "failure_reason.txt"]:
 						p = node_dir / item
 						if p.exists():
@@ -682,15 +827,17 @@ class PipelineExecutor:
 			try:
 				gpu_id = self.gpu_allocator.allocate_gpu()
 				# get the docker label for framework and convert the current_input model to that format
-				framework = self.model_format_manager.detect_tool_framework_requirement(tool.config)
+				framework = combination_obj.model_format_manager.detect_tool_framework_requirement(tool)
 				if framework:
 					current_input_path = context.get("current_input")
-					if current_input_path:
-						converted_model_path, updated_tool_config = self.model_format_manager.prepare_model_for_tool(
-							current_input_path, tool.config
-						)
-						tool.config = updated_tool_config
-						#TODO: Check if we need to update path
+					# Only convert models for post-training stages (not pre_training which has datasets)
+					#if current_input_path and stage != "pre_training" and stage != "during_training":
+					#	converted_model_path, _ = combination_obj.model_format_manager.prepare_model_for_tool(
+					#		current_input_path, tool
+					#	)
+					#	# Update context with converted model path
+					#	context["current_input"] = converted_model_path
+					#	logger.info(f"Model converted to {framework} format for tool {tool.name}")
 
 				tool_runner = ToolRunner(
 					self.settings, tool, stage,

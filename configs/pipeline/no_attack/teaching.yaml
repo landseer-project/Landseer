@@ -1,54 +1,57 @@
 dataset:
   name: cifar10
-  link: https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz
-  format: pickle
-  sha1: c58f30108f718f92721af3b95e74349a
-
+  variant: clean
 model:
   script: configs/model/config_model_combined.py
-  
 pipeline:
   pre_training:
-    tools:      
-    - docker:
+    tools:
+    - name: pre-xgbod
+      container:
         command: python3 main.py
         config_script: configs/model/config_model.py
         image: ghcr.io/landseer-project/pre_xgbod:v2
-      name: pre-xgbod
-
     noop:
       name: noop
-      docker:
+      container:
         image: ghcr.io/landseer-project/pre_noop:v1
         command: python main.py
-
   during_training:
     tools:
     - name: in-teaching
-      docker:
-        image: ghcr.io/landseer-project/in_teaching:v4
+      container:
+        image: ghcr.io/landseer-project/in_teaching:v8
         command: python3 main.py
     noop:
       name: in_noop
-      docker:
+      container:
         image: ghcr.io/landseer-project/in_noop:v5
         command: python main.py
-
   post_training:
     tools:
     - name: fine pruning
-      docker:
+      container:
         image: ghcr.io/landseer-project/post_fineprune:v1
         command: python3 main.py --prune-percentage 0.1
+    noop:
+      name: post_noop
+      container:
+        image: ghcr.io/landseer-project/post_noop_new:v1
+        command: python main.py
 
   deployment:
     tools:
-    - name: post_dp
-      docker:
+    - name: deploy_dp
+      container:
         command: python3 main.py
         config_script: configs/model/config_model.py
-        image: ghcr.io/landseer-project/post_dp:v4
+        image: ghcr.io/landseer-project/deploy_dp:v1
     - name: post_magnet
-      docker:
+      container:
         image: ghcr.io/landseer-project/post_magnet:v2
         command: python3 main.py
+    noop:
+      name: deploy_noop
+      container:
+        image: ghcr.io/landseer-project/deploy_noop:v1
+        command: python main.py

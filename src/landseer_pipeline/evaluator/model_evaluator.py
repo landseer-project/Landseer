@@ -14,10 +14,9 @@ from typing import Dict, Optional, Tuple, Any, List
 from pathlib import Path
 
 from landseer_pipeline.evaluator.fingerprinting import evaluate_fingerprinting_mingd
+from landseer_pipeline.evaluator.fairness import evaluate_fairness
 from landseer_pipeline.config import Stage
 from landseer_pipeline.utils import load_config_from_script
-from ..utils.onnx_converter import get_model_framework
-from ..utils.model_format_manager import get_model_format_manager
 
 import torch.nn.functional as F
 
@@ -54,7 +53,8 @@ class ModelEvaluator:
         self.attacks = attacks
         # Use centralized model script (fallback to deprecated per-tool noop config_script if absent)
         self.model_script_path = None
-        self.format_manager = get_model_format_manager()
+        # Note: Model format conversion is now handled by Docker containers during pipeline stages
+        # The evaluator always receives PyTorch models (.pt files)
 
         try:
             if getattr(settings.config, 'model', None):
@@ -77,7 +77,8 @@ class ModelEvaluator:
         if json_path.exists():
             with open(json_path, 'r') as f:
                 paths = json.load(f)
-            model_entry = paths.get("model.onnx", "")
+            # Pipeline now outputs PyTorch models (.pt) instead of ONNX
+            model_entry = paths.get("model.pt", "")
             if isinstance(model_entry, dict):
                 return model_entry.get("source_path", "")
             return model_entry
@@ -222,6 +223,8 @@ class ModelEvaluator:
                 attack_types.add("backdoor")
             elif defense_type_lower == "carlini":
                 attack_types.add("carlini")
+            elif defense_type_lower == "fairness":
+                attack_types.add("fairness")
             else:
                 logger.warning(f"{self.combination_id}: Unknown defense type: {defense_type}, adding general evaluation")
                 attack_types.add("general")
@@ -277,50 +280,20 @@ class ModelEvaluator:
         elif not os.path.exists(model_path):
             logger.error(f"{self.combination_id}: Model path does not exist: {model_path}")
             return {"clean_test_accuracy": 0.0}
-        elif not (isinstance(model_path, str) and (model_path.endswith('.onnx'))):
-            model_path_converted = self._convert_to_pytorch_for_evaluation(model_path, source_format="onnx")
-            if model_path_converted:
-                model_path = model_path_converted
-                logger.info(f"{self.combination_id}: Converted model to PyTorch for evaluation: {model_path}")
-            else:
-                logger.error(f"{self.combination_id}: Failed to convert model to PyTorch for evaluation")
-                return {"clean_test_accuracy": 0.0}
+        
+        # Pipeline now outputs PyTorch models (.pt) - model conversion is handled by Docker containers during stages
+        if not (isinstance(model_path, str) and model_path.endswith('.pt')):
+            logger.error(f"{self.combination_id}: Expected PyTorch model (.pt) but got: {model_path}")
+            return {"clean_test_accuracy": 0.0}
 
         logger.info(f"{self.combination_id}: Evaluating model {model_path} on dataset {dataset_dir}")
         
-        metrics = {}
-        
-        if isinstance(model_path, str) and model_path.endswith('.pt'):
-            metrics = self._evaluate_pytorch_model(applicable_attacks)
-        else:
-            logger.warning(f"{self.combination_id}: Unsupported model format: {model_path}")
-            metrics = {"clean_test_accuracy": 0.0}
+        metrics = self._evaluate_pytorch_model(applicable_attacks)
         
         for name, value in metrics.items():
             logger.info(f"{self.combination_id}: Metric {name}: {value}")
 
         return metrics
-
-    def _convert_to_pytorch_for_evaluation(self, model_path: str, source_format: str) -> Optional[str]:
-        """Convert model to PyTorch for evaluation"""
-        try:
-            temp_pytorch_path = os.path.join(
-                self.format_manager.temp_dir,
-                f"eval_model_{self.combination_id}.pt"
-            )
-            
-            success, _ = self.format_manager.converter.convert_model(
-                model_path, temp_pytorch_path,
-                source_framework=source_format,
-                target_framework="pytorch",
-                model_script_path=self.model_script_path
-            )
-            
-            return temp_pytorch_path if success else None
-            
-        except Exception as e:
-            logger.error(f"Failed to convert {source_format} model to PyTorch: {e}")
-            return None
     
     def _evaluate_pytorch_model(self, applicable_attacks: List[str]):
         """Evaluate PyTorch model with attacks based on defense types"""
@@ -436,6 +409,18 @@ class ModelEvaluator:
                 metrics["privacy_epsilon"] = -1.0
                 metrics["dp_accuracy"] = -1.0
 
+        # Run fairness evaluation if fairness defense detected or sensitive attributes are available
+        if "fairness" in applicable_attacks or self._has_sensitive_attributes():
+            try:
+                dp, deo = self.evaluate_fairness_metrics(model, dataset_path)
+                metrics["demographic_parity"] = dp
+                metrics["equalized_odds_diff"] = deo
+                logger.info(f"{self.combination_id}: Fairness evaluation completed - DP: {dp}, DEO: {deo}")
+            except Exception as e:
+                logger.warning(f"{self.combination_id}: Could not evaluate fairness metrics: {e}")
+                metrics["demographic_parity"] = -1.0
+                metrics["equalized_odds_diff"] = -1.0
+
         return metrics
     
     """ def _evaluate_tensorflow_model(self, model_path: str, dataset_path: str) -> Dict[str, float]:
@@ -528,6 +513,60 @@ class ModelEvaluator:
                 correct += (pred == y).sum().item()
                 total += y.size(0)
         return correct / total if total > 0 else 0.0
+
+    def _has_sensitive_attributes(self) -> bool:
+        """Check if sensitive attributes file exists in the dataset directory"""
+        dataset_path = self.get_dataset_directory_from_paths()
+        if dataset_path:
+            sensitive_path = os.path.join(dataset_path, 'test_sensitive.npy')
+            return os.path.exists(sensitive_path)
+        return False
+
+    def evaluate_fairness_metrics(self, model, dataset_path: str = None) -> Tuple[float, float]:
+        """
+        Evaluate fairness metrics (Demographic Parity and Equalized Odds Difference)
+        
+        Args:
+            model: The trained model to evaluate
+            dataset_path: Path to the dataset directory (optional, uses class property if not provided)
+            
+        Returns:
+            Tuple of (demographic_parity, equalized_odds_difference)
+        """
+        if dataset_path is None:
+            dataset_path = self.get_dataset_directory_from_paths()
+        
+        if not dataset_path:
+            logger.warning(f"{self.combination_id}: No dataset path for fairness evaluation")
+            return -1.0, -1.0
+        
+        # Load test data
+        test_data_path = os.path.join(dataset_path, 'test_data.npy')
+        test_labels_path = os.path.join(dataset_path, 'test_labels.npy')
+        sensitive_path = os.path.join(dataset_path, 'test_sensitive.npy')
+        
+        if not os.path.exists(sensitive_path):
+            logger.warning(f"{self.combination_id}: Sensitive attributes file not found: {sensitive_path}")
+            return -1.0, -1.0
+        
+        try:
+            test_X = torch.tensor(np.load(test_data_path)).float()
+            test_y = torch.tensor(np.load(test_labels_path)).long()
+            sensitive_attrs = np.load(sensitive_path)
+            
+            dp, deo = evaluate_fairness(
+                model=model,
+                test_X=test_X,
+                test_y=test_y,
+                sensitive_attrs=sensitive_attrs,
+                device=self.device,
+                method="fairlearn"
+            )
+            
+            return float(dp), float(deo)
+        except Exception as e:
+            logger.error(f"{self.combination_id}: Error during fairness evaluation: {e}")
+            return -1.0, -1.0
 
     # def evaluate_pgd(self, model, loader):
     #     model.eval()

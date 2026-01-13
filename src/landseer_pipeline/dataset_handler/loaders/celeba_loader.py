@@ -7,6 +7,9 @@ from sklearn.model_selection import train_test_split
 from kaggle.api.kaggle_api_extended import KaggleApi
 import torchvision.transforms as transforms
 
+# Dataset properties
+INPUT_SHAPE = (1, 3, 218, 178)  # (batch_size, channels, height, width)
+
 def load_dataset(output_dir, download_dir, attribute='Smiling', test_size=0.2, random_state=42):
     """
     Downloads CelebA dataset from Kaggle, loads and splits it based on a selected attribute,
