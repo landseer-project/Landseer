@@ -98,11 +98,38 @@ landseer-pipeline/
    export GHCR_TOKEN=your_github_token
    ```
 
+5. **(Optional) Set up MySQL Database for Results**
+   
+   For easier querying and analysis of pipeline results, you can enable MySQL storage.
+   See [Database Setup Instructions](docs/DATABASE_SETUP.md) for details.
+   
+   Quick start with Docker:
+   ```bash
+   # Start MySQL container
+   docker run -d --name landseer-mysql \
+     -e MYSQL_ROOT_PASSWORD=rootpass \
+     -e MYSQL_DATABASE=landseer_pipeline \
+     -e MYSQL_USER=landseer \
+     -e MYSQL_PASSWORD=landseer \
+     -p 3306:3306 \
+     mysql:8.0
+   
+   # Apply schema
+   docker exec -i landseer-mysql mysql -u landseer -plandseer landseer_pipeline \
+     < src/landseer_pipeline/database/schema.sql
+   
+   # Enable database logging
+   source .env.db
+   ```
+
 ## Usage
 
 ### Basic Pipeline Execution
 
 ```bash
+# (Optional) Enable MySQL database logging
+source .env.db
+
 # Run pipeline with configuration files
 poetry run landseer -c configs/pipeline/test_config.yaml -a configs/attack/test_config_1.yaml
 
@@ -171,8 +198,19 @@ All experiment results are stored in the `results/` directory, containing metric
    pipeline_id,combination,stage,tool_name,cache_key,duration_sec,status,output_path
    ```
 
+3. **MySQL Database** (if enabled): Results are also stored in MySQL for SQL querying.
+   See [Database Setup Instructions](docs/DATABASE_SETUP.md) for query examples.
+
 ## Public Defense Docker Images
 
 Landseer provides all defense modules as pre-built Docker images hosted at:
 
 * `ghcr.io/landseer-project/`
+### Model Converter Images
+
+For cross-framework interoperability, Landseer provides dedicated model converter containers:
+
+* `ghcr.io/landseer-project/model_converter_pytorch_to_other:v1` - Converts PyTorch models to ONNX or TensorFlow format
+* `ghcr.io/landseer-project/model_converter_other_to_pytorch:v1` - Converts TensorFlow or ONNX models to PyTorch format
+
+These converters are automatically invoked when pipeline tools require different model formats, eliminating the need for heavy ML package dependencies in the main Landseer environment.

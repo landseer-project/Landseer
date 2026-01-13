@@ -48,6 +48,18 @@ class DatasetManager:
     def dataset_dir_source(self) -> Path:
         target_file = Path(self.dataset_dir) / "extracted_dataset"
         return Path(target_file / os.listdir(target_file)[0])
+    
+    def get_input_shape(self):
+        """Get input shape from dataset loader module"""
+        try:
+            if hasattr(self.loader_module, 'INPUT_SHAPE'):
+                return self.loader_module.INPUT_SHAPE
+            else:
+                logger.warning(f"Dataset loader '{self.dataset_name}' does not define INPUT_SHAPE")
+                return None
+        except Exception as e:
+            logger.warning(f"Failed to get input shape from dataset loader: {e}")
+            return None
 
     def prepare_dataset(self):
         logger.info(f"Preparing dataset ...")

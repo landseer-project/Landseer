@@ -6,6 +6,9 @@ import torch
 import torchvision
 import torchvision.transforms as transforms
 
+# Dataset properties
+INPUT_SHAPE = (1, 3, 32, 32)  # (batch_size, channels, height, width)
+
 def load_dataset(output_dir: str, download_dir: str):
     
     output_dir = os.path.abspath(output_dir)

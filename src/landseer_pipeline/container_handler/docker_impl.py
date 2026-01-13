@@ -16,7 +16,7 @@ from .base import ContainerConfig, ContainerRunner, ContainerImageUtils
 
 # Only import docker utils if docker is available
 if DOCKER_AVAILABLE:
-    from landseer_pipeline.utils.docker import get_labels_from_image, get_image_digest
+    from landseer_pipeline.container_handler.docker import get_labels_from_image, get_image_digest
 
 logger = logging.getLogger(__name__)
 
@@ -78,8 +78,9 @@ class DockerRunner(ContainerRunner):
         if not DOCKER_AVAILABLE:
             raise RuntimeError("Docker is not available on this system. Please install Docker or use Apptainer.")
         super().__init__(settings)
-        self.client = docker.from_env()
-        logger.info(f"Using Docker with device: {self.device}")
+        # Increase timeout for large datasets like CelebA (200k+ images)
+        self.client = docker.from_env(timeout=600)  # 10 minute timeout
+        logger.debug(f"DockerRunner initialized with device: {self.device}")
     
     def run_container(self, 
                      image_name: str, 
@@ -93,26 +94,31 @@ class DockerRunner(ContainerRunner):
         
         container = None
         
-        device_requests = None
+        # Use nvidia runtime instead of device_requests to avoid CDI conflicts
+        runtime = None
         if self.device == "cuda":
-            device_requests = [docker.types.DeviceRequest(
-                count=-1, capabilities=[["gpu"]])]
+            runtime = "nvidia"
         
         try:
             combo_prefix = f"{combination_id}: " if combination_id else ""
-            logger.debug(f"{combo_prefix}Running Docker container: {image_name}")
-            container = self.client.containers.run(
-                image_name,
-                command=command,
-                environment=environment,
-                volumes=volumes,
-                detach=True,
-                tty=True,
-                stdout=True,
-                stderr=True,
-                working_dir="/app",  # Set working directory to /app where main.py is located
-                device_requests=device_requests,
-            )
+            logger.debug(f"{combo_prefix}Running Docker container: {image_name} with runtime={runtime}")
+            
+            run_kwargs = {
+                'command': command,
+                'environment': environment,
+                'volumes': volumes,
+                'detach': True,
+                'tty': True,
+                'stdout': True,
+                'stderr': True,
+                'working_dir': "/app",  # Set working directory to /app where main.py is located
+                'shm_size': '2g',  # Increase shared memory for PyTorch DataLoader workers
+            }
+            
+            if runtime:
+                run_kwargs['runtime'] = runtime
+            
+            container = self.client.containers.run(image_name, **run_kwargs)
             result = container.wait()
             exit_code = result.get("StatusCode", 0)
             logs = container.logs(stdout=True, stderr=True).decode('utf-8')

@@ -20,7 +20,8 @@ class CacheManager:
 
     def get_cache_path(self, cache_key: str) -> Path:
         """Get the path to the cache directory for a given cache key."""
-        return self.settings.output_dir / cache_key
+        # Use artifact_store subdirectory to keep cache organized
+        return self.settings.output_dir / "artifact_store" / cache_key
 
     def is_cached(self, cache_key: str) -> bool:
         """Check if the output for the given cache key exists."""
@@ -43,7 +44,8 @@ class CacheManager:
         }
         json_str = json.dumps(data, sort_keys=True)
         hash_val = hashlib.sha256(json_str.encode()).hexdigest()
-        cache_dir = self.settings.output_dir / hash_val
+        # Use artifact_store subdirectory
+        cache_dir = self.settings.output_dir / "artifact_store" / hash_val
 
         if not cache_dir.exists():
             cache_dir.mkdir(parents=True, exist_ok=True)

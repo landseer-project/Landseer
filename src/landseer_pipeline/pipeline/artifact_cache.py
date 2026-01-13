@@ -26,7 +26,7 @@ import stat
 import os
 
 from landseer_pipeline.utils.files import hash_file
-from landseer_pipeline.utils.docker import get_image_digest
+from landseer_pipeline.container_handler.docker import get_image_digest
 
 try:
 	from landseer_pipeline.config import ToolConfig  # type: ignore
@@ -132,9 +132,15 @@ class ArtifactCache:
 	# ---------------- Manifest ----------------------
 	def write_success(self, h: str, manifest: dict):
 		node_dir = self.path_for(h)
+		success_marker = node_dir / ".success"
+		
+		# Idempotent: if already marked successful, don't re-write (files are read-only)
+		if success_marker.exists():
+			return
+		
 		node_dir.mkdir(parents=True, exist_ok=True)
 		(node_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
-		(node_dir / ".success").touch()
+		success_marker.touch()
 		# Harden: mark files read-only to avoid accidental rewrites
 		try:
 			for p in node_dir.rglob("*"):

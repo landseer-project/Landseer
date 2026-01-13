@@ -72,7 +72,8 @@ class ToolRunner:
 
     def create_input_directory(self) -> Path:
         """Create a temporary input directory populated with selected files from provenance.
-        Falls back to current_input (dataset) if no provenance yet (first stage)."""
+        Falls back to current_input (dataset) if no provenance yet (first stage).
+        Also includes additional dataset files (like filenames.npy) that tools may need."""
         provenance = self._load_provenance()
         if not provenance:
             return merge_directories(self.context["current_input"], self.context["dataset_dir"])
@@ -82,6 +83,22 @@ class ToolRunner:
         if staging_dir.exists():
             shutil.rmtree(staging_dir)
         staging_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Also include additional .npy files from dataset that may be needed (e.g., filenames.npy)
+        dataset_dir = Path(self.context.get("dataset_dir", ""))
+        if dataset_dir.exists():
+            for npy_file in dataset_dir.glob("*.npy"):
+                if npy_file.name not in [Path(name).name for name in selected.keys()]:
+                    dest = staging_dir / npy_file.name
+                    if not dest.exists():
+                        try:
+                            os.link(npy_file, dest)
+                        except OSError as e:
+                            if e.errno in (errno.EXDEV, errno.EPERM, errno.EACCES):
+                                shutil.copy2(npy_file, dest)
+                            else:
+                                raise
+        
         for name, src in selected.items():
             if not src.exists() or not src.is_file():
                 continue
@@ -205,9 +222,13 @@ class ToolRunner:
                 tool_log_path = os.path.join(
                     output_dir_path,"..", "tool_logs",
                 f"{stage}_{tool_name.replace(' ', '_')}.log")
-                os.makedirs(os.path.dirname(tool_log_path), exist_ok=True)
-                with open(tool_log_path, "w") as f:
-                    f.write(logs)
+                try:
+                    os.makedirs(os.path.dirname(tool_log_path), exist_ok=True)
+                    with open(tool_log_path, "w") as f:
+                        f.write(logs)
+                except (PermissionError, OSError) as e:
+                    # Log directory may be read-only if another worker already completed this artifact
+                    logger.debug(f"{self.combination_id}/{tool_name}: Could not write log file (may be read-only): {e}")
             
             if exit_code != 0:
                 raise RuntimeError(
