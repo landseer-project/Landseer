@@ -1,0 +1,13 @@
+cache/
+data/
+results/
+logs/
+tools/
+
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+.env*
+
