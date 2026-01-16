@@ -8,6 +8,10 @@ tools/
 venv/
 __pycache__/
 *.pyc
-
+*.csv
+*.lock
 .env*
+*.log
+*.csv
 
+deviation_*

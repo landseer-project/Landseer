@@ -3,37 +3,31 @@ dataset:
   link: https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz
   format: pickle
   sha1: c58f30108f718f92721af3b95e74349a
-
 model:
   script: configs/model/config_model_combined.py
   params: {}
-  
 pipeline:
   pre_training:
     noop:
       name: noop
-      docker:
+      container:
         image: ghcr.io/landseer-project/pre_noop:v1
         command: python main.py
-
   during_training:
     noop:
       name: tensorflow_noop
-      docker:
-        # Updated to use TensorFlow noop image
+      container:
         image: ghcr.io/landseer-project/in_noop_tensorflow:v1
         command: python main.py
-
   post_training:
     noop:
       name: post_noop
-      docker:
+      container:
         image: ghcr.io/landseer-project/post_noop:v1
         command: python main.py
-
   deployment:
     noop:
       name: deploy_noop
-      docker:
+      container:
         image: ghcr.io/landseer-project/deploy_noop:v1
         command: python main.py
