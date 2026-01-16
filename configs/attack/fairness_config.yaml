@@ -1,0 +1,23 @@
+# Fairness Evaluation Attack Configuration
+# Enables fairness metrics evaluation (demographic parity and equalized odds)
+
+attacks:
+  backdoor: False
+  adversarial: False
+  outlier: False
+  carlini: False
+  watermarking: False
+  fingerprinting: False
+  inference: False
+  fairness: True
+  other: False
+
+# Fairness-specific settings
+fairness:
+  enabled: true
+  method: fairlearn           # Options: fairlearn, custom
+  metrics:
+    - demographic_parity
+    - equalized_odds
+  # Sensitive attributes file will be created by the fairness tool (in_fair)
+  # Default: test_sensitive.npy in the dataset directory

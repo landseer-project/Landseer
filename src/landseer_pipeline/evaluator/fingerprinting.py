@@ -4,9 +4,9 @@ import torch.nn.functional as F
 import logging
 
 logger = logging.getLogger(__name__)
-
+# === MINGD Attack (Dataset Attribution) ===
 def loss_mingd(preds, target):
-    return (preds.max(dim=1)[0] - preds[torch.arange(preds.shape[0]), target]).mean()
+    return (preds.max(dim=1)[0] - preds[torch.arange(preds.shape[0], device=preds.device), target]).mean()
 
 def mingd(model, X, y, target, alpha=0.01, num_iter=20):
     model.eval()
@@ -20,15 +20,30 @@ def mingd(model, X, y, target, alpha=0.01, num_iter=20):
         delta.grad.zero_()
     return delta.detach()
 
-def evaluate_fingerprinting_mingd(model, dataloader):
-    model.cuda()
+# === Evaluation Logic ===
+def evaluate_fingerprinting_mingd(model, dataloader, device=None):
+    """
+    Evaluate fingerprinting using MINGD attack.
+    
+    Args:
+        model: PyTorch model to evaluate
+        dataloader: DataLoader with test data
+        device: Device to use (e.g., 'cuda:0', 'cuda:1'). If None, uses model's device.
+    """
+    # Determine device from model if not specified
+    if device is None:
+        device = next(model.parameters()).device
+    elif isinstance(device, str):
+        device = torch.device(device)
+    
+    model = model.to(device)
     model.eval()
     total = 0
     correct_clean = 0
     correct_mingd = 0
 
     for X, y in dataloader:
-        X, y = X.cuda(), y.cuda()
+        X, y = X.to(device), y.to(device)
         total += X.size(0)
 
         # Clean prediction
