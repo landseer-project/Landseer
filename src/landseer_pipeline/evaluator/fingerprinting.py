@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import logging
 
 logger = logging.getLogger(__name__)
-# === MINGD Attack (Dataset Attribution) ===
+
 def loss_mingd(preds, target):
     return (preds.max(dim=1)[0] - preds[torch.arange(preds.shape[0], device=preds.device), target]).mean()
 
