@@ -1070,9 +1070,6 @@ class ModelEvaluator:
         return -1.0
         
     def _parse_privacy_params(self, params_file: Path) -> float:
-        # epsilon=3.0
-        # delta=1e-05
-        # dp_accuracy=0.1017
         try:
             with open(params_file, 'r') as f:
                 for line in f:
