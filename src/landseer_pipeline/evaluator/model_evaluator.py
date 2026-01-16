@@ -360,7 +360,7 @@ class ModelEvaluator:
             ood_auc = self.evaluate_outlier(model, clean_test_loader, ood_loader)
             metrics["ood_auc"] = ood_auc
             metrics["mia_auc"], metrics["eps_estimate"] = self.margin_auc_from_loaders(model, clean_train_loader, clean_test_loader, delta_dp=1e-5, device=self.device)
-            fingerprint_score = evaluate_fingerprinting_mingd(model, clean_test_loader)
+            fingerprint_score = evaluate_fingerprinting_mingd(model, clean_test_loader, device=self.device)
             metrics["fingerprinting"] = fingerprint_score
             logger.info(f"{self.combination_id}: Fingerprinting evaluation completed: {fingerprint_score}")
 
@@ -384,7 +384,7 @@ class ModelEvaluator:
             metrics["fingerprinting"] = -1.0
         # Run fingerprinting if fingerprinting defense detected
         
-        # Run watermarking evaluation if watermarking defense detected
+        # Run watermarking evaluation if watermarkigdefense detected
         if "watermark" in applicable_attacks:
             try:
                 watermark_accuracy = self.evaluate_watermark(model)
