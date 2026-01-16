@@ -34,14 +34,16 @@ Landseer is a modular framework to systematically explore, compose, and evaluate
 
 ```
 landseer-pipeline/
-├── src/landseer_pipeline/
-│   ├── config/                 # Configuration management
-│   ├── dataset_handler/        # Dataset loading and preprocessing
-│   ├── docker_handler/         # Docker container management
-│   ├── evaluator/             # Model evaluation and metrics
-│   ├── pipeline/              # Pipeline execution logic
-│   ├── tools/                 # Tool execution framework
-│   └── utils/                 # Utilities (logging, GPU, files)
+├── src/
+|   ├── landseer_pipeline/
+│      ├── config/                 # Configuration management
+│      ├── dataset_handler/        # Dataset loading and preprocessing
+│      ├── docker_handler/         # Docker container management
+│      ├── evaluator/             # Model evaluation and metrics
+│      ├── pipeline/              # Pipeline execution logic
+│      ├── tools/                 # Tool execution framework
+│      └── utils/                 # Utilities (logging, GPU, files)
+|   └── landseer_ui/              
 ├── configs/
 │   ├── pipeline/              # Pipeline configuration files
 │   ├── attack/                # Attack configuration files
@@ -96,22 +98,43 @@ landseer-pipeline/
    export GHCR_TOKEN=your_github_token
    ```
 
+5. **(Optional) Set up MySQL Database for Results**
+   
+   For easier querying and analysis of pipeline results, you can enable MySQL storage.
+   See [Database Setup Instructions](docs/DATABASE_SETUP.md) for details.
+   
+   Quick start with Docker:
+   ```bash
+   # Start MySQL container
+   docker run -d --name landseer-mysql \
+     -e MYSQL_ROOT_PASSWORD=rootpass \
+     -e MYSQL_DATABASE=landseer_pipeline \
+     -e MYSQL_USER=landseer \
+     -e MYSQL_PASSWORD=landseer \
+     -p 3306:3306 \
+     mysql:8.0
+   
+   # Apply schema
+   docker exec -i landseer-mysql mysql -u landseer -plandseer landseer_pipeline \
+     < src/landseer_pipeline/database/schema.sql
+   
+   # Enable database logging
+   source .env.db
+   ```
+
 ## Usage
 
 ### Basic Pipeline Execution
 
 ```bash
+# (Optional) Enable MySQL database logging
+source .env.db
+
 # Run pipeline with configuration files
 poetry run landseer -c configs/pipeline/test_config.yaml -a configs/attack/test_config_1.yaml
 
-# With custom output directory
-poetry run landseer -c configs/pipeline/test_config.yaml -a configs/attack/test_config_1.yaml -o ./my_results
-
-# Disable caching (run all tools fresh)
-poetry run landseer -c configs/pipeline/test_config.yaml -a configs/attack/test_config_1.yaml --no-cache
-
-# CPU-only execution
-poetry run landseer -c configs/pipeline/test_config.yaml -a configs/attack/test_config_1.yaml --no-gpu
+# to spin up web interface
+poetry run uvicorn landseer_ui.server:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ### Configuration Options
@@ -119,23 +142,34 @@ poetry run landseer -c configs/pipeline/test_config.yaml -a configs/attack/test_
 **Pipeline Configuration** (`configs/pipeline/*.yaml`):
 ```yaml
 dataset:
-  name: cifar10
-  link: https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz
-  format: pickle
-  sha1: c58f30108f718f92721af3b95e74349a
+  name: cifar10                    # Required: Dataset name (cifar10, mnist, celeba, etc.)
+  variant: clean                   # Optional: clean, poisoned (default: clean)
+  version: "1.0"                   # Optional: Dataset version
+  params:                          # Optional: Dataset-specific parameters
+    subset_size: 1000
+    seed: 42
+    poison_fraction: 0.1
 
+# Model Configuration  
+model:
+  script: /path/to/model_config.py # Required: Path to model definition script
+  framework: pytorch               # Required: pytorch, tensorflow, etc.
+  params:                          # Optional: Model hyperparameters
+    learning_rate: 0.001
+    batch_size: 32
+    epochs: 100
+
+# Pipeline Stages Configuration
 pipeline:
+  # Pre-training stage (data preprocessing, outlier detection, etc.)
   pre_training:
     tools:
-      - name: feature-squeeze
-        docker:
-          image: ghcr.io/landseer-project/pre_squeeze:v1
-          command: python main.py --bit-depth 4
-    noop:
-      name: noop
+    - name: pre_xgbod              # Tool name
       docker:
-        image: ghcr.io/landseer-project/pre_noop:v1
-        command: python main.py
+        image: ghcr.io/landseer-project/pre_xgbod:v2
+        command: python3 main.py
+        config_script: configs/model/config_model.py  # Optional: tool-specific model config
+      auxiliar
   # ... during_training and post_training sections
 ```
 
@@ -164,8 +198,19 @@ All experiment results are stored in the `results/` directory, containing metric
    pipeline_id,combination,stage,tool_name,cache_key,duration_sec,status,output_path
    ```
 
+3. **MySQL Database** (if enabled): Results are also stored in MySQL for SQL querying.
+   See [Database Setup Instructions](docs/DATABASE_SETUP.md) for query examples.
+
 ## Public Defense Docker Images
 
 Landseer provides all defense modules as pre-built Docker images hosted at:
 
 * `ghcr.io/landseer-project/`
+### Model Converter Images
+
+For cross-framework interoperability, Landseer provides dedicated model converter containers:
+
+* `ghcr.io/landseer-project/model_converter_pytorch_to_other:v1` - Converts PyTorch models to ONNX or TensorFlow format
+* `ghcr.io/landseer-project/model_converter_other_to_pytorch:v1` - Converts TensorFlow or ONNX models to PyTorch format
+
+These converters are automatically invoked when pipeline tools require different model formats, eliminating the need for heavy ML package dependencies in the main Landseer environment.

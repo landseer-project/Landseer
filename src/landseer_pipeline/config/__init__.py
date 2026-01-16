@@ -1,4 +1,4 @@
 from landseer_pipeline.config.settings import Settings
-from landseer_pipeline.config.schemas.pipeline import PipelineStructure, Stage, ToolConfig, DockerConfig
+from landseer_pipeline.config.schemas.pipeline import PipelineStructure, Stage, ToolConfig, ContainerConfig
 from landseer_pipeline.config.schemas.attack import AttackSchema
 from landseer_pipeline.config.loaders import validate_and_load_pipeline_config, validate_and_load_attack_config

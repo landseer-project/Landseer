@@ -1,0 +1,1501 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <title>Landseer Pipeline Explorer</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+      margin: 0;
+      padding: 1rem;
+      background: #f8f9fa;
+    }
+
+    .header {
+      background: white;
+      padding: 1rem;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      margin-bottom: 1rem;
+    }
+
+    .header h1 {
+      margin: 0;
+      color: #495057;
+    }
+
+    .controls {
+      display: flex;
+      gap: 1rem;
+      margin: 1rem 0;
+      flex-wrap: wrap;
+    }
+
+    .control-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+    }
+
+    .control-group label {
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: #495057;
+    }
+
+    .control-group select,
+    .control-group input {
+      padding: 0.5rem;
+      border: 1px solid #ced4da;
+      border-radius: 4px;
+      font-size: 0.875rem;
+    }
+
+    .main-content {
+      display: grid;
+      grid-template-columns: 1fr 2fr;
+      gap: 1rem;
+      height: calc(100vh - 200px);
+    }
+
+    .runs-panel,
+    .details-panel {
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .panel-header {
+      padding: 1rem;
+      background: #f8f9fa;
+      border-bottom: 1px solid #dee2e6;
+      font-weight: 600;
+      color: #495057;
+    }
+
+    .panel-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0;
+    }
+
+    .run-item {
+      display: flex;
+      align-items: stretch;
+      border-bottom: 1px solid #dee2e6;
+      transition: background-color 0.15s;
+    }
+
+    .run-content {
+      flex: 1;
+      padding: 1rem;
+      cursor: pointer;
+    }
+
+    .run-actions {
+      display: flex;
+      align-items: center;
+      padding: 0.5rem;
+      border-left: 1px solid #dee2e6;
+    }
+
+    .delete-btn {
+      background: none;
+      border: none;
+      padding: 0.25rem;
+      cursor: pointer;
+      border-radius: 3px;
+      font-size: 0.9rem;
+      color: #dc3545;
+      transition: all 0.15s;
+      opacity: 0.7;
+    }
+
+    .delete-btn:hover {
+      background: #f8d7da;
+      opacity: 1;
+      transform: scale(1.05);
+    }
+
+    .delete-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .run-item:hover {
+      background: #f8f9fa;
+    }
+
+    .run-item.selected .run-content {
+      background: #e7f3ff;
+      border-left: 4px solid #0066cc;
+    }
+
+    .run-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: start;
+      margin-bottom: 0.5rem;
+    }
+
+    .run-id {
+      font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: #495057;
+    }
+
+    .timestamp {
+      font-size: 0.75rem;
+      color: #6c757d;
+    }
+
+    .run-meta {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.5rem;
+      font-size: 0.75rem;
+    }
+
+    .meta-item {
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .meta-label {
+      color: #6c757d;
+    }
+
+    .meta-value {
+      color: #495057;
+      font-weight: 500;
+    }
+
+    .status-badges {
+      display: flex;
+      gap: 0.25rem;
+      margin-top: 0.5rem;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 0.25rem 0.5rem;
+      font-size: 0.625rem;
+      font-weight: 600;
+      border-radius: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.025em;
+    }
+
+    .badge.success {
+      background: #d4edda;
+      color: #155724;
+    }
+
+    .badge.failure {
+      background: #f8d7da;
+      color: #721c24;
+    }
+
+    .badge.total {
+      background: #e2e3e5;
+      color: #495057;
+    }
+
+    .details-content {
+      padding: 1rem;
+    }
+
+    .detail-section {
+      margin-bottom: 1.5rem;
+    }
+
+    .detail-section h3 {
+      margin: 0 0 0.75rem 0;
+      color: #495057;
+      font-size: 1rem;
+      font-weight: 600;
+    }
+
+    .config-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+
+    .config-item {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+
+    .config-label {
+      font-size: 0.75rem;
+      color: #6c757d;
+      font-weight: 500;
+    }
+
+    .config-value {
+      font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+      font-size: 0.875rem;
+      color: #495057;
+      padding: 0.5rem;
+      background: #f8f9fa;
+      border-radius: 4px;
+    }
+
+    .tools-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 0.75rem;
+    }
+
+    .tool-stage {
+      border: 1px solid #dee2e6;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .stage-header {
+      padding: 0.5rem 0.75rem;
+      background: #f8f9fa;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: #495057;
+      text-transform: uppercase;
+      letter-spacing: 0.025em;
+    }
+
+    .stage-tools {
+      padding: 0.5rem 0.75rem;
+      font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+      font-size: 0.75rem;
+      color: #495057;
+    }
+
+    .combinations-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 1rem;
+    }
+
+    .combinations-table th,
+    .combinations-table td {
+      padding: 0.5rem;
+      text-align: left;
+      border-bottom: 1px solid #dee2e6;
+      font-size: 0.75rem;
+    }
+
+    .combinations-table th {
+      background: #f8f9fa;
+      font-weight: 600;
+      color: #495057;
+    }
+
+    .combination-row {
+      cursor: pointer;
+      transition: background-color 0.15s;
+    }
+
+    .combination-row:hover {
+      background: #f8f9fa;
+    }
+
+    .combination-row.success {
+      border-left: 3px solid #28a745;
+    }
+
+    .combination-row.failure {
+      border-left: 3px solid #dc3545;
+    }
+
+    .loading {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+      color: #6c757d;
+    }
+
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem;
+      color: #6c757d;
+      text-align: center;
+    }
+
+    .tabs {
+      display: flex;
+      border-bottom: 1px solid #dee2e6;
+    }
+
+    .tab {
+      padding: 0.75rem 1rem;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      color: #6c757d;
+      font-weight: 500;
+      transition: all 0.15s;
+    }
+
+    .tab:hover {
+      color: #495057;
+    }
+
+    .tab.active {
+      color: #0066cc;
+      border-bottom-color: #0066cc;
+    }
+
+    .tab-content {
+      display: none;
+      padding: 1rem;
+    }
+
+    .tab-content.active {
+      display: block;
+    }
+
+    .log-viewer {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .log-selector {
+      padding: 1rem;
+      border-bottom: 1px solid #dee2e6;
+      background: #f8f9fa;
+    }
+
+    .log-selector select {
+      width: 100%;
+      padding: 0.5rem;
+      border: 1px solid #ced4da;
+      border-radius: 4px;
+    }
+
+    .log-content {
+      flex: 1;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .log-header {
+      padding: 0.75rem 1rem;
+      background: #f8f9fa;
+      border-bottom: 1px solid #dee2e6;
+      font-size: 0.875rem;
+      color: #6c757d;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .log-text {
+      flex: 1;
+      padding: 1rem;
+      font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+      font-size: 0.75rem;
+      line-height: 1.4;
+      background: #1e1e1e;
+      color: #d4d4d4;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .log-text.error {
+      color: #f48771;
+    }
+
+    .log-loading {
+      padding: 2rem;
+      text-align: center;
+      color: #6c757d;
+    }
+
+    .log-actions {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .log-actions button {
+      padding: 0.25rem 0.5rem;
+      font-size: 0.75rem;
+      border: 1px solid #ced4da;
+      border-radius: 3px;
+      background: white;
+      cursor: pointer;
+      color: #495057;
+    }
+
+    .log-actions button:hover {
+      background: #f8f9fa;
+    }
+
+    .log-meta {
+      font-size: 0.75rem;
+      color: #6c757d;
+    }
+
+    /* Metrics Styles */
+    .metrics-summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+
+    .metric-card {
+      background: white;
+      border: 1px solid #dee2e6;
+      border-radius: 8px;
+      padding: 1rem;
+      text-align: center;
+    }
+
+    .metric-value {
+      font-size: 1.5rem;
+      font-weight: 600;
+      color: #495057;
+      margin-bottom: 0.25rem;
+    }
+
+    .metric-label {
+      font-size: 0.875rem;
+      color: #6c757d;
+      text-transform: uppercase;
+      letter-spacing: 0.025em;
+    }
+
+    .metric-card.success .metric-value {
+      color: #28a745;
+    }
+
+    .metric-card.warning .metric-value {
+      color: #ffc107;
+    }
+
+    .metric-card.danger .metric-value {
+      color: #dc3545;
+    }
+
+    .metrics-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 1rem;
+      background: white;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+
+    .metrics-table th,
+    .metrics-table td {
+      padding: 0.75rem;
+      text-align: left;
+      border-bottom: 1px solid #dee2e6;
+      font-size: 0.875rem;
+    }
+
+    .metrics-table th {
+      background: #f8f9fa;
+      font-weight: 600;
+      color: #495057;
+    }
+
+    .metrics-table tr:hover {
+      background: #f8f9fa;
+    }
+
+    .metric-good {
+      color: #28a745;
+      font-weight: 500;
+    }
+
+    .metric-bad {
+      color: #dc3545;
+      font-weight: 500;
+    }
+
+    .metric-neutral {
+      color: #6c757d;
+    }
+
+    .metrics-section {
+      margin-bottom: 2rem;
+    }
+
+    .metrics-section h3 {
+      margin: 0 0 1rem 0;
+      color: #495057;
+      font-size: 1.1rem;
+      font-weight: 600;
+      border-bottom: 2px solid #dee2e6;
+      padding-bottom: 0.5rem;
+    }
+
+    @media (max-width: 768px) {
+      .main-content {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr;
+      }
+
+      .config-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .tools-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="header">
+    <h1>🔬 Landseer Pipeline Explorer</h1>
+    <div class="controls">
+      <div class="control-group">
+        <label for="sort-select">Sort by</label>
+        <select id="sort-select">
+          <option value="timestamp">Latest First</option>
+          <option value="config">Configuration</option>
+          <option value="dataset">Dataset</option>
+          <option value="tools">Tools</option>
+        </select>
+      </div>
+      <div class="control-group">
+        <label for="filter-config">Filter by Config</label>
+        <select id="filter-config">
+          <option value="">All Configs</option>
+        </select>
+      </div>
+      <div class="control-group">
+        <label for="filter-dataset">Filter by Dataset</label>
+        <select id="filter-dataset">
+          <option value="">All Datasets</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="main-content">
+    <div class="runs-panel">
+      <div class="panel-header">Pipeline Runs</div>
+      <div class="panel-content" id="runs-list">
+        <div class="loading">Loading runs...</div>
+      </div>
+    </div>
+
+    <div class="details-panel">
+      <div class="tabs">
+        <div class="tab active" data-tab="overview">Overview</div>
+        <div class="tab" data-tab="combinations">Combinations</div>
+        <div class="tab" data-tab="metrics">Metrics</div>
+        <div class="tab" data-tab="artifacts">Artifacts</div>
+        <div class="tab" data-tab="logs">Logs</div>
+      </div>
+
+      <div class="panel-content">
+        <div class="tab-content active" id="tab-overview">
+          <div class="empty-state">
+            <div style="font-size: 2rem; margin-bottom: 0.5rem;">📊</div>
+            <div>Select a pipeline run to view details</div>
+          </div>
+        </div>
+
+        <div class="tab-content" id="tab-combinations">
+          <div class="empty-state">
+            <div style="font-size: 2rem; margin-bottom: 0.5rem;">🔗</div>
+            <div>Select a run to view combinations</div>
+          </div>
+        </div>
+
+        <div class="tab-content" id="tab-metrics">
+          <div class="empty-state">
+            <div style="font-size: 2rem; margin-bottom: 0.5rem;">📈</div>
+            <div>Select a run to view metrics</div>
+          </div>
+        </div>
+
+        <div class="tab-content" id="tab-artifacts">
+          <div class="empty-state">
+            <div style="font-size: 2rem; margin-bottom: 0.5rem;">📦</div>
+            <div>Select a combination to view artifacts</div>
+          </div>
+        </div>
+
+        <div class="tab-content" id="tab-logs">
+          <div class="empty-state">
+            <div style="font-size: 2rem; margin-bottom: 0.5rem;">📄</div>
+            <div>Select a combination to view logs</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let allRuns = [];
+    let currentRun = null;
+    let currentCombinations = [];
+
+    // Initialize
+    document.addEventListener('DOMContentLoaded', () => {
+      loadRuns();
+      setupEventListeners();
+    });
+
+    function setupEventListeners() {
+      document.getElementById('sort-select').addEventListener('change', (e) => {
+        loadRuns(e.target.value);
+      });
+
+      document.getElementById('filter-config').addEventListener('change', filterRuns);
+      document.getElementById('filter-dataset').addEventListener('change', filterRuns);
+
+      // Tab switching
+      document.querySelectorAll('.tab').forEach(tab => {
+        tab.addEventListener('click', (e) => {
+          switchTab(e.target.dataset.tab);
+        });
+      });
+    }
+
+    function switchTab(tabName) {
+      // Update tab buttons
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
+
+      // Update tab content
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      document.getElementById(`tab-${tabName}`).classList.add('active');
+    }
+
+    async function loadRuns(sortBy = 'timestamp') {
+      try {
+        const response = await fetch(`/api/runs?sort_by=${sortBy}`);
+        allRuns = await response.json();
+        populateFilters();
+        renderRuns(allRuns);
+      } catch (error) {
+        console.error('Error loading runs:', error);
+        document.getElementById('runs-list').innerHTML = '<div class="empty-state">Error loading runs</div>';
+      }
+    }
+
+    function populateFilters() {
+      const configFilter = document.getElementById('filter-config');
+      const datasetFilter = document.getElementById('filter-dataset');
+
+      // Get unique configs and datasets
+      const configs = [...new Set(allRuns.map(r => r.config_file).filter(Boolean))];
+      const datasets = [...new Set(allRuns.map(r => r.dataset).filter(Boolean))];
+
+      // Clear and repopulate
+      configFilter.innerHTML = '<option value="">All Configs</option>';
+      datasetFilter.innerHTML = '<option value="">All Datasets</option>';
+
+      configs.forEach(config => {
+        configFilter.innerHTML += `<option value="${config}">${config}</option>`;
+      });
+
+      datasets.forEach(dataset => {
+        datasetFilter.innerHTML += `<option value="${dataset}">${dataset}</option>`;
+      });
+    }
+
+    function filterRuns() {
+      const configFilter = document.getElementById('filter-config').value;
+      const datasetFilter = document.getElementById('filter-dataset').value;
+
+      const filtered = allRuns.filter(run => {
+        const configMatch = !configFilter || run.config_file === configFilter;
+        const datasetMatch = !datasetFilter || run.dataset === datasetFilter;
+        return configMatch && datasetMatch;
+      });
+
+      renderRuns(filtered);
+    }
+
+    function renderRuns(runs) {
+      const runsList = document.getElementById('runs-list');
+
+      if (runs.length === 0) {
+        runsList.innerHTML = '<div class="empty-state">No runs found matching filters</div>';
+        return;
+      }
+
+      const html = runs.map(run => `
+        <div class="run-item" data-pipeline-id="${run.pipeline_id}" data-timestamp="${run.timestamp}">
+          <div class="run-content" onclick="selectRun('${run.pipeline_id}', '${run.timestamp}')">
+            <div class="run-header">
+              <div class="run-id">${run.pipeline_id}</div>
+              <div class="timestamp">${formatTimestamp(run.timestamp)}</div>
+            </div>
+            <div class="run-meta">
+              <div class="meta-item">
+                <span class="meta-label">Config:</span>
+                <span class="meta-value">${run.config_file || 'Unknown'}</span>
+              </div>
+              <div class="meta-item">
+                <span class="meta-label">Dataset:</span>
+                <span class="meta-value">${run.dataset || 'Unknown'}</span>
+              </div>
+              <div class="meta-item">
+                <span class="meta-label">Framework:</span>
+                <span class="meta-value">${run.framework || 'Unknown'}</span>
+              </div>
+              <div class="meta-item">
+                <span class="meta-label">Total:</span>
+                <span class="meta-value">${run.total_combinations}</span>
+              </div>
+            </div>
+            <div class="status-badges">
+              ${run.success_count > 0 ? `<span class="badge success">${run.success_count} Success</span>` : ''}
+              ${run.failure_count > 0 ? `<span class="badge failure">${run.failure_count} Failed</span>` : ''}
+              <span class="badge total">${run.total_combinations} Total</span>
+            </div>
+          </div>
+          <div class="run-actions">
+            <button class="delete-btn" onclick="event.stopPropagation(); deleteRun('${run.pipeline_id}', '${run.timestamp}')" title="Delete this run">
+              🗑️
+            </button>
+          </div>
+        </div>
+      `).join('');
+
+      runsList.innerHTML = html;
+    }
+
+    function formatTimestamp(timestamp) {
+      // Convert YYYYMMDDHHMMSS to readable format
+      const year = timestamp.substr(0, 4);
+      const month = timestamp.substr(4, 2);
+      const day = timestamp.substr(6, 2);
+      const hour = timestamp.substr(8, 2);
+      const minute = timestamp.substr(10, 2);
+      return `${year}-${month}-${day} ${hour}:${minute}`;
+    }
+
+    async function selectRun(pipelineId, timestamp) {
+      // Update UI selection
+      document.querySelectorAll('.run-item').forEach(item => item.classList.remove('selected'));
+      document.querySelector(`[data-pipeline-id="${pipelineId}"][data-timestamp="${timestamp}"]`).classList.add('selected');
+
+      currentRun = { pipelineId, timestamp };
+
+      try {
+        // Load run details
+        const runResponse = await fetch(`/api/run/${pipelineId}/${timestamp}`);
+        const runData = await runResponse.json();
+
+        // Load combinations
+        const combosResponse = await fetch(`/api/combinations?run=${pipelineId}:${timestamp}`);
+        currentCombinations = await combosResponse.json();
+
+        // Load metrics
+        const metricsResponse = await fetch(`/api/metrics/${pipelineId}:${timestamp}`);
+        const metricsData = await metricsResponse.json();
+
+        renderOverview(runData);
+        renderCombinations(currentCombinations);
+        renderMetrics(metricsData);
+
+      } catch (error) {
+        console.error('Error loading run details:', error);
+      }
+    }
+
+    function renderOverview(runData) {
+      const overview = document.getElementById('tab-overview');
+
+      const html = `
+        <div class="details-content">
+          <div class="detail-section">
+            <h3>📝 Configuration</h3>
+            <div class="config-grid">
+              <div class="config-item">
+                <div class="config-label">Pipeline Config</div>
+                <div class="config-value">${runData.config_file || 'Unknown'}</div>
+              </div>
+              <div class="config-item">
+                <div class="config-label">Attack Config</div>
+                <div class="config-value">${runData.attack_config || 'Unknown'}</div>
+              </div>
+              <div class="config-item">
+                <div class="config-label">Model Script</div>
+                <div class="config-value">${runData.model_script || 'Unknown'}</div>
+              </div>
+              <div class="config-item">
+                <div class="config-label">Framework</div>
+                <div class="config-value">${runData.framework || 'Unknown'}</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="detail-section">
+            <h3>🔧 Tools by Stage</h3>
+            <div class="tools-grid">
+              ${Object.entries(runData.tools_by_stage || {}).map(([stage, tools]) => `
+                <div class="tool-stage">
+                  <div class="stage-header">${stage.replace('_', ' ')}</div>
+                  <div class="stage-tools">${tools}</div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+
+          <div class="detail-section">
+            <h3>📊 Results Summary</h3>
+            <div class="config-grid">
+              <div class="config-item">
+                <div class="config-label">Total Combinations</div>
+                <div class="config-value">${runData.total_combinations}</div>
+              </div>
+              <div class="config-item">
+                <div class="config-label">Successful</div>
+                <div class="config-value">${runData.success_count}</div>
+              </div>
+              <div class="config-item">
+                <div class="config-label">Failed</div>
+                <div class="config-value">${runData.failure_count}</div>
+              </div>
+              <div class="config-item">
+                <div class="config-label">Success Rate</div>
+                <div class="config-value">${runData.total_combinations > 0 ? Math.round((runData.success_count / runData.total_combinations) * 100) : 0}%</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="detail-section">
+            <h3>📄 Pipeline Logs</h3>
+            <div style="margin-top: 1rem;">
+              <button onclick="viewPipelineLog('${runData.pipeline_id}', '${runData.timestamp}')" 
+                      style="padding: 0.5rem 1rem; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">
+                📄 View Full Pipeline Log
+              </button>
+              <p style="font-size: 0.8rem; color: #6c757d; margin-top: 0.5rem;">
+                View the complete pipeline execution log including all stages and system messages.
+              </p>
+            </div>
+          </div>
+        </div>
+      `;
+
+      overview.innerHTML = html;
+    }
+
+    function renderCombinations(combinations) {
+      const combosTab = document.getElementById('tab-combinations');
+
+      if (combinations.length === 0) {
+        combosTab.innerHTML = '<div class="empty-state">No combination data available</div>';
+        return;
+      }
+
+      const html = `
+        <div class="details-content">
+          <table class="combinations-table">
+            <thead>
+              <tr>
+                <th>Combination</th>
+                <th>Pre-Training</th>
+                <th>During Training</th>
+                <th>Post-Training</th>
+                <th>Deployment</th>
+                <th>Status</th>
+                <th>Duration</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${combinations.map(combo => `
+                <tr class="combination-row ${combo.combination_status || ''}" onclick="selectCombination('${combo.combination}')">
+                  <td><strong>${combo.combination}</strong></td>
+                  <td>${formatTools(combo.pre_training_tools || combo.pre_training)}</td>
+                  <td>${formatTools(combo.in_training_tools || combo.in_training)}</td>
+                  <td>${formatTools(combo.post_training_tools || combo.post_training)}</td>
+                  <td>${formatTools(combo.deployment_tools || combo.deployment)}</td>
+                  <td><span class="badge ${combo.combination_status || ''}">${combo.combination_status || 'Unknown'}</span></td>
+                  <td>${combo.total_duration ? Math.round(combo.total_duration) + 's' : 'N/A'}</td>
+                  <td>
+                    <button onclick="event.stopPropagation(); selectCombination('${combo.combination}')" style="padding: 0.25rem 0.5rem; margin-right: 0.25rem; font-size: 0.75rem; border: 1px solid #ccc; border-radius: 3px; background: white; cursor: pointer;">Artifacts</button>
+                    <button onclick="event.stopPropagation(); viewCombinationLogs('${combo.combination}')" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; border: 1px solid #ccc; border-radius: 3px; background: white; cursor: pointer;">Logs</button>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+
+      combosTab.innerHTML = html;
+    }
+
+    function formatTools(tools) {
+      if (!tools) return '';
+      if (Array.isArray(tools)) return tools.join(', ');
+      if (typeof tools === 'string') {
+        try {
+          const parsed = JSON.parse(tools.replace(/'/g, '"'));
+          return Array.isArray(parsed) ? parsed.join(', ') : tools;
+        } catch {
+          return tools;
+        }
+      }
+      return String(tools);
+    }
+
+    function renderMetrics(metricsData) {
+      const metricsTab = document.getElementById('tab-metrics');
+
+      if (!metricsData.combinations || metricsData.combinations.length === 0) {
+        metricsTab.innerHTML = `
+          <div class="empty-state">
+            <div style="font-size: 2rem; margin-bottom: 0.5rem;">📈</div>
+            <div>No metrics available for this run</div>
+          </div>
+        `;
+        return;
+      }
+
+      const summary = metricsData.summary || {};
+
+      // Format values for display
+      const formatPercent = (val) => val !== null && val !== undefined ? (val * 100).toFixed(1) + '%' : 'N/A';
+      const formatNumber = (val) => val !== null && val !== undefined ? val.toFixed(3) : 'N/A';
+      const formatDuration = (val) => val !== null && val !== undefined ? Math.round(val) + 's' : 'N/A';
+
+      const html = `
+        <div class="details-content">
+          <div class="metrics-section">
+            <h3>📊 Pipeline Summary</h3>
+            <div class="metrics-summary">
+              <div class="metric-card">
+                <div class="metric-value">${summary.total_combinations || 0}</div>
+                <div class="metric-label">Total Combinations</div>
+              </div>
+              <div class="metric-card success">
+                <div class="metric-value">${summary.successful_combinations || 0}</div>
+                <div class="metric-label">Successful</div>
+              </div>
+              <div class="metric-card danger">
+                <div class="metric-value">${summary.failed_combinations || 0}</div>
+                <div class="metric-label">Failed</div>
+              </div>
+              <div class="metric-card">
+                <div class="metric-value">${formatPercent(summary.success_rate)}</div>
+                <div class="metric-label">Success Rate</div>
+              </div>
+              <div class="metric-card">
+                <div class="metric-value">${formatDuration(summary.total_duration)}</div>
+                <div class="metric-label">Total Duration</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="metrics-section">
+            <h3>🎯 Average Performance Metrics</h3>
+            <div class="metrics-summary">
+              <div class="metric-card">
+                <div class="metric-value">${formatPercent(summary.avg_train_accuracy)}</div>
+                <div class="metric-label">Train Accuracy</div>
+              </div>
+              <div class="metric-card">
+                <div class="metric-value">${formatPercent(summary.avg_test_accuracy)}</div>
+                <div class="metric-label">Test Accuracy</div>
+              </div>
+              <div class="metric-card">
+                <div class="metric-value">${formatPercent(summary.avg_pgd_accuracy)}</div>
+                <div class="metric-label">PGD Robustness</div>
+              </div>
+              <div class="metric-card">
+                <div class="metric-value">${formatPercent(summary.avg_carlini_accuracy)}</div>
+                <div class="metric-label">Carlini Robustness</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="metrics-section">
+            <h3>📋 Detailed Combination Metrics</h3>
+            <div style="overflow-x: auto;">
+              <table class="metrics-table" style="min-width: 1400px;">
+                <thead>
+                  <tr>
+                    <th>Combination</th>
+                    <th>Pre-Training</th>
+                    <th>In-Training</th>
+                    <th>Post-Training</th>
+                    <th>Deployment</th>
+                    <th>Status</th>
+                    <th>Train Acc</th>
+                    <th>Test Acc</th>
+                    <th>PGD Acc</th>
+                    <th>Carlini Acc</th>
+                    <th>ASR</th>
+                    <th>Privacy ε</th>
+                    <th>Duration</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${metricsData.combinations.map(combo => {
+        const status = combo.combination_status || 'unknown';
+        const statusClass = status === 'success' ? 'metric-good' : status === 'failure' ? 'metric-bad' : 'metric-neutral';
+
+        return `
+                      <tr>
+                        <td><strong>${combo.combination}</strong></td>
+                        <td style="font-size: 0.8em; max-width: 120px; word-wrap: break-word;">${formatTools(combo.pre_training_tools || combo.pre_training || [])}</td>
+                        <td style="font-size: 0.8em; max-width: 120px; word-wrap: break-word;">${formatTools(combo.in_training_tools || combo.in_training || [])}</td>
+                        <td style="font-size: 0.8em; max-width: 120px; word-wrap: break-word;">${formatTools(combo.post_training_tools || combo.post_training || [])}</td>
+                        <td style="font-size: 0.8em; max-width: 120px; word-wrap: break-word;">${formatTools(combo.deployment_tools || combo.deployment || [])}</td>
+                        <td><span class="badge ${status}">${status}</span></td>
+                        <td class="${combo.acc_train_clean && combo.acc_train_clean !== '-1' ? 'metric-good' : 'metric-neutral'}">${combo.acc_train_clean && combo.acc_train_clean !== '-1' ? formatPercent(parseFloat(combo.acc_train_clean)) : 'N/A'}</td>
+                        <td class="${combo.acc_test_clean && combo.acc_test_clean !== '-1' ? 'metric-good' : 'metric-neutral'}">${combo.acc_test_clean && combo.acc_test_clean !== '-1' ? formatPercent(parseFloat(combo.acc_test_clean)) : 'N/A'}</td>
+                        <td class="${combo.pgd_acc && combo.pgd_acc !== '-1' ? 'metric-good' : 'metric-neutral'}">${combo.pgd_acc && combo.pgd_acc !== '-1' ? formatPercent(parseFloat(combo.pgd_acc)) : 'N/A'}</td>
+                        <td class="${combo.carlini_acc && combo.carlini_acc !== '-1' ? 'metric-good' : 'metric-neutral'}">${combo.carlini_acc && combo.carlini_acc !== '-1' ? formatPercent(parseFloat(combo.carlini_acc)) : 'N/A'}</td>
+                        <td class="${combo.asr && combo.asr !== '-1' ? (parseFloat(combo.asr) === 0 ? 'metric-good' : 'metric-bad') : 'metric-neutral'}">${combo.asr && combo.asr !== '-1' ? formatPercent(parseFloat(combo.asr)) : 'N/A'}</td>
+                        <td class="${combo.privacy_epsilon && combo.privacy_epsilon !== '-1' ? 'metric-neutral' : 'metric-neutral'}">${combo.privacy_epsilon && combo.privacy_epsilon !== '-1' ? formatNumber(parseFloat(combo.privacy_epsilon)) : 'N/A'}</td>
+                        <td>${combo.total_duration ? formatDuration(parseFloat(combo.total_duration)) : 'N/A'}</td>
+                      </tr>
+                    `;
+      }).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      `;
+
+      metricsTab.innerHTML = html;
+    }
+
+    async function selectCombination(combinationId) {
+      if (!currentRun) return;
+
+      try {
+        const response = await fetch(`/api/combination/${combinationId}?run=${currentRun.pipelineId}:${currentRun.timestamp}`);
+        const artifacts = await response.json();
+
+        renderArtifacts(combinationId, artifacts);
+        switchTab('artifacts');
+
+      } catch (error) {
+        console.error('Error loading combination details:', error);
+      }
+    }
+
+    function renderArtifacts(combinationId, artifacts) {
+      const artifactsTab = document.getElementById('tab-artifacts');
+
+      const html = `
+        <div class="details-content">
+          <div class="detail-section">
+            <h3>📦 Artifacts for ${combinationId}</h3>
+            ${Object.entries(artifacts).map(([stage, entries]) => `
+              <div class="tool-stage" style="margin-bottom: 1rem;">
+                <div class="stage-header">${stage.replace('_', ' ')}</div>
+                <div style="padding: 1rem;">
+                  ${entries.map(entry => `
+                    <div style="margin-bottom: 0.5rem; display: flex; align-items: center; gap: 1rem;">
+                      <span class="${entry.cache_hit ? 'tool-hit' : 'tool-miss'}" style="font-weight: 600;">
+                        ${entry.cache_hit ? '✅' : '❌'} ${entry.tool}
+                      </span>
+                      <code style="font-size: 0.75rem; background: #f8f9fa; padding: 0.25rem 0.5rem; border-radius: 3px;">
+                        ${entry.node_hash.slice(0, 12)}...
+                      </code>
+                      <button onclick="viewManifest('${entry.node_hash}')" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; border: 1px solid #ccc; border-radius: 3px; background: white; cursor: pointer;">
+                        View Manifest
+                      </button>
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+
+      artifactsTab.innerHTML = html;
+    }
+
+    async function viewCombinationLogs(combinationId) {
+      if (!currentRun) return;
+
+      switchTab('logs');
+
+      const logsTab = document.getElementById('tab-logs');
+      logsTab.innerHTML = '<div class="log-loading">Loading logs...</div>';
+
+      try {
+        const response = await fetch(`/api/logs/${combinationId}?run=${currentRun.pipelineId}:${currentRun.timestamp}`);
+        const data = await response.json();
+
+        if (data.logs.length === 0) {
+          logsTab.innerHTML = `
+            <div class="empty-state">
+              <div style="font-size: 2rem; margin-bottom: 0.5rem;">📄</div>
+              <div>No logs found for ${combinationId}</div>
+            </div>
+          `;
+          return;
+        }
+
+        renderLogViewer(combinationId, data.logs);
+
+      } catch (error) {
+        console.error('Error loading logs:', error);
+        logsTab.innerHTML = `
+          <div class="empty-state">
+            <div style="font-size: 2rem; margin-bottom: 0.5rem;">❌</div>
+            <div>Error loading logs for ${combinationId}</div>
+          </div>
+        `;
+      }
+    }
+
+    async function viewPipelineLog(pipelineId, timestamp) {
+      try {
+        const response = await fetch(`/api/pipeline-log/${pipelineId}/${timestamp}`);
+
+        if (!response.ok) {
+          throw new Error(`Pipeline log not found: ${response.statusText}`);
+        }
+
+        const logData = await response.json();
+
+        // Create modal for pipeline log
+        const modal = document.createElement('div');
+        modal.style.cssText = `
+          position: fixed; top: 0; left: 0; right: 0; bottom: 0; 
+          background: rgba(0,0,0,0.8); z-index: 1000; 
+          display: flex; align-items: center; justify-content: center;
+          padding: 2rem;
+        `;
+
+        const logViewer = document.createElement('div');
+        logViewer.style.cssText = `
+          background: #1e1e1e; color: #f8f8f2; 
+          border-radius: 8px; width: 90vw; height: 85vh; 
+          display: flex; flex-direction: column; overflow: hidden;
+          box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+        `;
+
+        const header = document.createElement('div');
+        header.style.cssText = `
+          padding: 1rem; background: #2d3748; color: white; 
+          display: flex; justify-content: space-between; align-items: center;
+          border-radius: 8px 8px 0 0;
+        `;
+
+        header.innerHTML = `
+          <div>
+            <h3 style="margin: 0; color: white;">Pipeline Log: ${pipelineId}:${timestamp}</h3>
+            <p style="margin: 0.25rem 0 0 0; font-size: 0.85rem; opacity: 0.8;">
+              File: ${logData.log_file} (${logData.size} bytes)
+            </p>
+          </div>
+          <div style="display: flex; gap: 0.5rem;">
+            <button onclick="copyToClipboard(this.getAttribute('data-content'))" 
+                    data-content="${logData.content.replace(/"/g, '&quot;')}"
+                    style="padding: 0.5rem; background: #4a5568; color: white; border: none; border-radius: 4px; cursor: pointer;">
+              📋 Copy
+            </button>
+            <button onclick="this.closest('.modal-overlay').remove()" 
+                    style="padding: 0.5rem; background: #e53e3e; color: white; border: none; border-radius: 4px; cursor: pointer;">
+              ✕ Close
+            </button>
+          </div>
+        `;
+
+        const content = document.createElement('div');
+        content.style.cssText = `
+          flex: 1; overflow: auto; padding: 1rem; 
+          font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; 
+          font-size: 0.85rem; line-height: 1.4;
+          background: #1e1e1e; white-space: pre-wrap; word-wrap: break-word;
+        `;
+        content.textContent = logData.content;
+
+        logViewer.appendChild(header);
+        logViewer.appendChild(content);
+        modal.appendChild(logViewer);
+        modal.className = 'modal-overlay';
+
+        // Close modal when clicking outside
+        modal.addEventListener('click', (e) => {
+          if (e.target === modal) {
+            modal.remove();
+          }
+        });
+
+        // Add escape key handler
+        const escHandler = (e) => {
+          if (e.key === 'Escape') {
+            modal.remove();
+            document.removeEventListener('keydown', escHandler);
+          }
+        };
+        document.addEventListener('keydown', escHandler);
+
+        document.body.appendChild(modal);
+
+      } catch (error) {
+        console.error('Error loading pipeline log:', error);
+        alert(`Failed to load pipeline log: ${error.message}`);
+      }
+    }
+
+    function renderLogViewer(combinationId, logs) {
+      const logsTab = document.getElementById('tab-logs');
+
+      const html = `
+        <div class="log-viewer">
+          <div class="log-selector">
+            <label for="log-select" style="display: block; margin-bottom: 0.5rem; font-weight: 500;">Select Log File:</label>
+            <select id="log-select" onchange="loadSelectedLog('${combinationId}')">
+              <option value="">Choose a log file...</option>
+              ${logs.map(log => `
+                <option value="${log.name}">${log.name} (${formatFileSize(log.size)})</option>
+              `).join('')}
+            </select>
+          </div>
+          <div class="log-content" id="log-content">
+            <div class="empty-state">
+              <div style="font-size: 2rem; margin-bottom: 0.5rem;">📄</div>
+              <div>Select a log file to view its contents</div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      logsTab.innerHTML = html;
+    }
+
+    function formatFileSize(bytes) {
+      if (bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    }
+
+    async function loadSelectedLog(combinationId) {
+      const logSelect = document.getElementById('log-select');
+      const logContent = document.getElementById('log-content');
+      const selectedLog = logSelect.value;
+
+      if (!selectedLog || !currentRun) {
+        logContent.innerHTML = `
+          <div class="empty-state">
+            <div style="font-size: 2rem; margin-bottom: 0.5rem;">📄</div>
+            <div>Select a log file to view its contents</div>
+          </div>
+        `;
+        return;
+      }
+
+      logContent.innerHTML = '<div class="log-loading">Loading log content...</div>';
+
+      try {
+        const response = await fetch(`/api/log/${combinationId}/${selectedLog}/content?run=${currentRun.pipelineId}:${currentRun.timestamp}`);
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const logData = await response.json();
+
+        const html = `
+          <div class="log-header">
+            <div class="log-meta">
+              <strong>${logData.combination}/${logData.tool}</strong> 
+              (${formatFileSize(logData.size)})
+            </div>
+            <div class="log-actions">
+              <button onclick="downloadLog('${combinationId}', '${selectedLog}')">Download</button>
+              <button onclick="copyLogContent()">Copy</button>
+            </div>
+          </div>
+          <div class="log-text" id="log-text-content">${escapeHtml(logData.content)}</div>
+        `;
+
+        logContent.innerHTML = html;
+
+      } catch (error) {
+        console.error('Error loading log content:', error);
+        logContent.innerHTML = `
+          <div class="empty-state">
+            <div style="font-size: 2rem; margin-bottom: 0.5rem;">❌</div>
+            <div>Error loading log: ${error.message}</div>
+          </div>
+        `;
+      }
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    async function downloadLog(combinationId, logName) {
+      if (!currentRun) return;
+
+      try {
+        const url = `/api/log/${combinationId}/${logName}?run=${currentRun.pipelineId}:${currentRun.timestamp}`;
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `${combinationId}_${logName}.log`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      } catch (error) {
+        console.error('Error downloading log:', error);
+        alert('Failed to download log file');
+      }
+    }
+
+    function copyLogContent() {
+      const logText = document.getElementById('log-text-content');
+      if (!logText) return;
+
+      try {
+        navigator.clipboard.writeText(logText.textContent);
+        // Temporary feedback
+        const originalText = logText.textContent;
+        logText.style.opacity = '0.5';
+        setTimeout(() => {
+          logText.style.opacity = '1';
+        }, 200);
+      } catch (error) {
+        console.error('Error copying to clipboard:', error);
+        alert('Failed to copy to clipboard');
+      }
+    }
+
+    async function viewManifest(nodeHash) {
+      try {
+        const response = await fetch(`/api/artifact/${nodeHash}/manifest`);
+        const manifest = await response.json();
+
+        // Create a modal or expand section to show manifest
+        const manifestDiv = document.createElement('div');
+        manifestDiv.style.cssText = `
+          position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+          background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+          max-width: 80vw; max-height: 80vh; overflow: auto; z-index: 1000;
+        `;
+
+        manifestDiv.innerHTML = `
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+            <h3>Artifact Manifest: ${nodeHash.slice(0, 12)}...</h3>
+            <button onclick="this.parentElement.parentElement.remove()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer;">×</button>
+          </div>
+          <pre style="background: #f8f9fa; padding: 1rem; border-radius: 4px; overflow: auto; max-height: 60vh;">${JSON.stringify(manifest, null, 2)}</pre>
+        `;
+
+        // Add backdrop
+        const backdrop = document.createElement('div');
+        backdrop.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 999;';
+        backdrop.onclick = () => {
+          backdrop.remove();
+          manifestDiv.remove();
+        };
+
+        document.body.appendChild(backdrop);
+        document.body.appendChild(manifestDiv);
+
+      } catch (error) {
+        console.error('Error loading manifest:', error);
+        alert('Failed to load manifest');
+      }
+    }
+
+    async function deleteRun(pipelineId, timestamp) {
+      // Confirm deletion
+      const runLabel = `${pipelineId}:${timestamp}`;
+      if (!confirm(`Are you sure you want to delete run ${runLabel}?\n\nThis will permanently delete:\n- All combination results\n- Artifacts and outputs\n- Log files\n\nThis action cannot be undone.`)) {
+        return;
+      }
+
+      try {
+        // Show loading state
+        const deleteBtn = event.target;
+        const originalContent = deleteBtn.innerHTML;
+        deleteBtn.innerHTML = '⏳';
+        deleteBtn.disabled = true;
+
+        const response = await fetch(`/api/run/${pipelineId}/${timestamp}`, {
+          method: 'DELETE'
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to delete run: ${response.statusText}`);
+        }
+
+        const result = await response.json();
+
+        // Show success message
+        alert(`Successfully deleted run ${runLabel}\n\nDeleted items:\n${result.deleted_items.join('\n')}`);
+
+        // Refresh the runs list
+        await loadRuns();
+
+        // Clear the details view if this run was selected
+        if (currentRun && currentRun.pipelineId === pipelineId && currentRun.timestamp === timestamp) {
+          currentRun = null;
+          document.getElementById('run-details').style.display = 'none';
+        }
+
+      } catch (error) {
+        console.error('Error deleting run:', error);
+        alert(`Failed to delete run ${runLabel}: ${error.message}`);
+
+        // Restore button state
+        deleteBtn.innerHTML = originalContent;
+        deleteBtn.disabled = false;
+      }
+    }
+
+    function copyToClipboard(text) {
+      // Decode HTML entities
+      const decodedText = text.replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+
+      navigator.clipboard.writeText(decodedText).then(() => {
+        // Show temporary success message
+        const button = event.target;
+        const originalText = button.textContent;
+        button.textContent = '✓ Copied!';
+        button.style.background = '#48bb78';
+
+        setTimeout(() => {
+          button.textContent = originalText;
+          button.style.background = '#4a5568';
+        }, 2000);
+      }).catch(err => {
+        console.error('Failed to copy text: ', err);
+        alert('Failed to copy to clipboard');
+      });
+    }
+  </script>
+</body>
+
+</html>

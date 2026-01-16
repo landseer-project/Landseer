@@ -1,7 +1,17 @@
-# Ignore large directories
-output/
 cache/
-*logs/
 data/
+results/
+logs/
+tools/
+
+.venv/
+venv/
 __pycache__/
-.env
+*.pyc
+*.csv
+*.lock
+.env*
+*.log
+*.csv
+
+deviation_*

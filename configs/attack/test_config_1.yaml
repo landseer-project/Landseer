@@ -1,6 +1,9 @@
 attacks:
   backdoor: False
-  evasion: False
-  extraction: False
+  adversarial: False
+  outlier: False
+  carlini: False
+  watermarking: False
+  fingerprinting: False
   inference: False
   other: False

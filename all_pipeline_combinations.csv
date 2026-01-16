@@ -1,0 +1,101 @@
+combination_id,pre_training,during_training,post_training,deployment
+comb_000,noop,in_noop,noop,noop
+comb_010,noop,in-trades,noop,noop
+comb_001,noop,in_noop,noop,post_dp
+comb_002,noop,in_noop,noop,post_magnet
+comb_003,noop,in_noop,noop,post_dp → post_magnet
+comb_004,noop,in_noop,noop,post_magnet → post_dp
+comb_005,noop,in_noop,fine pruning,noop
+comb_011,noop,in-trades,noop,post_dp
+comb_012,noop,in-trades,noop,post_magnet
+comb_013,noop,in-trades,noop,post_dp → post_magnet
+comb_014,noop,in-trades,noop,post_magnet → post_dp
+comb_015,noop,in-trades,fine pruning,noop
+comb_020,pre-xgbod,in_noop,noop,noop
+comb_030,pre-xgbod,in-trades,noop,noop
+comb_040,pre-dp,in_noop,noop,noop
+comb_050,pre-dp,in-trades,noop,noop
+comb_060,pre-xgbod → pre-dp,in_noop,noop,noop
+comb_070,pre-xgbod → pre-dp,in-trades,noop,noop
+comb_080,pre-dp → pre-xgbod,in_noop,noop,noop
+comb_090,pre-dp → pre-xgbod,in-trades,noop,noop
+comb_006,noop,in_noop,fine pruning,post_dp
+comb_007,noop,in_noop,fine pruning,post_magnet
+comb_008,noop,in_noop,fine pruning,post_dp → post_magnet
+comb_009,noop,in_noop,fine pruning,post_magnet → post_dp
+comb_016,noop,in-trades,fine pruning,post_dp
+comb_017,noop,in-trades,fine pruning,post_magnet
+comb_018,noop,in-trades,fine pruning,post_dp → post_magnet
+comb_019,noop,in-trades,fine pruning,post_magnet → post_dp
+comb_021,pre-xgbod,in_noop,noop,post_dp
+comb_022,pre-xgbod,in_noop,noop,post_magnet
+comb_023,pre-xgbod,in_noop,noop,post_dp → post_magnet
+comb_024,pre-xgbod,in_noop,noop,post_magnet → post_dp
+comb_025,pre-xgbod,in_noop,fine pruning,noop
+comb_031,pre-xgbod,in-trades,noop,post_dp
+comb_032,pre-xgbod,in-trades,noop,post_magnet
+comb_033,pre-xgbod,in-trades,noop,post_dp → post_magnet
+comb_034,pre-xgbod,in-trades,noop,post_magnet → post_dp
+comb_035,pre-xgbod,in-trades,fine pruning,noop
+comb_041,pre-dp,in_noop,noop,post_dp
+comb_042,pre-dp,in_noop,noop,post_magnet
+comb_043,pre-dp,in_noop,noop,post_dp → post_magnet
+comb_044,pre-dp,in_noop,noop,post_magnet → post_dp
+comb_045,pre-dp,in_noop,fine pruning,noop
+comb_051,pre-dp,in-trades,noop,post_dp
+comb_052,pre-dp,in-trades,noop,post_magnet
+comb_053,pre-dp,in-trades,noop,post_dp → post_magnet
+comb_054,pre-dp,in-trades,noop,post_magnet → post_dp
+comb_055,pre-dp,in-trades,fine pruning,noop
+comb_061,pre-xgbod → pre-dp,in_noop,noop,post_dp
+comb_062,pre-xgbod → pre-dp,in_noop,noop,post_magnet
+comb_063,pre-xgbod → pre-dp,in_noop,noop,post_dp → post_magnet
+comb_064,pre-xgbod → pre-dp,in_noop,noop,post_magnet → post_dp
+comb_065,pre-xgbod → pre-dp,in_noop,fine pruning,noop
+comb_071,pre-xgbod → pre-dp,in-trades,noop,post_dp
+comb_072,pre-xgbod → pre-dp,in-trades,noop,post_magnet
+comb_073,pre-xgbod → pre-dp,in-trades,noop,post_dp → post_magnet
+comb_074,pre-xgbod → pre-dp,in-trades,noop,post_magnet → post_dp
+comb_075,pre-xgbod → pre-dp,in-trades,fine pruning,noop
+comb_081,pre-dp → pre-xgbod,in_noop,noop,post_dp
+comb_082,pre-dp → pre-xgbod,in_noop,noop,post_magnet
+comb_083,pre-dp → pre-xgbod,in_noop,noop,post_dp → post_magnet
+comb_084,pre-dp → pre-xgbod,in_noop,noop,post_magnet → post_dp
+comb_085,pre-dp → pre-xgbod,in_noop,fine pruning,noop
+comb_091,pre-dp → pre-xgbod,in-trades,noop,post_dp
+comb_092,pre-dp → pre-xgbod,in-trades,noop,post_magnet
+comb_093,pre-dp → pre-xgbod,in-trades,noop,post_dp → post_magnet
+comb_094,pre-dp → pre-xgbod,in-trades,noop,post_magnet → post_dp
+comb_095,pre-dp → pre-xgbod,in-trades,fine pruning,noop
+comb_026,pre-xgbod,in_noop,fine pruning,post_dp
+comb_027,pre-xgbod,in_noop,fine pruning,post_magnet
+comb_028,pre-xgbod,in_noop,fine pruning,post_dp → post_magnet
+comb_029,pre-xgbod,in_noop,fine pruning,post_magnet → post_dp
+comb_036,pre-xgbod,in-trades,fine pruning,post_dp
+comb_037,pre-xgbod,in-trades,fine pruning,post_magnet
+comb_038,pre-xgbod,in-trades,fine pruning,post_dp → post_magnet
+comb_039,pre-xgbod,in-trades,fine pruning,post_magnet → post_dp
+comb_046,pre-dp,in_noop,fine pruning,post_dp
+comb_047,pre-dp,in_noop,fine pruning,post_magnet
+comb_048,pre-dp,in_noop,fine pruning,post_dp → post_magnet
+comb_049,pre-dp,in_noop,fine pruning,post_magnet → post_dp
+comb_056,pre-dp,in-trades,fine pruning,post_dp
+comb_057,pre-dp,in-trades,fine pruning,post_magnet
+comb_058,pre-dp,in-trades,fine pruning,post_dp → post_magnet
+comb_059,pre-dp,in-trades,fine pruning,post_magnet → post_dp
+comb_066,pre-xgbod → pre-dp,in_noop,fine pruning,post_dp
+comb_067,pre-xgbod → pre-dp,in_noop,fine pruning,post_magnet
+comb_068,pre-xgbod → pre-dp,in_noop,fine pruning,post_dp → post_magnet
+comb_069,pre-xgbod → pre-dp,in_noop,fine pruning,post_magnet → post_dp
+comb_076,pre-xgbod → pre-dp,in-trades,fine pruning,post_dp
+comb_077,pre-xgbod → pre-dp,in-trades,fine pruning,post_magnet
+comb_078,pre-xgbod → pre-dp,in-trades,fine pruning,post_dp → post_magnet
+comb_079,pre-xgbod → pre-dp,in-trades,fine pruning,post_magnet → post_dp
+comb_086,pre-dp → pre-xgbod,in_noop,fine pruning,post_dp
+comb_087,pre-dp → pre-xgbod,in_noop,fine pruning,post_magnet
+comb_088,pre-dp → pre-xgbod,in_noop,fine pruning,post_dp → post_magnet
+comb_089,pre-dp → pre-xgbod,in_noop,fine pruning,post_magnet → post_dp
+comb_096,pre-dp → pre-xgbod,in-trades,fine pruning,post_dp
+comb_097,pre-dp → pre-xgbod,in-trades,fine pruning,post_magnet
+comb_098,pre-dp → pre-xgbod,in-trades,fine pruning,post_dp → post_magnet
+comb_099,pre-dp → pre-xgbod,in-trades,fine pruning,post_magnet → post_dp
