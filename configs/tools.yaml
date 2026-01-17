@@ -1,0 +1,92 @@
+tools:
+  # Pre-training tools
+  pre_noop:
+    name: noop
+    is_baseline: true
+    container:
+      image: ghcr.io/landseer-project/pre_noop:v1
+      command: python main.py
+      runtime: null
+
+  pre_xgbod:
+    name: pre-xgbod
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/pre_xgbod:v2
+      command: python3 main.py
+      runtime: null
+
+  # In-training (during training) tools
+  in_noop:
+    name: in_noop
+    is_baseline: true
+    container:
+      image: ghcr.io/landseer-project/in_noop:v5
+      command: python main.py
+      runtime: null
+
+  in_trades:
+    name: in-trades
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/in_trades:v1
+      command: python3 main.py
+      runtime: null
+
+  watermarknn:
+    name: watermarknn
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/pre_watermarknn_cpu:v1
+      command: conda run -n watermarknn python -u main.py
+      runtime: null
+
+  # Post-training tools
+  post_noop:
+    name: post_noop
+    is_baseline: true
+    container:
+      image: ghcr.io/landseer-project/post_noop_new:v1
+      command: python main.py
+      runtime: null
+
+  post_fineprune:
+    name: fine pruning
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/post_fineprune:v1
+      command: python3 main.py --prune-percentage 0.1
+      runtime: null
+
+  # Deployment tools
+  deploy_noop:
+    name: deploy_noop
+    is_baseline: true
+    container:
+      image: ghcr.io/landseer-project/deploy_noop_docker:v1
+      command: python main.py
+      runtime: null
+
+  deploy_dp:
+    name: deploy_dp
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/deploy_dp:v1
+      command: python3 main.py
+      runtime: null
+
+  post_dp:
+    name: post_dp
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/post_dp:v4
+      command: python3 main.py
+      runtime: null
+
+  post_magnet:
+    name: post_magnet
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/post_magnet:v2
+      command: python3 main.py
+      runtime: null
