@@ -1,0 +1,32 @@
+# New simplified pipeline configuration format
+# This format only mentions the tools to use, without container details
+# Noops are now included directly in the tools list (marked as is_baseline: true in tools.yaml)
+
+dataset:
+  name: cifar10
+  variant: clean
+
+model:
+  script: configs/model/config_model_combined.py
+
+pipeline:
+  pre_training:
+    tools:
+      - pre_xgbod
+      - pre_noop
+  
+  during_training:
+    tools:
+      - watermarknn
+      - in_noop
+  
+  post_training:
+    tools:
+      - post_fineprune
+      - post_noop
+  
+  deployment:
+    tools:
+      - post_magnet
+      - post_dp
+      - deploy_noop
