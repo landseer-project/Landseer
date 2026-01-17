@@ -33,7 +33,9 @@ python-dotenv = ">=1.0.0,<2.0.0"
 fairlearn = ">=0.7.0,<1.0.0"
 
 [tool.poetry.scripts]
-landseer = "landseer_pipeline.main:main"
+landseer-backend = "src.backend.cli:main"
+landseer-frontend = "src.frontend.cli:main"
+landseer-worker = "src.worker.cli:main"
 
 [[tool.poetry.source]]
 name = "pytorch-cu128"
