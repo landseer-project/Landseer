@@ -118,7 +118,12 @@ class ArtifactCache:
 		return self.root / h
 
 	def exists(self, h: str) -> bool:
-		return (self.path_for(h) / ".success").exists()
+		import logging
+		logger = logging.getLogger(__name__)
+		success_path = self.path_for(h) / ".success"
+		result = success_path.exists()
+		logger.debug(f"[ARTIFACT] {h[:12]}: exists() check -> {result} (path: {success_path})")
+		return result
 
 	# ---------------- Locking -----------------------
 	def lock(self, h: str):
@@ -131,21 +136,28 @@ class ArtifactCache:
 
 	# ---------------- Manifest ----------------------
 	def write_success(self, h: str, manifest: dict):
+		import logging
+		logger = logging.getLogger(__name__)
 		node_dir = self.path_for(h)
 		success_marker = node_dir / ".success"
 		
 		# Idempotent: if already marked successful, don't re-write (files are read-only)
 		if success_marker.exists():
+			logger.debug(f"[ARTIFACT] {h[:12]}: Already marked successful, skipping")
 			return
 		
 		node_dir.mkdir(parents=True, exist_ok=True)
 		(node_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
 		success_marker.touch()
+		# Force filesystem sync to ensure visibility to other threads
+		import os
+		os.sync()
+		logger.debug(f"[ARTIFACT] {h[:12]}: Marked successful, .success created at {success_marker}")
 		# Harden: mark files read-only to avoid accidental rewrites
 		try:
 			for p in node_dir.rglob("*"):
 				if p.is_file():
 					p.chmod(stat.S_IREAD | stat.S_IRGRP | stat.S_IROTH)
-		except Exception:
-			pass
+		except Exception as e:
+			logger.warning(f"[ARTIFACT] {h[:12]}: Failed to chmod files read-only: {e}")
 

@@ -796,10 +796,14 @@ class PipelineExecutor:
 
 		logger.info(f"[{combination_obj.id}] {tool.name}: Cache miss, executing...")
 		lock = self.artifact_cache.lock(node_hash)
+		logger.debug(f"[{combination_obj.id}] {tool.name}: Acquired lock for {node_hash[:12]}")
 		try:
-			if self.artifact_cache.exists(node_hash) and self.settings.use_cache:
-				logger.debug(f"[CACHE LATE HIT] {tool.name}")
+			cache_exists = self.artifact_cache.exists(node_hash)
+			logger.debug(f"[{combination_obj.id}] {tool.name}: Cache exists check: {cache_exists}, use_cache: {self.settings.use_cache}")
+			if cache_exists and self.settings.use_cache:
+				logger.info(f"[CACHE LATE HIT] {combination_obj.id}/{tool.name} -> {node_hash[:12]}")
 				parent_hashes.append(node_hash)
+				self._record_artifact_mapping(combination_obj.id, stage, tool.name, node_hash, cache_hit=True)
 				return output_dir
 
 			# Ensure a clean directory (handle prior failed attempt archiving)
@@ -849,6 +853,8 @@ class PipelineExecutor:
 				tool_output_path, duration = tool_runner.run_tool()
 			except Exception as e:
 				# Mark node failure & persist reason
+				# Ensure directory exists before touching failure marker
+				node_dir.mkdir(parents=True, exist_ok=True)
 				failure_marker = node_dir / ".failed"
 				failure_marker.touch()
 				try:

@@ -26,25 +26,25 @@ import os
 
 logger = logging.getLogger()
 
-#Adding dataset Normalizer
-# class NormalizedDataset(torch.utils.data.Dataset):
-#     def __init__(self, images, labels, normalize=True):
-#         images = torch.tensor(images).float()
-#         if images.max() > 1.0:
-#             images = images / 255.0
-#         self.images = images
-#         self.labels = torch.tensor(labels).long()
-#         self.transform = transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)) if normalize else None
+# Dataset Normalizer - applies (x - 0.5) / 0.5 normalization to match training preprocessing
+class NormalizedDataset(torch.utils.data.Dataset):
+    def __init__(self, images, labels, normalize=True):
+        images = torch.tensor(images).float()
+        if images.max() > 1.0:
+            images = images / 255.0
+        self.images = images
+        self.labels = torch.tensor(labels).long()
+        self.transform = transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)) if normalize else None
 
-#     def __getitem__(self, idx):
-#         x = self.images[idx]
-#         if self.transform:
-#             x = self.transform(x)
-#         y = self.labels[idx]
-#         return x, y
+    def __getitem__(self, idx):
+        x = self.images[idx]
+        if self.transform:
+            x = self.transform(x)
+        y = self.labels[idx]
+        return x, y
 
-#     def __len__(self):
-#         return len(self.labels)
+    def __len__(self):
+        return len(self.labels)
 
 class ModelEvaluator:
 
@@ -485,7 +485,12 @@ class ModelEvaluator:
     #     return clean_train_loader, clean_test_loader
 
 
-    def _load_dataset(self, dataset_path: str) -> Tuple[Optional[DataLoader], Optional[DataLoader], Optional[DataLoader]]:
+    def _load_dataset(self, dataset_path: str) -> Tuple[Optional[DataLoader], Optional[DataLoader]]:
+        """Load dataset with normalization to match training preprocessing.
+        
+        Training tools apply normalization (x - 0.5) / 0.5 to transform data from [0,1] to [-1,1].
+        This method applies the same normalization to ensure consistent evaluation.
+        """
         clean_train_loader, clean_test_loader = None, None
              
         if dataset_path:
@@ -495,10 +500,12 @@ class ModelEvaluator:
                 y_train = np.load(os.path.join(dataset_path, 'labels.npy'))
                 X_test = np.load(os.path.join(dataset_path, 'test_data.npy'))
                 y_test = np.load(os.path.join(dataset_path, 'test_labels.npy'))
-                clean_train_dataset = TensorDataset(torch.tensor(X_train).float(), torch.tensor(y_train).long())
+                # Use NormalizedDataset to apply (x - 0.5) / 0.5 normalization
+                # This matches the preprocessing done during training
+                clean_train_dataset = NormalizedDataset(X_train, y_train, normalize=True)
                 clean_train_loader = DataLoader(clean_train_dataset, batch_size=512, shuffle=False)
-                clean_test_dataset = TensorDataset(torch.tensor(X_test).float(), torch.tensor(y_test).long())
-                clean_test_loader = DataLoader(clean_test_dataset, batch_size=512 , shuffle=False)
+                clean_test_dataset = NormalizedDataset(X_test, y_test, normalize=True)
+                clean_test_loader = DataLoader(clean_test_dataset, batch_size=512, shuffle=False)
         else:
             logger.warning(f"{self.combination_id}: Unsupported dataset format: {dataset_path}")
         return clean_train_loader, clean_test_loader

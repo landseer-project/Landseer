@@ -2,7 +2,7 @@ dataset:
   name: cifar10
   variant: clean
 model:
-  script: configs/model/config_model.py
+  script: configs/model/config_model_orig.py
 pipeline:
   pre_training:
     tools:

@@ -31,6 +31,7 @@ sqlalchemy = ">=2.0.0,<3.0.0"
 mysql-connector-python = ">=8.0.0,<9.0.0"
 python-dotenv = ">=1.0.0,<2.0.0"
 fairlearn = ">=0.7.0,<1.0.0"
+kaggle = "^1.8.3"
 
 [tool.poetry.scripts]
 landseer = "landseer_pipeline.main:main"

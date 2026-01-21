@@ -7,7 +7,7 @@ dataset:
   variant: clean
 
 model:
-  script: configs/model/config_model_combined.py
+  script: configs/model/config_model_orig.py
 
 pipeline:
   pre_training:
@@ -21,7 +21,7 @@ pipeline:
     tools:
     - name: in-fair
       container:
-        image: ghcr.io/landseer-project/in_fair:v5
+        image: ghcr.io/landseer-project/in_fair:v6
         command: python3 main.py
     noop:
       name: in_noop

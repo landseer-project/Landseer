@@ -103,6 +103,11 @@ class DockerRunner(ContainerRunner):
             combo_prefix = f"{combination_id}: " if combination_id else ""
             logger.debug(f"{combo_prefix}Running Docker container: {image_name} with runtime={runtime}")
             
+            # Run container as current user to avoid root-owned files in output directories
+            import os
+            current_uid = os.getuid()
+            current_gid = os.getgid()
+            
             run_kwargs = {
                 'command': command,
                 'environment': environment,
@@ -113,6 +118,7 @@ class DockerRunner(ContainerRunner):
                 'stderr': True,
                 'working_dir': "/app",  # Set working directory to /app where main.py is located
                 'shm_size': '2g',  # Increase shared memory for PyTorch DataLoader workers
+                #'user': f"{current_uid}:{current_gid}",  # Run as current user to fix file ownership
             }
             
             if runtime:
