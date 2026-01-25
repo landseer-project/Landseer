@@ -109,11 +109,25 @@ def main(argv: Optional[list[str]] = None) -> int:
         logger.error(f"Failed to initialize backend: {e}", exc_info=args.debug)
         return 1
     
-    # TODO: Implement backend server startup logic (FastAPI, Flask, etc.)
+    # Start the FastAPI server
     logger.info("\n" + "="*60)
     logger.info("Backend initialized successfully!")
-    logger.info("Backend server implementation pending.")
+    logger.info("Starting FastAPI server...")
     logger.info("="*60)
+    
+    try:
+        from .api import run_server
+        run_server(
+            host=args.host,
+            port=args.port,
+            reload=args.debug,
+            log_level="debug" if args.debug else "info"
+        )
+    except KeyboardInterrupt:
+        logger.info("Server stopped by user")
+    except Exception as e:
+        logger.error(f"Server error: {e}", exc_info=args.debug)
+        return 1
     
     return 0
 

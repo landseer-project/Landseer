@@ -1,0 +1,149 @@
+name: Build Evaluator Images
+
+on:
+  push:
+    branches:
+      - main
+      - dev/restructure
+    paths:
+      - 'containers/evals/**'
+      - '.github/workflows/build-evaluators.yml'
+  pull_request:
+    paths:
+      - 'containers/evals/**'
+  workflow_dispatch:
+    inputs:
+      evaluator:
+        description: 'Specific evaluator to build (or "all")'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - adversarial
+          - fairness
+          - fingerprinting
+          - backdoor
+          - watermark
+          - ood
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/landseer-project/evals
+
+jobs:
+  # Detect which evaluators have changed
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      has_changes: ${{ steps.set-matrix.outputs.has_changes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changed evaluators
+        id: set-matrix
+        run: |
+          # If manual trigger with specific evaluator
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ inputs.evaluator }}" != "all" ]; then
+            echo "matrix=[\"${{ inputs.evaluator }}\"]" >> $GITHUB_OUTPUT
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # For manual trigger with 'all' or other events
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ inputs.evaluator }}" == "all" ]; then
+            EVALUATORS='["adversarial","fairness","fingerprinting","backdoor","watermark","ood"]'
+            echo "matrix=$EVALUATORS" >> $GITHUB_OUTPUT
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Detect changes in containers/evals/
+          CHANGED_DIRS=$(git diff --name-only HEAD~1 HEAD -- 'containers/evals/' | cut -d'/' -f3 | sort -u | grep -v '^$' || true)
+          
+          if [ -z "$CHANGED_DIRS" ]; then
+            echo "No evaluator changes detected"
+            echo "matrix=[]" >> $GITHUB_OUTPUT
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            # Convert to JSON array
+            MATRIX=$(echo "$CHANGED_DIRS" | jq -R -s -c 'split("\n") | map(select(length > 0))')
+            echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          fi
+
+  # Build and push images
+  build:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        evaluator: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_PREFIX }}/${{ matrix.evaluator }}
+          tags: |
+            type=sha,prefix=
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=v1
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: containers/evals/${{ matrix.evaluator }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Output image info
+        run: |
+          echo "Built evaluator: ${{ matrix.evaluator }}"
+          echo "Tags: ${{ steps.meta.outputs.tags }}"
+
+  # Summary job
+  summary:
+    needs: [detect-changes, build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summary
+        run: |
+          echo "## Evaluator Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ needs.detect-changes.outputs.has_changes }}" == "false" ]; then
+            echo "No evaluator changes detected, no builds needed." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Built evaluators: ${{ needs.detect-changes.outputs.matrix }}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Images pushed to \`ghcr.io/landseer-project/evals/\`" >> $GITHUB_STEP_SUMMARY
+          fi

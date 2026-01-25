@@ -7,14 +7,9 @@ scheduler implementations must follow.
 
 from abc import ABC, abstractmethod
 from typing import Optional, List
-import sys
-import os
 
-# Add parent directories to path for imports
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
-
-from pipeline.tasks import Task, TaskStatus
-from pipeline.pipeline import Pipeline
+from ...pipeline.tasks import Task, TaskStatus
+from ...pipeline.pipeline import Pipeline
 
 
 class Scheduler(ABC):

@@ -5,8 +5,13 @@ description = "Landseer is a framework for combining and analysing multiple trus
 authors = ["Rosemary Agbozo <agbozorosemary217@gmail.com>"]
 readme = "README.md"
 packages = [
-    { include = "landseer_pipeline", from = "src" },
-    { include = "landseer_ui", from = "src" }
+    { include = "backend", from = "src" },
+    { include = "frontend", from = "src" },
+    { include = "worker", from = "src" },
+    { include = "common", from = "src" },
+    { include = "pipeline", from = "src" },
+    { include = "db", from = "src" },
+    { include = "store", from = "src" }
 ]
 
 [tool.poetry.dependencies]
@@ -31,6 +36,9 @@ sqlalchemy = ">=2.0.0,<3.0.0"
 mysql-connector-python = ">=8.0.0,<9.0.0"
 python-dotenv = ">=1.0.0,<2.0.0"
 fairlearn = ">=0.7.0,<1.0.0"
+httpx = ">=0.27.0,<1.0.0"
+# MinIO client for artifact storage
+minio = ">=7.2.0,<8.0.0"
 
 [tool.poetry.scripts]
 landseer-backend = "src.backend.cli:main"
