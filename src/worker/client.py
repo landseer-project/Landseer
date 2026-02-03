@@ -416,7 +416,8 @@ class LandseerClient:
         self,
         task_id: str,
         error_message: str,
-        execution_time_ms: Optional[int] = None
+        execution_time_ms: Optional[int] = None,
+        result: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
         Report a task as failed.
@@ -434,6 +435,10 @@ class LandseerClient:
             "status": "failed",
             "error_message": error_message,
             "execution_time_ms": execution_time_ms
+            # Optional structured result payload (e.g., cache info, log snippet)
+            # mirrors the "result" field used for successful tasks.
+            ,
+            "result": result
         }
         
         response = self._make_request("PUT", "/tasks/status", json_data=data)

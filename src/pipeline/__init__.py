@@ -59,6 +59,21 @@ from .config_loader import (
     load_pipeline_config,
     create_pipeline_from_config,
     make_combinations,
+    get_workflow_generation_summary,
+)
+
+from .workflow_generator import (
+    WorkflowGenerator,
+    generate_stage_permutations,
+    generate_during_training_options,
+    create_workflows_from_stage_config,
+    StageTools,
+)
+
+from .workflow_restart import (
+    WorkflowRestartManager,
+    FailedTaskInfo,
+    WorkflowExecutionState,
 )
 
 __all__ = [
@@ -80,6 +95,16 @@ __all__ = [
     # Workflows
     "Workflow",
     "WorkflowFactory",
+    # Workflow generation
+    "WorkflowGenerator",
+    "generate_stage_permutations",
+    "generate_during_training_options",
+    "create_workflows_from_stage_config",
+    "StageTools",
+    # Workflow restart
+    "WorkflowRestartManager",
+    "FailedTaskInfo",
+    "WorkflowExecutionState",
     # Pipelines
     "Pipeline",
     "DefenseEvaluationPipeline",
@@ -92,4 +117,5 @@ __all__ = [
     "load_pipeline_config",
     "create_pipeline_from_config",
     "make_combinations",
+    "get_workflow_generation_summary",
 ]

@@ -95,6 +95,17 @@ class DatabaseService:
         """Check if database is available."""
         return self.enabled and self._db is not None
     
+    def get_session(self):
+        """
+        Get a database session.
+        
+        Returns:
+            Database session (use with session_scope() context manager for proper cleanup)
+        """
+        if not self.is_available():
+            raise RuntimeError("Database service is not available")
+        return get_session()
+    
     # =========================================================================
     # Pipeline Sync Operations
     # =========================================================================
@@ -229,6 +240,57 @@ class DatabaseService:
                 
         except Exception as e:
             logger.error(f"Failed to sync task status: {e}")
+            return False
+    
+    def save_evaluation_result(
+        self,
+        workflow_id: str,
+        pipeline_id: str,
+        evaluator_name: str,
+        result_data: Dict[str, Any],
+        evaluation_task_id: Optional[str] = None,
+        evaluator_image: Optional[str] = None
+    ) -> bool:
+        """
+        Save or update an evaluation result for a workflow (used when workers report evaluator completion).
+        
+        Args:
+            workflow_id: Workflow that was evaluated
+            pipeline_id: Pipeline the workflow belongs to
+            evaluator_name: Name of the evaluator (e.g. adversarial-evaluator)
+            result_data: Parsed evaluation_results.json (metrics, success, skipped, etc.)
+            evaluation_task_id: Task ID that produced this result
+            evaluator_image: Optional container image used
+            
+        Returns:
+            True if saved successfully
+        """
+        if not self.is_available():
+            logger.warning(f"Database not available, cannot save evaluation result for {workflow_id}/{evaluator_name}")
+            return False
+        try:
+            from ..db.models import EvaluationResultModel
+            result_id = f"{workflow_id}_{evaluator_name}"
+            with session_scope() as session:
+                er = EvaluationResultModel.from_evaluation_result(
+                    result_id=result_id,
+                    workflow_id=workflow_id,
+                    pipeline_id=pipeline_id,
+                    evaluator_name=evaluator_name,
+                    result_data=result_data,
+                    evaluation_task_id=evaluation_task_id,
+                    evaluator_image=evaluator_image
+                )
+                session.merge(er)
+            
+            metrics_count = len(result_data.get("metrics", {}))
+            logger.info(
+                f"Saved evaluation result {result_id} (pipeline={pipeline_id}, "
+                f"metrics={metrics_count}, skipped={result_data.get('skipped', False)})"
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save evaluation result for {workflow_id}/{evaluator_name}: {e}", exc_info=True)
             return False
     
     # =========================================================================

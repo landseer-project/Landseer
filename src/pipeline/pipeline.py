@@ -38,9 +38,13 @@ class Pipeline(ABC):
         """Initialize pipeline with unique ID."""
         if not self.id:
             self.id = generate_pipeline_id()
-        # Set pipeline_id for all workflows
+        # Set pipeline_id for all workflows and register existing tasks
         for workflow in self.workflows:
             workflow.pipeline_id = self.id
+            # Register existing tasks with this workflow
+            # (tasks may have been added before pipeline_id was set)
+            for task in workflow.tasks:
+                task.add_to_workflow(workflow.id, self.id)
     
     @abstractmethod
     def run(self, data: Any = None) -> Any:

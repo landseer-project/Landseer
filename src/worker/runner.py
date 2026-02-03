@@ -11,10 +11,11 @@ This module handles the actual execution of tasks, including:
 import os
 import shutil
 import subprocess
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from ..common import get_logger
 from .client import TaskInfo
@@ -178,7 +179,7 @@ class DockerRunner:
         env: Optional[Dict[str, str]] = None,
         extra_mounts: Optional[Dict[str, str]] = None,
         model_script_path: Optional[Path] = None
-    ) -> Tuple[int, str]:
+    ) -> Tuple[int, str, str]:
         """
         Run a container.
         
@@ -192,7 +193,7 @@ class DockerRunner:
             model_script_path: Path to model config script to mount in container
             
         Returns:
-            Tuple of (exit_code, logs)
+            Tuple of (exit_code, logs, docker_command)
         """
         # Ensure output directory exists
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -201,16 +202,93 @@ class DockerRunner:
         docker_cmd = ["docker", "run", "--rm"]
         
         # Add GPU support if available
+        # Use --runtime=nvidia with NVIDIA_VISIBLE_DEVICES env var (compatible with CDI mode)
+        # This approach avoids conflicts with CDI mode configuration
         if self.gpu_id is not None:
-            docker_cmd.extend([
-                "--gpus", f'"device={self.gpu_id}"',
-                "--runtime=nvidia"
-            ])
+            # Try multiple methods to detect nvidia runtime availability
+            nvidia_runtime_available = False
+            
+            # Method 1: Check docker info for runtimes (try JSON format first, then string)
+            try:
+                # Try JSON format first (more reliable)
+                result = subprocess.run(
+                    ["docker", "info", "--format", "{{json .Runtimes}}"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    import json
+                    try:
+                        runtimes = json.loads(result.stdout.strip())
+                        nvidia_runtime_available = "nvidia" in runtimes
+                        if nvidia_runtime_available:
+                            logger.debug(f"nvidia runtime found in Docker runtimes: {list(runtimes.keys())}")
+                        else:
+                            logger.debug(f"nvidia runtime not in Docker runtimes. Available: {list(runtimes.keys())}")
+                    except (json.JSONDecodeError, ValueError):
+                        # Fallback: check as string (for older Docker versions)
+                        nvidia_runtime_available = "nvidia" in result.stdout.lower()
+                        if nvidia_runtime_available:
+                            logger.debug("nvidia runtime found (string match)")
+                        else:
+                            logger.debug(f"nvidia runtime not found. Output: {result.stdout[:200]}")
+                elif result.returncode == 0:
+                    # Empty output - try alternative format
+                    result2 = subprocess.run(
+                        ["docker", "info"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    if result2.returncode == 0:
+                        nvidia_runtime_available = "nvidia" in result2.stdout.lower() or "runtime.*nvidia" in result2.stdout.lower()
+            except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
+                logger.debug(f"Could not check Docker runtimes via docker info: {e}")
+            
+            # Method 2: Try to test if nvidia runtime works by checking if it's executable
+            if not nvidia_runtime_available:
+                try:
+                    result = subprocess.run(
+                        ["which", "nvidia-container-runtime"],
+                        capture_output=True,
+                        text=True,
+                        timeout=2
+                    )
+                    if result.returncode == 0:
+                        logger.debug("nvidia-container-runtime found in PATH, assuming runtime is available")
+                        nvidia_runtime_available = True
+                except Exception:
+                    pass
+            
+            # Use nvidia runtime if available, otherwise log warning but proceed
+            # (Docker might still work if runtime is configured at daemon level)
+            if nvidia_runtime_available:
+                docker_cmd.extend(["--runtime=nvidia"])
+                logger.debug(f"Using --runtime=nvidia for GPU access")
+            else:
+                logger.warning(
+                    f"⚠️  nvidia runtime not detected in Docker configuration. "
+                    f"GPU access may fail. "
+                    f"If GPU access fails, check:\n"
+                    f"  1. nvidia-container-runtime is installed\n"
+                    f"  2. Docker daemon is configured with nvidia runtime\n"
+                    f"  3. Docker daemon is restarted after configuration\n"
+                    f"  Check: docker info | grep -i runtime"
+                )
+                # Still try to use it - might work if runtime is configured at daemon level
+                docker_cmd.extend(["--runtime=nvidia"])
+        else:
+            logger.warning(f"DockerRunner.run() called with gpu_id=None - GPU will NOT be available in container!")
         
         # Add volume mounts
+        # - /input: current task's working input directory (latest dataset/model/additional files)
+        # - /output: where the tool should write its outputs
+        # - /data: canonical path for tools that expect dataset/model under /data
         docker_cmd.extend([
             "-v", f"{input_dir.absolute()}:/input:ro",
-            "-v", f"{output_dir.absolute()}:/output:rw"
+            "-v", f"{output_dir.absolute()}:/output:rw",
+            "-v", f"{input_dir.absolute()}:/data:ro",
         ])
         
         # Mount model config script directly to /app/ where containers expect it
@@ -238,34 +316,115 @@ class DockerRunner:
             "-e", "OUTPUT_DIR=/output"
         ])
         
+        # Add GPU-related environment variables.
+        # IMPORTANT for this host's configuration (CDI + nvidia runtime):
+        # - GPUs only become visible in the container when NVIDIA_VISIBLE_DEVICES=all
+        # - We still use CUDA_VISIBLE_DEVICES to pin a specific logical device for the tool
         if self.gpu_id is not None:
-            docker_cmd.extend(["-e", f"CUDA_VISIBLE_DEVICES={self.gpu_id}"])
+            docker_cmd.extend([
+                "-e",
+                "NVIDIA_VISIBLE_DEVICES=all",
+                "-e",
+                "NVIDIA_DRIVER_CAPABILITIES=all",
+                "-e",
+                f"CUDA_VISIBLE_DEVICES={self.gpu_id}",
+            ])
         
         # Add image and command
         docker_cmd.append(image)
         if command:
             docker_cmd.extend(command.split())
         
-        logger.debug(f"Running Docker command: {' '.join(docker_cmd)}")
+        # Log the full command for debugging
+        cmd_str = ' '.join(docker_cmd)
+        logger.info(f"Running Docker command: {cmd_str}")
+        logger.debug(f"Full Docker command: {cmd_str}")
         
-        try:
-            result = subprocess.run(
-                docker_cmd,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout,
-                shell=False  # More secure
+        # Log GPU status
+        if self.gpu_id is not None:
+            logger.info(
+                f"GPU support enabled: device={self.gpu_id}, "
+                f"NVIDIA_VISIBLE_DEVICES=all, CUDA_VISIBLE_DEVICES={self.gpu_id}, runtime=nvidia"
             )
-            
-            logs = result.stdout + result.stderr
-            return result.returncode, logs
-            
-        except subprocess.TimeoutExpired:
-            logger.error(f"Container execution timed out after {self.timeout}s")
-            return -1, f"Timeout after {self.timeout} seconds"
+        else:
+            logger.warning("GPU support DISABLED - gpu_id is None. Containers will NOT have GPU access!")
+        
+        # Use Popen + streaming readers so the container is never blocked on full stdout/stderr
+        # pipes. With capture_output=True, heavy tool output (e.g. XGBoost) can fill the pipe
+        # and deadlock; streaming avoids that and matches "manual docker run" behavior.
+        stdout_chunks: List[str] = []
+        stderr_chunks: List[str] = []
+        chunk_lock = threading.Lock()
+
+        def read_pipe(pipe: Any, out_chunks: List[str], label: str) -> None:
+            try:
+                for line in iter(pipe.readline, ""):
+                    with chunk_lock:
+                        out_chunks.append(line)
+            except (ValueError, OSError, BrokenPipeError):
+                pass
+            finally:
+                try:
+                    pipe.close()
+                except Exception:
+                    pass
+
+        try:
+            proc = subprocess.Popen(
+                docker_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                shell=False,
+                bufsize=1,  # line-buffered
+            )
+            t_stdout = threading.Thread(target=read_pipe, args=(proc.stdout, stdout_chunks, "stdout"))
+            t_stderr = threading.Thread(target=read_pipe, args=(proc.stderr, stderr_chunks, "stderr"))
+            t_stdout.daemon = True
+            t_stderr.daemon = True
+            t_stdout.start()
+            t_stderr.start()
+
+            start = time.monotonic()
+            while proc.poll() is None:
+                elapsed = time.monotonic() - start
+                if elapsed >= self.timeout:
+                    proc.kill()
+                    proc.wait()
+                    t_stdout.join(timeout=2.0)
+                    t_stderr.join(timeout=2.0)
+                    logger.error(f"Container execution timed out after {self.timeout}s")
+                    logs = "".join(stdout_chunks) + "".join(stderr_chunks)
+                    return -1, f"Timeout after {self.timeout} seconds", cmd_str
+                time.sleep(1)
+            t_stdout.join(timeout=5.0)
+            t_stderr.join(timeout=5.0)
+            logs = "".join(stdout_chunks) + "".join(stderr_chunks)
+            returncode = proc.returncode
+
+            # Check for GPU-related errors and provide helpful diagnostics
+            if returncode != 0 and self.gpu_id is not None:
+                error_lower = logs.lower()
+                if "no cuda gpus are available" in error_lower or ("cuda" in error_lower and "not available" in error_lower):
+                    logger.error(
+                        f"❌ GPU ACCESS FAILED in container!\n"
+                        f"   GPU ID: {self.gpu_id}\n"
+                        f"   Runtime: nvidia\n"
+                        f"   NVIDIA_VISIBLE_DEVICES: {self.gpu_id}\n"
+                        f"   CUDA_VISIBLE_DEVICES: {self.gpu_id}\n"
+                        f"   Docker Command: {cmd_str[:300]}...\n"
+                        f"   This may indicate:\n"
+                        f"   1. nvidia-container-runtime not properly installed/configured\n"
+                        f"   2. Docker daemon not configured for GPU access\n"
+                        f"   3. GPU {self.gpu_id} not accessible to Docker\n"
+                        f"   4. nvidia runtime not available (check: docker info | grep -i runtime)\n"
+                        f"   Container output: {logs[:500]}"
+                    )
+            return returncode, logs, cmd_str
+
         except Exception as e:
             logger.error(f"Container execution failed: {e}")
-            return -1, str(e)
+            return -1, str(e), cmd_str
 
 
 class ApptainerRunner:
@@ -279,7 +438,7 @@ class ApptainerRunner:
         self,
         workspace_dir: Path,
         gpu_id: Optional[int] = None,
-        timeout: int = 3600,
+        timeout: int = 7200,
         runtime: str = "apptainer"
     ):
         """
@@ -319,7 +478,7 @@ class ApptainerRunner:
         env: Optional[Dict[str, str]] = None,
         extra_mounts: Optional[Dict[str, str]] = None,
         model_script_path: Optional[Path] = None
-    ) -> Tuple[int, str]:
+    ) -> Tuple[int, str, str]:
         """
         Run a container using Apptainer/Singularity.
         
@@ -333,7 +492,7 @@ class ApptainerRunner:
             model_script_path: Path to model config script to mount in container
             
         Returns:
-            Tuple of (exit_code, logs)
+            Tuple of (exit_code, logs, command_string)
         """
         # Ensure output directory exists
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -347,6 +506,8 @@ class ApptainerRunner:
         # Add GPU support if available
         if self.gpu_id is not None:
             apptainer_cmd.append("--nv")  # NVIDIA GPU support
+        else:
+            logger.warning(f"ApptainerRunner.run() called with gpu_id=None - GPU will NOT be available in container!")
         
         # Add volume mounts
         apptainer_cmd.extend([
@@ -378,7 +539,14 @@ class ApptainerRunner:
         if command:
             apptainer_cmd.extend(command.split())
         
-        logger.debug(f"Running Apptainer command: {' '.join(apptainer_cmd)}")
+        cmd_str = ' '.join(apptainer_cmd)
+        logger.debug(f"Running Apptainer command: {cmd_str}")
+        
+        # Log GPU status
+        if self.gpu_id is not None:
+            logger.info(f"GPU support enabled: device={self.gpu_id}, CUDA_VISIBLE_DEVICES={self.gpu_id}")
+        else:
+            logger.warning("GPU support DISABLED - gpu_id is None. Containers will NOT have GPU access!")
         
         try:
             # Set environment for the subprocess
@@ -394,14 +562,14 @@ class ApptainerRunner:
             )
             
             logs = result.stdout + result.stderr
-            return result.returncode, logs
+            return result.returncode, logs, cmd_str
             
         except subprocess.TimeoutExpired:
             logger.error(f"Container execution timed out after {self.timeout}s")
-            return -1, f"Timeout after {self.timeout} seconds"
+            return -1, f"Timeout after {self.timeout} seconds", cmd_str
         except Exception as e:
             logger.error(f"Container execution failed: {e}")
-            return -1, str(e)
+            return -1, str(e), cmd_str
 
 
 class TaskRunner:
@@ -420,7 +588,7 @@ class TaskRunner:
         workspace_dir: Path,
         artifact_cache_dir: Optional[Path] = None,
         gpu_id: Optional[int] = None,
-        timeout: int = 3600,
+        timeout: int = 7200,
         runtime: Optional[str] = None
     ):
         """
@@ -523,7 +691,8 @@ class TaskRunner:
         self,
         task_dir: Path,
         task: TaskInfo,
-        result: ExecutionResult
+        result: ExecutionResult,
+        docker_command: Optional[str] = None
     ) -> None:
         """
         Write task execution log.
@@ -532,6 +701,7 @@ class TaskRunner:
             task_dir: Task directory
             task: Task information
             result: Execution result
+            docker_command: Optional Docker command that was executed
         """
         logs_dir = task_dir / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
@@ -547,11 +717,28 @@ class TaskRunner:
             f"Exit Code: {result.exit_code}",
             f"Execution Time: {result.execution_time_ms}ms",
             f"Success: {result.success}",
+        ]
+        
+        # Add GPU information
+        if self.gpu_id is not None:
+            log_content.append(f"GPU ID: {self.gpu_id}")
+        else:
+            log_content.append("GPU ID: None (CPU only)")
+        
+        # Add Docker command if available
+        if docker_command:
+            log_content.extend([
+                "",
+                "=== Docker Command ===",
+                docker_command,
+            ])
+        
+        log_content.extend([
             "",
             "=== Container Output ===",
             result.logs,
             ""
-        ]
+        ])
         
         if result.error_message:
             log_content.extend([
@@ -568,7 +755,8 @@ class TaskRunner:
         input_path: Optional[Path] = None,
         env: Optional[Dict[str, str]] = None,
         extra_mounts: Optional[Dict[str, str]] = None,
-        model_script_path: Optional[Path] = None
+        model_script_path: Optional[Path] = None,
+        dependency_outputs: Optional[Dict[str, Path]] = None
     ) -> ExecutionResult:
         """
         Execute a task.
@@ -579,6 +767,7 @@ class TaskRunner:
             env: Additional environment variables
             extra_mounts: Additional volume mounts
             model_script_path: Path to model config script (e.g., config_model.py)
+            dependency_outputs: Dict mapping dependency task IDs to their output directories
             
         Returns:
             ExecutionResult with execution details
@@ -614,6 +803,29 @@ class TaskRunner:
                 else:
                     shutil.copy2(input_path, input_dir / input_path.name)
             
+            # Copy outputs from dependent tasks to input directory
+            # This is critical for artifact chaining (e.g., model.pt from in_training -> post_training)
+            if dependency_outputs:
+                for dep_task_id, dep_output_path in dependency_outputs.items():
+                    if dep_output_path and dep_output_path.exists():
+                        logger.info(f"Copying outputs from dependency {dep_task_id} to input directory")
+                        if dep_output_path.is_dir():
+                            # Copy all files from dependency output directory
+                            for item in dep_output_path.iterdir():
+                                dest = input_dir / item.name
+                                if item.is_file():
+                                    shutil.copy2(item, dest)
+                                    logger.debug(f"Copied {item.name} from dependency {dep_task_id}")
+                                elif item.is_dir():
+                                    shutil.copytree(item, dest, dirs_exist_ok=True)
+                                    logger.debug(f"Copied directory {item.name} from dependency {dep_task_id}")
+                        else:
+                            # Single file output
+                            shutil.copy2(dep_output_path, input_dir / dep_output_path.name)
+                            logger.debug(f"Copied {dep_output_path.name} from dependency {dep_task_id}")
+                    else:
+                        logger.warning(f"Dependency {dep_task_id} output not found at {dep_output_path}")
+            
             # Copy model script to input directory if provided
             # This allows containers to import config_model
             if model_script_path and model_script_path.exists():
@@ -626,12 +838,14 @@ class TaskRunner:
             task_env.update(task.config)  # Add task config to environment
             
             # Add PYTHONPATH to include /input so containers can import config_model
+            # This is a fallback in case the direct mount to /app/ doesn't work
             # Prepend /input to existing PYTHONPATH if any
             existing_pythonpath = task_env.get("PYTHONPATH", "")
+            pythonpath_parts = ["/input", "/app"]
             if existing_pythonpath:
-                task_env["PYTHONPATH"] = f"/input:{existing_pythonpath}"
-            else:
-                task_env["PYTHONPATH"] = "/input"
+                pythonpath_parts.append(existing_pythonpath)
+            task_env["PYTHONPATH"] = ":".join(pythonpath_parts)
+            logger.debug(f"Set PYTHONPATH={task_env['PYTHONPATH']}")
             
             # Pull image if using Docker
             if self.runtime == "docker":
@@ -644,7 +858,8 @@ class TaskRunner:
                     )
             
             # Run the container
-            exit_code, logs = self._container_runner.run(
+            # Handle both old (exit_code, logs) and new (exit_code, logs, docker_command) return formats
+            container_result = self._container_runner.run(
                 image=task.tool_image,
                 command=task.tool_command,
                 input_dir=input_dir,
@@ -653,6 +868,13 @@ class TaskRunner:
                 extra_mounts=extra_mounts,
                 model_script_path=model_script_path
             )
+            
+            # Unpack result (handle both formats for backward compatibility)
+            if len(container_result) == 3:
+                exit_code, logs, docker_command = container_result
+            else:
+                exit_code, logs = container_result
+                docker_command = None
             
             execution_time_ms = int((time.time() - start_time) * 1000)
             
@@ -667,8 +889,8 @@ class TaskRunner:
                 error_message=None if success else f"Container exited with code {exit_code}"
             )
             
-            # Write log
-            self._write_task_log(task_dir, task, result)
+            # Write log with Docker command
+            self._write_task_log(task_dir, task, result, docker_command=docker_command)
             
             if success:
                 logger.info(f"Task {task.id} completed successfully in {execution_time_ms}ms")
@@ -688,7 +910,7 @@ class TaskRunner:
                 error_message=str(e)
             )
             
-            self._write_task_log(task_dir, task, result)
+            self._write_task_log(task_dir, task, result, docker_command=None)
             return result
     
     def run_task_with_cache(

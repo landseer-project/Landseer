@@ -3,11 +3,23 @@ Workflow definitions for the Landseer pipeline.
 
 A workflow is a sequence of tasks executed in a specific order to achieve a larger goal.
 Each workflow represents one combination of tools from the pipeline configuration.
+
+Per Workflow.md:
+- If a tool has failed and restarting with cache enabled, rerun the failed tool
+- If the tool is not present in the workflow, skip it and continue
+- If the tool is present in the workflow, rerun it
 """
 
 from dataclasses import dataclass, field
-from typing import List, Any, Dict, Optional
-from .tasks import Task, generate_workflow_id
+from typing import List, Any, Dict, Optional, TYPE_CHECKING
+import logging
+
+from .tasks import Task, TaskStatus, generate_workflow_id
+
+if TYPE_CHECKING:
+    from .workflow_restart import WorkflowRestartManager
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -74,6 +86,94 @@ class Workflow:
             List of tasks matching the type
         """
         return [task for task in self.tasks if task.task_type == task_type]
+    
+    def get_task_by_id(self, task_id: str) -> Optional[Task]:
+        """
+        Get a task by its ID.
+        
+        Args:
+            task_id: ID of the task
+            
+        Returns:
+            Task if found, None otherwise
+        """
+        for task in self.tasks:
+            if task.id == task_id:
+                return task
+        return None
+    
+    def get_task_by_tool_name(self, tool_name: str) -> Optional[Task]:
+        """
+        Get a task by its tool name.
+        
+        Useful for finding tasks when IDs may have changed between runs.
+        
+        Args:
+            tool_name: Name of the tool
+            
+        Returns:
+            Task if found, None otherwise
+        """
+        for task in self.tasks:
+            if task.tool.name == tool_name:
+                return task
+        return None
+    
+    def has_task(self, task_id: str) -> bool:
+        """
+        Check if a task exists in this workflow.
+        
+        Args:
+            task_id: ID of the task to check
+            
+        Returns:
+            True if task exists, False otherwise
+        """
+        return self.get_task_by_id(task_id) is not None
+    
+    def run_with_restart(
+        self,
+        restart_manager: "WorkflowRestartManager",
+        task_executor: Any,
+        cache_checker: Optional[Any] = None,
+        data: Any = None
+    ) -> Dict[str, Any]:
+        """
+        Execute workflow with restart and cache recovery.
+        
+        Per Workflow.md:
+        - If a tool failed and is present in workflow, rerun it
+        - If a tool failed and is not present, skip it and continue
+        
+        Args:
+            restart_manager: WorkflowRestartManager instance
+            task_executor: Function to execute a task (task, data) -> result
+            cache_checker: Optional function to check cache (task) -> cached_path or None
+            data: Initial input data
+            
+        Returns:
+            Dictionary with execution results
+        """
+        return restart_manager.execute_with_restart(
+            workflow=self,
+            task_executor=task_executor,
+            cache_checker=cache_checker
+        )
+    
+    def prepare_restart(
+        self,
+        restart_manager: "WorkflowRestartManager"
+    ) -> Dict[str, Any]:
+        """
+        Prepare a restart plan for this workflow.
+        
+        Args:
+            restart_manager: WorkflowRestartManager instance
+            
+        Returns:
+            Dictionary with restart plan
+        """
+        return restart_manager.prepare_restart_plan(self)
     
     def __repr__(self) -> str:
         """String representation of the workflow."""

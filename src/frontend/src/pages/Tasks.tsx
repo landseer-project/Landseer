@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -21,9 +21,9 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { StatusBadge } from '@/components/StatusBadge';
-import { getAllTasks, getTaskPriority, getPriorityLevels, getReadyTasks, getBlockedTasks } from '@/lib/api';
-import { truncateId, formatDuration } from '@/lib/utils';
-import type { TaskResponse, TaskStatus } from '@/types/api';
+import { getAllTasks, getTaskPriority, getReadyTasks, getBlockedTasks, getTaskLogs } from '@/lib/api';
+import { truncateId } from '@/lib/utils';
+import type { TaskResponse } from '@/types/api';
 import {
   Search,
   Filter,
@@ -42,6 +42,7 @@ import {
 } from 'lucide-react';
 
 export function Tasks() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTask, setSelectedTask] = useState<TaskResponse | null>(null);
@@ -66,21 +67,35 @@ export function Tasks() {
     refetchInterval: 5000, // Refresh every 5 seconds
   });
 
-  const { data: priorityLevels } = useQuery({
-    queryKey: ['priority-levels'],
-    queryFn: getPriorityLevels,
-  });
-
   const { data: taskPriority } = useQuery({
     queryKey: ['task-priority', selectedTask?.id],
     queryFn: () => (selectedTask ? getTaskPriority(selectedTask.id) : null),
     enabled: !!selectedTask,
   });
 
+  const { data: taskLogs } = useQuery({
+    queryKey: ['task-logs', selectedTask?.id],
+    queryFn: () => (selectedTask ? getTaskLogs(selectedTask.id) : null),
+    enabled: !!selectedTask && selectedTask.status === 'failed',
+  });
+
   const tasks = tasksData?.tasks || [];
   const readyTasks = readyTasksData?.tasks || [];
   const blockedTasks = blockedTasksData?.tasks || [];
   const isRefreshing = isFetching && !isLoading;
+
+  // Handle task query parameter (from worker card click)
+  useEffect(() => {
+    const taskId = searchParams.get('task');
+    if (taskId && tasks.length > 0) {
+      const task = tasks.find((t) => t.id === taskId);
+      if (task) {
+        setSelectedTask(task);
+        // Remove query param after opening
+        setSearchParams({}, { replace: true });
+      }
+    }
+  }, [searchParams, tasks, setSearchParams]);
 
   // Filter and sort tasks
   const filteredTasks = tasks
@@ -421,6 +436,9 @@ export function Tasks() {
                       </div>
                       <p className="text-sm text-muted-foreground">
                         {truncateId(task.id)} • Priority: {task.priority}
+                        {task.worker_id && (
+                          <> • Worker: <span className="font-medium">{task.worker_id}</span></>
+                        )}
                       </p>
                     </div>
                   </div>
@@ -428,11 +446,25 @@ export function Tasks() {
                   <div className="flex items-center gap-4">
                     <div className="hidden text-right sm:block">
                       <p className="text-sm">
-                        <span className="text-muted-foreground">Workflows:</span> {task.workflows.length}
+                        <span className="text-muted-foreground">Workflows:</span>{' '}
+                        {task.workflow_names.length > 0
+                          ? task.workflow_names.slice(0, 2).join(', ') + (task.workflow_names.length > 2 ? '...' : '')
+                          : task.workflows.length}
                       </p>
                       <p className="text-sm">
                         <span className="text-muted-foreground">Dependencies:</span> {task.dependency_ids.length}
                       </p>
+                      {task.worker_id && (
+                        <p className="text-xs text-blue-600 dark:text-blue-400">
+                          Executed by: {task.worker_id}
+                        </p>
+                      )}
+                      {task.cache_hit && (
+                        <p className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1">
+                          <Layers className="h-3 w-3" />
+                          Cache used
+                        </p>
+                      )}
                     </div>
                     <StatusBadge status={task.status} />
                     <ChevronRight className="h-4 w-4 text-muted-foreground" />
@@ -469,13 +501,18 @@ export function Tasks() {
                 <TabsTrigger value="details">Details</TabsTrigger>
                 <TabsTrigger value="config">Config</TabsTrigger>
                 <TabsTrigger value="dependencies">Dependencies</TabsTrigger>
+                {selectedTask.status === 'failed' && (
+                  <TabsTrigger value="logs" className="text-red-600 dark:text-red-400">
+                    Error Logs
+                  </TabsTrigger>
+                )}
               </TabsList>
 
               <TabsContent value="details" className="space-y-4">
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-1">
                     <p className="text-sm text-muted-foreground">Status</p>
-                    <StatusBadge status={selectedTask.status} />
+                    <StatusBadge status={selectedTask.status} showIcon={true} />
                   </div>
                   <div className="space-y-1">
                     <p className="text-sm text-muted-foreground">Priority</p>
@@ -488,6 +525,43 @@ export function Tasks() {
                   <div className="space-y-1">
                     <p className="text-sm text-muted-foreground">Usage Count</p>
                     <p className="font-medium">{selectedTask.counter}</p>
+                  </div>
+                  {selectedTask.worker_id && (
+                    <div className="space-y-1">
+                      <p className="text-sm text-muted-foreground">Executed By</p>
+                      <p className="font-medium">{selectedTask.worker_id}</p>
+                    </div>
+                  )}
+                  {selectedTask.execution_time_ms && (
+                    <div className="space-y-1">
+                      <p className="text-sm text-muted-foreground">Execution Time</p>
+                      <p className="font-medium">{selectedTask.execution_time_ms}ms</p>
+                    </div>
+                  )}
+                  {selectedTask.cache_hit && (
+                    <div className="space-y-1 sm:col-span-2">
+                      <p className="text-sm text-muted-foreground">Cache</p>
+                      <div className="flex items-center gap-2 rounded-lg bg-green-50 p-2 dark:bg-green-900/20">
+                        <Layers className="h-4 w-4 text-green-600 dark:text-green-400" />
+                        <span className="text-sm font-medium text-green-700 dark:text-green-300">
+                          Cache hit
+                        </span>
+                        {selectedTask.cache_key && (
+                          <code className="ml-auto text-xs text-muted-foreground">
+                            {truncateId(selectedTask.cache_key, 12)}
+                          </code>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <p className="text-sm text-muted-foreground">Input/Configuration</p>
+                  <div className="rounded-lg bg-muted p-3">
+                    <pre className="text-xs overflow-x-auto">
+                      {JSON.stringify(selectedTask.config, null, 2)}
+                    </pre>
                   </div>
                 </div>
 
@@ -508,17 +582,30 @@ export function Tasks() {
                 <div className="space-y-2">
                   <p className="text-sm text-muted-foreground">Workflows ({selectedTask.workflows.length})</p>
                   <div className="flex flex-wrap gap-2">
-                    {selectedTask.workflows.map((wf) => (
-                      <Badge key={wf} variant="secondary">
-                        <GitBranch className="mr-1 h-3 w-3" />
-                        {truncateId(wf)}
-                      </Badge>
-                    ))}
+                    {selectedTask.workflow_names.length > 0
+                      ? selectedTask.workflow_names.map((wfName, idx) => (
+                          <Badge key={selectedTask.workflows[idx] || idx} variant="secondary">
+                            <GitBranch className="mr-1 h-3 w-3" />
+                            {wfName}
+                          </Badge>
+                        ))
+                      : selectedTask.workflows.map((wf) => (
+                          <Badge key={wf} variant="secondary">
+                            <GitBranch className="mr-1 h-3 w-3" />
+                            {truncateId(wf)}
+                          </Badge>
+                        ))}
                   </div>
                 </div>
               </TabsContent>
 
-              <TabsContent value="config">
+              <TabsContent value="config" className="space-y-4">
+                <div className="space-y-2">
+                  <p className="text-sm font-medium">Task Configuration</p>
+                  <p className="text-xs text-muted-foreground">
+                    This is the input/configuration passed to the task
+                  </p>
+                </div>
                 <ScrollArea className="h-[300px]">
                   <pre className="rounded-lg bg-muted p-4 text-sm">
                     {JSON.stringify(selectedTask.config, null, 2)}
@@ -560,6 +647,39 @@ export function Tasks() {
                   )}
                 </div>
               </TabsContent>
+
+              {selectedTask.status === 'failed' && (
+                <TabsContent value="logs" className="space-y-4">
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium text-red-600 dark:text-red-400">Error Information</p>
+                    {selectedTask.error_message && (
+                      <div className="rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-900/50 dark:bg-red-900/10">
+                        <p className="text-sm font-medium text-red-800 dark:text-red-200 mb-2">Error Message:</p>
+                        <pre className="text-xs text-red-700 dark:text-red-300 whitespace-pre-wrap overflow-x-auto">
+                          {selectedTask.error_message}
+                        </pre>
+                      </div>
+                    )}
+                    {taskLogs?.logs && (
+                      <div className="rounded-lg border border-orange-200 bg-orange-50 p-4 dark:border-orange-900/50 dark:bg-orange-900/10">
+                        <p className="text-sm font-medium text-orange-800 dark:text-orange-200 mb-2">Execution Logs:</p>
+                        <ScrollArea className="h-[300px]">
+                          <pre className="text-xs text-orange-700 dark:text-orange-300 whitespace-pre-wrap overflow-x-auto">
+                            {taskLogs.logs}
+                          </pre>
+                        </ScrollArea>
+                      </div>
+                    )}
+                    {!selectedTask.error_message && !taskLogs?.logs && (
+                      <div className="rounded-lg border border-dashed p-4 text-center text-muted-foreground">
+                        <AlertTriangle className="mx-auto h-8 w-8 mb-2 opacity-50" />
+                        <p>No error logs available</p>
+                        <p className="text-xs mt-1">Logs may not have been captured or task failed before execution</p>
+                      </div>
+                    )}
+                  </div>
+                </TabsContent>
+              )}
             </Tabs>
           )}
         </DialogContent>
