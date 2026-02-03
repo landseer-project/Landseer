@@ -22,6 +22,7 @@ class TaskType(str, Enum):
     IN_TRAINING = "in_training"
     POST_TRAINING = "post_training"
     DEPLOYMENT = "deployment"
+    EVALUATION = "evaluation"
 
 
 class TaskStatus(Enum):
@@ -148,8 +149,25 @@ class Task(ABC):
             raise ValueError(f"Task {self.id} already belongs to pipeline {self.pipeline_id}, cannot add to {pipeline_id}")
         
         self.pipeline_id = pipeline_id
-        self.workflows.add(workflow_id)
-        self.counter += 1
+        
+        # Only increment counter if this is a new workflow
+        if workflow_id not in self.workflows:
+            self.workflows.add(workflow_id)
+            self.counter += 1
+    
+    def add_dependency(self, dependency: "Task") -> None:
+        """
+        Add a dependency to this task.
+        
+        The dependent task must complete before this task can run.
+        
+        Args:
+            dependency: Task that must complete first
+        """
+        if dependency not in self.dependencies:
+            self.dependencies.append(dependency)
+            # Invalidate hash since dependencies changed
+            self._hash = ""
     
     @property
     @abstractmethod
@@ -227,6 +245,54 @@ class DeploymentTask(Task):
         return data
 
 
+@dataclass
+class EvaluationTask(Task):
+    """
+    Task executed after deployment for model evaluation.
+    
+    Evaluation tasks run at the end of each workflow and produce metrics.
+    They have lowest priority (50) to ensure they run after all defense stages.
+    
+    Attributes:
+        required_artifacts: List of artifacts this evaluator needs (e.g., ["watermark_key.json"])
+                          If any required artifact is missing, the evaluator skips gracefully.
+    """
+    required_artifacts: List[str] = field(default_factory=list)
+    
+    def __post_init__(self):
+        """Initialize evaluation task with low priority."""
+        super().__post_init__()
+        # Ensure evaluation tasks have low priority (run last)
+        if self.priority == 0:
+            self.priority = 50
+    
+    @property
+    def task_type(self) -> TaskType:
+        return TaskType.EVALUATION
+    
+    def run(self, data: Any) -> Any:
+        """Execute evaluation logic."""
+        # Actual implementation will be handled by the tool runner
+        return data
+    
+    def _compute_hash(self) -> str:
+        """
+        Compute hash including required_artifacts.
+        """
+        hash_data = {
+            "tool_name": self.tool.name,
+            "tool_image": self.tool.container.image,
+            "tool_command": self.tool.container.command,
+            "config": self.config,
+            "dependencies": sorted([dep.id for dep in self.dependencies]),
+            "required_artifacts": sorted(self.required_artifacts)
+        }
+        
+        json_str = json.dumps(hash_data, sort_keys=True)
+        self._hash = hashlib.sha256(json_str.encode()).hexdigest()
+        return self._hash
+
+
 # Task registry for deduplication
 _task_registry: Dict[str, Task] = {}
 
@@ -292,6 +358,7 @@ class TaskFactory:
         TaskType.IN_TRAINING: InTrainingTask,
         TaskType.POST_TRAINING: PostTrainingTask,
         TaskType.DEPLOYMENT: DeploymentTask,
+        TaskType.EVALUATION: EvaluationTask,
     }
     
     @classmethod

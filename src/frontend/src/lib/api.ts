@@ -23,6 +23,9 @@ import type {
   SchedulerNextPreview,
 } from '@/types/api';
 
+// Re-export types for convenience (EvaluatorInfo and AddEvaluatorRequest are already exported as interfaces above)
+export type { ToolInfo, AddToolRequest };
+
 // Create axios instance with base configuration
 const api: AxiosInstance = axios.create({
   baseURL: '/api',
@@ -108,6 +111,18 @@ export async function getTask(taskId: string): Promise<TaskResponse> {
 
 export async function getTaskPriority(taskId: string): Promise<TaskPriorityInfo> {
   const { data } = await api.get<TaskPriorityInfo>(`/tasks/${taskId}/priority`);
+  return data;
+}
+
+export async function getTaskLogs(taskId: string): Promise<{
+  task_id: string;
+  status: string;
+  error_message: string | null;
+  logs: string | null;
+  worker_id: string | null;
+  execution_time_ms: number | null;
+}> {
+  const { data } = await api.get(`/tasks/${taskId}/logs`);
   return data;
 }
 

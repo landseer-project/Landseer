@@ -6,6 +6,7 @@ executes them in containers, and reports results back.
 """
 
 import argparse
+import json
 import os
 import signal
 import sys
@@ -52,7 +53,7 @@ class Worker:
         data_path: Optional[Path] = None,
         gpu_id: Optional[int] = None,
         poll_interval: float = 5.0,
-        task_timeout: int = 3600,
+        task_timeout: int = 7200,
         heartbeat_interval: float = 30.0,
         use_cache: bool = True,
         runtime: Optional[str] = None
@@ -328,19 +329,39 @@ class Worker:
                         artifacts={"cache_hit": True, "cache_key": cache_key}
                     )
             
-            # Execute the task with data directory mounted
-            # Priority: manual data_path > fetched dataset_path
-            extra_mounts = {}
+            # Execute the task.
+            # Priority for providing initial data to the task:
+            # manual data_path > fetched dataset_path.
+            # The TaskRunner will copy any provided data_dir contents, plus
+            # dependency outputs, into the per-task input directory. The
+            # DockerRunner then mounts that input directory at both /input and
+            # /data so that tools always see the latest dataset/model/artifacts
+            # at a stable path.
             data_dir = self.data_path if (self.data_path and self.data_path.exists()) else self._dataset_path
-            if data_dir and data_dir.exists():
-                extra_mounts[str(data_dir.absolute())] = "/data"
-                logger.debug(f"Mounting data directory: {data_dir} -> /data")
+            # Collect outputs from dependent tasks for artifact chaining
+            dependency_outputs = {}
+            if task.dependency_ids:
+                logger.info(f"Task {task.id} has {len(task.dependency_ids)} dependencies: {task.dependency_ids}")
+                for dep_id in task.dependency_ids:
+                    # Find dependency output directory in workspace
+                    dep_output_dir = self._runner.workspace_dir / dep_id / "output"
+                    if dep_output_dir.exists():
+                        dependency_outputs[dep_id] = dep_output_dir
+                        logger.info(f"Found output directory for dependency {dep_id}: {dep_output_dir}")
+                    else:
+                        logger.warning(f"Output directory not found for dependency {dep_id} at {dep_output_dir}")
+                        # Also check cache if available
+                        if self.use_cache:
+                            # Try to find in cache (this would require tracking parent hashes)
+                            # For now, just log the warning
+                            pass
             
             result = self._runner.run_task(
                 task,
                 input_path=data_dir,
-                extra_mounts=extra_mounts if extra_mounts else None,
-                model_script_path=self._model_script_path
+                extra_mounts=None,
+                model_script_path=self._model_script_path,
+                dependency_outputs=dependency_outputs if dependency_outputs else None
             )
             
             # Store in cache if successful
@@ -430,18 +451,70 @@ class Worker:
             result: Execution result
         """
         try:
+            # Derive the per-task log file path written by TaskRunner
+            # so we can both (a) keep full logs on the worker filesystem,
+            # and (b) send a small snippet + path back to the backend.
+            log_path = (
+                self.workspace_dir
+                / task.id
+                / "logs"
+                / f"{task.task_type}_{task.tool_name.replace(' ', '_')}.log"
+            )
+
+            logs_snippet: Optional[str] = None
+            if log_path.exists():
+                try:
+                    content = log_path.read_text()
+                    # Limit size to keep API/database payloads small while
+                    # still being useful for debugging.
+                    max_chars = 10_000
+                    if len(content) > max_chars:
+                        logs_snippet = content[-max_chars:]
+                    else:
+                        logs_snippet = content
+                except Exception as e:
+                    logger.warning(f"Failed to read log file for task {task.id}: {e}")
+
+            # Attach structured info the backend can surface via /tasks/...:
+            # - artifacts: cache keys, etc.
+            # - logs: tail snippet of the worker log file
+            # - log_path: absolute path on the worker for full inspection
+            result_payload = {
+                "artifacts": result.artifacts,
+                "logs": logs_snippet,
+                "log_path": str(log_path) if log_path.exists() else None,
+            }
+
+            # For evaluator tasks, read evaluation_results.json from output and send to backend
+            # so metrics can be stored and shown on the Metrics dashboard.
+            if (
+                result.success
+                and getattr(task, "task_type", "") == "evaluation"
+                and result.output_path
+                and result.output_path.exists()
+            ):
+                eval_path = result.output_path / "evaluation_results.json"
+                if eval_path.exists():
+                    try:
+                        eval_data = json.loads(eval_path.read_text())
+                        result_payload["evaluation_result"] = eval_data
+                        logger.debug(f"Included evaluation_result for task {task.id}")
+                    except Exception as e:
+                        logger.warning(f"Failed to read evaluation_results.json for task {task.id}: {e}")
+
             if result.success:
                 self._client.report_task_completed(
                     task_id=task.id,
                     execution_time_ms=result.execution_time_ms,
-                    result=result.artifacts
+                    result=result_payload
                 )
                 self._tasks_completed += 1
             else:
                 self._client.report_task_failed(
                     task_id=task.id,
                     error_message=result.error_message or "Unknown error",
-                    execution_time_ms=result.execution_time_ms
+                    execution_time_ms=result.execution_time_ms,
+                    result=result_payload
                 )
                 self._tasks_failed += 1
                 
@@ -605,9 +678,9 @@ Examples:
     exec_group.add_argument(
         "--timeout",
         type=int,
-        default=3600,
+        default=7200,
         metavar="SECONDS",
-        help="Task execution timeout in seconds (default: 3600)",
+        help="Task execution timeout in seconds (default: 7200). Increase for long tools (e.g. pre-xgbod on full datasets).",
     )
     exec_group.add_argument(
         "--runtime",

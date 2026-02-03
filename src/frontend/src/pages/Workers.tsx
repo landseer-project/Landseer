@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   Dialog,
   DialogContent,
@@ -62,7 +62,6 @@ export function Workers() {
   };
 
   const totalCompleted = workers.reduce((acc, w) => acc + w.tasks_completed, 0);
-  const totalFailed = workers.reduce((acc, w) => acc + w.tasks_failed, 0);
 
   // Only show full loading on initial load
   if (isLoading && !workersData) {
@@ -214,19 +213,6 @@ export function Workers() {
 }
 
 function WorkerCard({ worker }: { worker: WorkerInfo }) {
-  const getStatusIcon = () => {
-    switch (worker.status) {
-      case 'busy':
-        return <Loader2 className="h-4 w-4 animate-spin text-purple-500" />;
-      case 'idle':
-        return <CheckCircle2 className="h-4 w-4 text-green-500" />;
-      case 'offline':
-        return <XCircle className="h-4 w-4 text-gray-400" />;
-      default:
-        return <Activity className="h-4 w-4 text-blue-500" />;
-    }
-  };
-
   return (
     <Card className="transition-shadow hover:shadow-md">
       <CardHeader className="pb-2">
@@ -274,12 +260,15 @@ function WorkerCard({ worker }: { worker: WorkerInfo }) {
           </div>
 
           {worker.current_task_id && (
-            <div className="rounded-lg bg-muted/50 p-2">
+            <Link
+              to={`/tasks?task=${worker.current_task_id}`}
+              className="rounded-lg bg-muted/50 p-2 transition-colors hover:bg-muted"
+            >
               <p className="text-xs text-muted-foreground">Current Task</p>
-              <p className="text-sm font-medium">
+              <p className="text-sm font-medium hover:text-primary">
                 {truncateId(worker.current_task_id)}
               </p>
-            </div>
+            </Link>
           )}
 
           {worker.capabilities && Object.keys(worker.capabilities).length > 0 && (

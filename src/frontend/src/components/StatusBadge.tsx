@@ -1,5 +1,5 @@
 import { Badge } from '@/components/ui/badge';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Clock } from 'lucide-react';
 import type { TaskStatus, WorkerStatus, WorkflowStatus } from '@/types/api';
 
 interface StatusBadgeProps {
@@ -32,11 +32,21 @@ export function StatusBadge({ status, showIcon = true, className }: StatusBadgeP
     }
   };
 
+  const getIcon = () => {
+    if (!showIcon) return null;
+    switch (normalizedStatus) {
+      case 'running':
+        return <Loader2 className="mr-1 h-3 w-3 animate-spin" />;
+      case 'pending':
+        return <Clock className="mr-1 h-3 w-3" />;
+      default:
+        return null;
+    }
+  };
+
   return (
     <Badge variant={getVariant()} className={className}>
-      {showIcon && normalizedStatus === 'running' && (
-        <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-      )}
+      {getIcon()}
       {status.charAt(0).toUpperCase() + status.slice(1)}
     </Badge>
   );

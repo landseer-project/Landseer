@@ -27,8 +27,14 @@ export interface TaskResponse {
   task_type: TaskType;
   counter: number;
   workflows: string[];
+  workflow_names: string[];
   pipeline_id: string;
   dependency_ids: string[];
+  cache_hit?: boolean | null;
+  cache_key?: string | null;
+  worker_id?: string | null;
+  error_message?: string | null;
+  execution_time_ms?: number | null;
 }
 
 export interface TaskListResponse {

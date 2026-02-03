@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { StatsCard } from '@/components/StatsCard';
-import { getPipelineMetrics, getPipelineDetail, PipelineMetricsResponse, PipelineDetailResponse } from '@/lib/api';
+import { getPipelineMetrics, getPipelineDetail, PipelineMetricsResponse } from '@/lib/api';
 
 // Simple sparkline component
 function Sparkline({ values, color = 'blue' }: { values: number[]; color?: string }) {
@@ -57,7 +57,6 @@ function HeatmapCell({ value, min, max }: { value: number | null; min: number; m
 export function Metrics() {
   const { id: pipelineId } = useParams<{ id: string }>();
   const [metrics, setMetrics] = useState<PipelineMetricsResponse | null>(null);
-  const [pipeline, setPipeline] = useState<PipelineDetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -68,17 +67,14 @@ export function Metrics() {
   async function loadData() {
     try {
       setLoading(true);
-      const [pipelineRes, metricsRes] = await Promise.all([
-        getPipelineDetail(),
-        pipelineId ? getPipelineMetrics(pipelineId) : Promise.resolve(null),
-      ]);
-      setPipeline(pipelineRes);
       
-      // If no pipelineId, use the current pipeline
-      if (!pipelineId && pipelineRes) {
+      // If no pipelineId, get current pipeline first
+      if (!pipelineId) {
+        const pipelineRes = await getPipelineDetail();
         const metricsData = await getPipelineMetrics(pipelineRes.id);
         setMetrics(metricsData);
       } else {
+        const metricsRes = await getPipelineMetrics(pipelineId);
         setMetrics(metricsRes);
       }
       
@@ -124,7 +120,8 @@ export function Metrics() {
   const avgCleanAccuracy = metrics.summary['clean_accuracy']?.avg;
   const bestPgdAccuracy = metrics.summary['pgd_accuracy']?.max;
   const completedEvals = metrics.workflows.filter(w => w.evaluators_run.length > 0).length;
-  
+  const hasNoData = completedEvals === 0 || metrics.metric_names.length === 0;
+
   // Get all unique metrics for the heatmap
   const allMetricNames = metrics.metric_names;
   
@@ -156,27 +153,52 @@ export function Metrics() {
         <Button onClick={loadData} variant="outline">Refresh</Button>
       </div>
 
+      {/* Empty state: no evaluations completed yet */}
+      {hasNoData && (
+        <Card className="border-blue-200 bg-blue-50/80 dark:bg-blue-950/30 dark:border-blue-800">
+          <CardContent className="pt-6">
+            <div className="flex gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-300">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
+                  <circle cx="12" cy="12" r="10" />
+                  <path d="M12 16v-4M12 8h.01" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="font-semibold text-blue-900 dark:text-blue-100">No metrics yet</h3>
+                <p className="mt-1 text-sm text-blue-800 dark:text-blue-200">
+                  Metrics will appear here after workflow evaluations complete. Run your pipeline (training and evaluation tasks); once evaluators run, you’ll see clean accuracy, PGD accuracy, and other metrics in the cards and comparison table below.
+                </p>
+                <p className="mt-2 text-xs text-blue-700 dark:text-blue-300">
+                  You can still see workflow status (Pending / Completed) in the table. Use the <strong>Tasks</strong> or <strong>Workflows</strong> pages to monitor progress.
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Overview Cards */}
       <div className="grid gap-4 md:grid-cols-4">
         <StatsCard
           title="Total Workflows"
           value={metrics.workflow_count}
-          description="Workflow combinations"
+          subtitle="Workflow combinations"
         />
         <StatsCard
           title="Avg Clean Accuracy"
-          value={avgCleanAccuracy ? `${(avgCleanAccuracy * 100).toFixed(1)}%` : 'N/A'}
-          description="Across all workflows"
+          value={avgCleanAccuracy != null ? `${(avgCleanAccuracy * 100).toFixed(1)}%` : 'N/A'}
+          subtitle={hasNoData ? 'Complete evaluations to see value' : 'Across all workflows'}
         />
         <StatsCard
           title="Best PGD Accuracy"
-          value={bestPgdAccuracy ? `${(bestPgdAccuracy * 100).toFixed(1)}%` : 'N/A'}
-          description="Adversarial robustness"
+          value={bestPgdAccuracy != null ? `${(bestPgdAccuracy * 100).toFixed(1)}%` : 'N/A'}
+          subtitle={hasNoData ? 'Complete evaluations to see value' : 'Adversarial robustness'}
         />
         <StatsCard
           title="Completed Evaluations"
           value={completedEvals}
-          description={`of ${metrics.workflow_count} workflows`}
+          subtitle={`of ${metrics.workflow_count} workflows`}
         />
       </div>
 
@@ -192,7 +214,11 @@ export function Metrics() {
           <Card>
             <CardHeader>
               <CardTitle>Workflow Comparison</CardTitle>
-              <CardDescription>All metrics across workflows with trend visualization</CardDescription>
+              <CardDescription>
+                {allMetricNames.length > 0
+                  ? 'All metrics across workflows with trend visualization'
+                  : 'Workflow status. Metrics columns will appear once evaluations complete.'}
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <div className="overflow-x-auto">
@@ -200,9 +226,13 @@ export function Metrics() {
                   <thead>
                     <tr className="border-b">
                       <th className="text-left py-2 px-3">Workflow</th>
-                      {allMetricNames.slice(0, 6).map(name => (
-                        <th key={name} className="text-left py-2 px-3">{name.replace(/_/g, ' ')}</th>
-                      ))}
+                      {allMetricNames.length > 0 ? (
+                        allMetricNames.slice(0, 6).map(name => (
+                          <th key={name} className="text-left py-2 px-3">{name.replace(/_/g, ' ')}</th>
+                        ))
+                      ) : (
+                        <th className="text-left py-2 px-3 text-muted-foreground">Metrics</th>
+                      )}
                       <th className="text-left py-2 px-3">Status</th>
                     </tr>
                   </thead>
@@ -210,29 +240,31 @@ export function Metrics() {
                     {metrics.workflows.map((workflow, idx) => (
                       <tr key={workflow.workflow_id} className="border-b hover:bg-gray-50">
                         <td className="py-2 px-3 font-medium">{workflow.workflow_name}</td>
-                        {allMetricNames.slice(0, 6).map(metricName => {
-                          const value = workflow.metrics[metricName];
-                          // Get all values for this metric to create sparkline
-                          const allValues = metrics.workflows
-                            .slice(0, idx + 1)
-                            .map(w => w.metrics[metricName])
-                            .filter((v): v is number => v !== null);
-                          
-                          return (
-                            <td key={metricName} className="py-2 px-3">
-                              {value !== null ? (
-                                <span className="flex items-center">
-                                  {(value * 100).toFixed(1)}%
-                                  {allValues.length > 1 && (
-                                    <Sparkline values={allValues} color={value > 0.5 ? 'green' : 'blue'} />
-                                  )}
-                                </span>
-                              ) : (
-                                <span className="text-gray-400">N/A</span>
-                              )}
-                            </td>
-                          );
-                        })}
+                        {allMetricNames.length > 0 ? (
+                          allMetricNames.slice(0, 6).map(metricName => {
+                            const value = workflow.metrics[metricName];
+                            const allValues = metrics.workflows
+                              .slice(0, idx + 1)
+                              .map(w => w.metrics[metricName])
+                              .filter((v): v is number => v !== null);
+                            return (
+                              <td key={metricName} className="py-2 px-3">
+                                {value !== null ? (
+                                  <span className="flex items-center">
+                                    {(value * 100).toFixed(1)}%
+                                    {allValues.length > 1 && (
+                                      <Sparkline values={allValues} color={value > 0.5 ? 'green' : 'blue'} />
+                                    )}
+                                  </span>
+                                ) : (
+                                  <span className="text-gray-400">N/A</span>
+                                )}
+                              </td>
+                            );
+                          })
+                        ) : (
+                          <td className="py-2 px-3 text-muted-foreground italic">No evaluation data yet</td>
+                        )}
                         <td className="py-2 px-3">
                           {workflow.evaluators_run.length > 0 ? (
                             <Badge variant="default">Completed</Badge>
@@ -259,97 +291,111 @@ export function Metrics() {
               <CardDescription>Visual comparison of metrics across workflows (darker = higher)</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="overflow-x-auto">
-                <div className="min-w-max">
-                  {/* Header */}
-                  <div className="flex items-center gap-1 mb-2">
-                    <div className="w-24 flex-shrink-0"></div>
-                    {allMetricNames.map(name => (
-                      <div key={name} className="w-10 text-center">
-                        <span className="text-xs text-gray-500 writing-mode-vertical transform -rotate-45 inline-block origin-bottom-left">
-                          {name.slice(0, 8)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                  
-                  {/* Rows */}
-                  {metrics.workflows.map(workflow => (
-                    <div key={workflow.workflow_id} className="flex items-center gap-1 mb-1">
-                      <div className="w-24 flex-shrink-0 text-xs font-medium truncate" title={workflow.workflow_name}>
-                        {workflow.workflow_name}
-                      </div>
-                      {allMetricNames.map(metricName => {
-                        const value = workflow.metrics[metricName];
-                        const range = metricRanges[metricName];
-                        return (
-                          <HeatmapCell
-                            key={metricName}
-                            value={value}
-                            min={range.min}
-                            max={range.max}
-                          />
-                        );
-                      })}
-                    </div>
-                  ))}
-                  
-                  {/* Legend */}
-                  <div className="flex items-center gap-2 mt-4 text-xs text-gray-500">
-                    <span>Low</span>
-                    <div className="flex">
-                      {[0, 0.25, 0.5, 0.75, 1].map(v => (
-                        <div
-                          key={v}
-                          className="w-6 h-4"
-                          style={{ backgroundColor: `rgb(${255 - v * 255}, ${155 + v * 100}, ${155 + v * 100})` }}
-                        />
+              {allMetricNames.length === 0 ? (
+                <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-gray-200 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/30 py-12 px-6 text-center">
+                  <p className="text-sm text-muted-foreground">No metrics to display yet.</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Complete workflow evaluations to see a heatmap here.</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <div className="min-w-max">
+                    {/* Header */}
+                    <div className="flex items-center gap-1 mb-2">
+                      <div className="w-24 flex-shrink-0"></div>
+                      {allMetricNames.map(name => (
+                        <div key={name} className="w-10 text-center">
+                          <span className="text-xs text-gray-500 writing-mode-vertical transform -rotate-45 inline-block origin-bottom-left">
+                            {name.slice(0, 8)}
+                          </span>
+                        </div>
                       ))}
                     </div>
-                    <span>High</span>
+                    {/* Rows */}
+                    {metrics.workflows.map(workflow => (
+                      <div key={workflow.workflow_id} className="flex items-center gap-1 mb-1">
+                        <div className="w-24 flex-shrink-0 text-xs font-medium truncate" title={workflow.workflow_name}>
+                          {workflow.workflow_name}
+                        </div>
+                        {allMetricNames.map(metricName => {
+                          const value = workflow.metrics[metricName];
+                          const range = metricRanges[metricName];
+                          return (
+                            <HeatmapCell
+                              key={metricName}
+                              value={value}
+                              min={range.min}
+                              max={range.max}
+                            />
+                          );
+                        })}
+                      </div>
+                    ))}
+                    {/* Legend */}
+                    <div className="flex items-center gap-2 mt-4 text-xs text-gray-500">
+                      <span>Low</span>
+                      <div className="flex">
+                        {[0, 0.25, 0.5, 0.75, 1].map(v => (
+                          <div
+                            key={v}
+                            className="w-6 h-4"
+                            style={{ backgroundColor: `rgb(${255 - v * 255}, ${155 + v * 100}, ${155 + v * 100})` }}
+                          />
+                        ))}
+                      </div>
+                      <span>High</span>
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
 
         {/* Summary Statistics */}
         <TabsContent value="summary">
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {Object.entries(metrics.summary).map(([metricName, stats]) => (
-              <Card key={metricName}>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-base">{metricName.replace(/_/g, ' ')}</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="grid grid-cols-3 gap-4 text-center">
-                    <div>
-                      <p className="text-2xl font-bold text-red-600">
-                        {stats.min !== null ? (stats.min * 100).toFixed(1) : 'N/A'}%
-                      </p>
-                      <p className="text-xs text-gray-500">Min</p>
+          {Object.keys(metrics.summary).length === 0 ? (
+            <Card>
+              <CardContent className="flex flex-col items-center justify-center py-12 px-6 text-center">
+                <p className="text-sm text-muted-foreground">No summary statistics yet.</p>
+                <p className="mt-1 text-xs text-muted-foreground">Min / avg / max per metric will appear here once evaluations complete.</p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              {Object.entries(metrics.summary).map(([metricName, stats]) => (
+                <Card key={metricName}>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-base">{metricName.replace(/_/g, ' ')}</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-3 gap-4 text-center">
+                      <div>
+                        <p className="text-2xl font-bold text-red-600">
+                          {stats.min !== null ? (stats.min * 100).toFixed(1) : 'N/A'}%
+                        </p>
+                        <p className="text-xs text-gray-500">Min</p>
+                      </div>
+                      <div>
+                        <p className="text-2xl font-bold text-blue-600">
+                          {stats.avg !== null ? (stats.avg * 100).toFixed(1) : 'N/A'}%
+                        </p>
+                        <p className="text-xs text-gray-500">Avg</p>
+                      </div>
+                      <div>
+                        <p className="text-2xl font-bold text-green-600">
+                          {stats.max !== null ? (stats.max * 100).toFixed(1) : 'N/A'}%
+                        </p>
+                        <p className="text-xs text-gray-500">Max</p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-2xl font-bold text-blue-600">
-                        {stats.avg !== null ? (stats.avg * 100).toFixed(1) : 'N/A'}%
-                      </p>
-                      <p className="text-xs text-gray-500">Avg</p>
-                    </div>
-                    <div>
-                      <p className="text-2xl font-bold text-green-600">
-                        {stats.max !== null ? (stats.max * 100).toFixed(1) : 'N/A'}%
-                      </p>
-                      <p className="text-xs text-gray-500">Max</p>
-                    </div>
-                  </div>
-                  <p className="text-xs text-gray-400 mt-2 text-center">
-                    {stats.count} workflows with data
-                  </p>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
+                    <p className="text-xs text-gray-400 mt-2 text-center">
+                      {stats.count} workflows with data
+                    </p>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
         </TabsContent>
       </Tabs>
     </div>

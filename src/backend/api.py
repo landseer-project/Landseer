@@ -71,8 +71,14 @@ class TaskResponse(BaseModel):
     task_type: str = Field(description="Type of task (pre/in/post/deploy)")
     counter: int = Field(description="Number of workflows using this task")
     workflows: List[str] = Field(default_factory=list, description="Workflow IDs using this task")
+    workflow_names: List[str] = Field(default_factory=list, description="Workflow names using this task")
     pipeline_id: str = Field(description="ID of the pipeline this task belongs to")
     dependency_ids: List[str] = Field(default_factory=list, description="IDs of dependent tasks")
+    cache_hit: Optional[bool] = Field(default=None, description="Whether this task used cache")
+    cache_key: Optional[str] = Field(default=None, description="Cache key if cache was used")
+    worker_id: Optional[str] = Field(default=None, description="ID of worker that executed this task")
+    error_message: Optional[str] = Field(default=None, description="Error message if task failed")
+    execution_time_ms: Optional[int] = Field(default=None, description="Execution time in milliseconds")
 
 
 class TaskListResponse(BaseModel):
@@ -474,8 +480,32 @@ def get_scheduler() -> Scheduler:
 # Helper Functions
 # ==============================================================================
 
-def task_to_response(task) -> TaskResponse:
+def task_to_response(task, state: Optional["SchedulerState"] = None) -> TaskResponse:
     """Convert a Task object to a TaskResponse model."""
+    # Get workflow names from pipeline
+    workflow_names = []
+    if state and state.pipeline:
+        for workflow in state.pipeline.workflows:
+            if workflow.id in task.workflows:
+                workflow_names.append(workflow.name)
+    
+    # Get execution metadata from task metadata
+    cache_hit = None
+    cache_key = None
+    worker_id = None
+    error_message = None
+    execution_time_ms = None
+    
+    if state:
+        metadata = state.task_metadata.get(task.id, {})
+        worker_id = metadata.get("worker_id")
+        error_message = metadata.get("error_message")
+        execution_time_ms = metadata.get("execution_time_ms")
+        result = metadata.get("result", {})
+        if isinstance(result, dict):
+            cache_hit = result.get("cache_hit")
+            cache_key = result.get("cache_key")
+    
     return TaskResponse(
         id=task.id,
         tool=ToolInfo(
@@ -493,8 +523,14 @@ def task_to_response(task) -> TaskResponse:
         task_type=task.task_type.value,
         counter=task.counter,
         workflows=list(task.workflows),
+        workflow_names=workflow_names,
         pipeline_id=task.pipeline_id,
-        dependency_ids=[dep.id for dep in task.dependencies]
+        dependency_ids=[dep.id for dep in task.dependencies],
+        cache_hit=cache_hit,
+        cache_key=cache_key,
+        worker_id=worker_id,
+        error_message=error_message,
+        execution_time_ms=execution_time_ms
     )
 
 
@@ -616,7 +652,10 @@ async def get_workflows(scheduler: Scheduler = Depends(get_scheduler)):
 # ==============================================================================
 
 @app.get("/tasks/next", response_model=NextTaskResponse, tags=["Tasks"])
-async def get_next_task(scheduler: Scheduler = Depends(get_scheduler)):
+async def get_next_task(
+    scheduler: Scheduler = Depends(get_scheduler),
+    state: SchedulerState = Depends(get_scheduler_state)
+):
     """
     Get the next task to execute.
     
@@ -651,7 +690,7 @@ async def get_next_task(scheduler: Scheduler = Depends(get_scheduler)):
     
     return NextTaskResponse(
         has_task=True,
-        task=task_to_response(task),
+        task=task_to_response(task, state),
         message=f"Task {task.id} assigned for execution"
     )
 
@@ -698,6 +737,29 @@ async def update_task_status(
         status=new_status
     )
     
+    # Persist evaluation metrics so the Metrics dashboard can show them
+    if (
+        new_status == TaskStatus.COMPLETED
+        and request.result
+        and isinstance(request.result, dict)
+        and request.result.get("evaluation_result")
+        and state.db_service
+        and state.db_service.is_available()
+    ):
+        task = scheduler._find_task_by_id(request.task_id)
+        if task and task.task_type == TaskType.EVALUATION:
+            eval_data = request.result["evaluation_result"]
+            evaluator_name = task.tool.name
+            for workflow_id in task.workflows:
+                state.db_service.save_evaluation_result(
+                    workflow_id=workflow_id,
+                    pipeline_id=task.pipeline_id,
+                    evaluator_name=evaluator_name,
+                    result_data=eval_data,
+                    evaluation_task_id=request.task_id,
+                    evaluator_image=task.tool.container.image
+                )
+    
     status_str = "completed successfully" if new_status == TaskStatus.COMPLETED else "failed"
     logger.info(f"Task {request.task_id} {status_str}")
     
@@ -712,7 +774,8 @@ async def update_task_status(
 @app.get("/tasks", response_model=TaskListResponse, tags=["Tasks"])
 async def get_all_tasks(
     status: Optional[str] = Query(default=None, description="Filter by status"),
-    scheduler: Scheduler = Depends(get_scheduler)
+    scheduler: Scheduler = Depends(get_scheduler),
+    state: SchedulerState = Depends(get_scheduler_state)
 ):
     """
     Get all tasks, optionally filtered by status.
@@ -732,7 +795,7 @@ async def get_all_tasks(
     else:
         tasks = scheduler.get_all_tasks()
     
-    task_responses = [task_to_response(t) for t in tasks]
+    task_responses = [task_to_response(t, state) for t in tasks]
     
     return TaskListResponse(
         tasks=task_responses,
@@ -743,7 +806,8 @@ async def get_all_tasks(
 @app.get("/tasks/{task_id}", response_model=TaskResponse, tags=["Tasks"])
 async def get_task(
     task_id: str,
-    scheduler: Scheduler = Depends(get_scheduler)
+    scheduler: Scheduler = Depends(get_scheduler),
+    state: SchedulerState = Depends(get_scheduler_state)
 ):
     """Get details of a specific task by ID."""
     task = scheduler._find_task_by_id(task_id)
@@ -754,7 +818,41 @@ async def get_task(
             detail=f"Task with ID '{task_id}' not found"
         )
     
-    return task_to_response(task)
+    return task_to_response(task, state)
+
+
+@app.get("/tasks/{task_id}/logs", tags=["Tasks"])
+async def get_task_logs(
+    task_id: str,
+    state: SchedulerState = Depends(get_scheduler_state),
+    scheduler: Scheduler = Depends(get_scheduler)
+):
+    """Get execution logs for a task."""
+    task = scheduler._find_task_by_id(task_id)
+    
+    if task is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Task with ID '{task_id}' not found"
+        )
+    
+    metadata = state.task_metadata.get(task_id, {})
+    error_message = metadata.get("error_message")
+    
+    # Try to get logs from result if available
+    result = metadata.get("result", {})
+    logs = None
+    if isinstance(result, dict):
+        logs = result.get("logs") or result.get("stdout") or result.get("stderr")
+    
+    return {
+        "task_id": task_id,
+        "status": task.status.value,
+        "error_message": error_message,
+        "logs": logs,
+        "worker_id": metadata.get("worker_id"),
+        "execution_time_ms": metadata.get("execution_time_ms")
+    }
 
 
 @app.get("/tasks/{task_id}/priority", response_model=TaskPriorityInfo, tags=["Tasks"])
@@ -817,7 +915,10 @@ async def get_progress(scheduler: Scheduler = Depends(get_scheduler)):
 
 
 @app.get("/progress/levels", response_model=PriorityLevelsResponse, tags=["Progress"])
-async def get_priority_levels(scheduler: Scheduler = Depends(get_scheduler)):
+async def get_priority_levels(
+    scheduler: Scheduler = Depends(get_scheduler),
+    state: SchedulerState = Depends(get_scheduler_state)
+):
     """
     Get tasks grouped by priority level.
     
@@ -839,7 +940,7 @@ async def get_priority_levels(scheduler: Scheduler = Depends(get_scheduler)):
     
     # Convert to response format
     response_levels = {
-        level: [task_to_response(t) for t in tasks]
+        level: [task_to_response(t, state) for t in tasks]
         for level, tasks in levels.items()
     }
     
@@ -847,14 +948,17 @@ async def get_priority_levels(scheduler: Scheduler = Depends(get_scheduler)):
 
 
 @app.get("/progress/ready", response_model=TaskListResponse, tags=["Progress"])
-async def get_ready_tasks(scheduler: Scheduler = Depends(get_scheduler)):
+async def get_ready_tasks(
+    scheduler: Scheduler = Depends(get_scheduler),
+    state: SchedulerState = Depends(get_scheduler_state)
+):
     """Get all tasks that are ready to execute (dependencies satisfied)."""
     if isinstance(scheduler, PriorityScheduler):
         ready_tasks = scheduler.get_ready_tasks_by_priority()
     else:
         ready_tasks = [t for t in scheduler.get_all_tasks() if scheduler._is_task_ready(t)]
     
-    task_responses = [task_to_response(t) for t in ready_tasks]
+    task_responses = [task_to_response(t, state) for t in ready_tasks]
     
     return TaskListResponse(
         tasks=task_responses,
@@ -863,7 +967,10 @@ async def get_ready_tasks(scheduler: Scheduler = Depends(get_scheduler)):
 
 
 @app.get("/progress/blocked", response_model=TaskListResponse, tags=["Progress"])
-async def get_blocked_tasks(scheduler: Scheduler = Depends(get_scheduler)):
+async def get_blocked_tasks(
+    scheduler: Scheduler = Depends(get_scheduler),
+    state: SchedulerState = Depends(get_scheduler_state)
+):
     """
     Get all tasks that are blocked due to failed dependencies.
     
@@ -889,7 +996,7 @@ async def get_blocked_tasks(scheduler: Scheduler = Depends(get_scheduler)):
         if has_failed_dep:
             blocked_tasks.append(task)
     
-    task_responses = [task_to_response(t) for t in blocked_tasks]
+    task_responses = [task_to_response(t, state) for t in blocked_tasks]
     
     return TaskListResponse(
         tasks=task_responses,
@@ -979,7 +1086,10 @@ async def get_scheduler_status(state: SchedulerState = Depends(get_scheduler_sta
 
 
 @app.get("/scheduler/next", tags=["Scheduler"])
-async def get_scheduler_next_preview(scheduler: Scheduler = Depends(get_scheduler)):
+async def get_scheduler_next_preview(
+    scheduler: Scheduler = Depends(get_scheduler),
+    state: SchedulerState = Depends(get_scheduler_state)
+):
     """
     Preview the next task without assigning it.
     
@@ -997,7 +1107,7 @@ async def get_scheduler_next_preview(scheduler: Scheduler = Depends(get_schedule
     next_task = ready_tasks[0]
     return {
         "has_next": True,
-        "next_task": task_to_response(next_task),
+        "next_task": task_to_response(next_task, state),
         "queue_depth": len(ready_tasks)
     }
 
@@ -1091,7 +1201,7 @@ async def get_worker_current_task(
     
     return {
         "has_task": True,
-        "task": task_to_response(task)
+        "task": task_to_response(task, state)
     }
 
 
@@ -1128,7 +1238,7 @@ async def worker_claim_task(
     
     return NextTaskResponse(
         has_task=True,
-        task=task_to_response(task),
+        task=task_to_response(task, state),
         message=f"Task {task.id} assigned to worker {worker_id}"
     )
 
@@ -1159,7 +1269,7 @@ async def get_workflow_detail(
         raise HTTPException(status_code=404, detail=f"Workflow '{workflow_id}' not found")
     
     # Get task details and status
-    tasks = [task_to_response(t) for t in workflow.tasks]
+    tasks = [task_to_response(t, state) for t in workflow.tasks]
     completed = sum(1 for t in workflow.tasks if t.status == TaskStatus.COMPLETED)
     failed = sum(1 for t in workflow.tasks if t.status == TaskStatus.FAILED)
     
@@ -1507,11 +1617,43 @@ async def get_database_stats(state: SchedulerState = Depends(get_scheduler_state
             "message": "Database service not available"
         }
     
-    return {
+    # Get evaluation result counts
+    evaluation_count = 0
+    try:
+        from ..db.models import EvaluationResultModel
+        from ..db import session_scope
+        
+        with session_scope() as session:
+            evaluation_count = session.query(EvaluationResultModel).count()
+    except Exception as e:
+        logger.warning(f"Failed to get evaluation result count: {e}")
+    
+    stats = {
         "available": True,
         "task_progress": state.db_service.get_task_progress(),
-        "worker_stats": state.db_service.get_worker_stats()
+        "worker_stats": state.db_service.get_worker_stats(),
+        "evaluation_results": {
+            "total_count": evaluation_count,
+            "message": f"Found {evaluation_count} evaluation results in database"
+        }
     }
+    
+    # Add pipeline-specific evaluation count if scheduler is initialized
+    if state.scheduler and state.scheduler.pipeline:
+        try:
+            from ..db.models import EvaluationResultModel
+            from ..db import session_scope
+            
+            with session_scope() as session:
+                pipeline_eval_count = session.query(EvaluationResultModel).filter(
+                    EvaluationResultModel.pipeline_id == state.scheduler.pipeline.id
+                ).count()
+                stats["evaluation_results"]["pipeline_count"] = pipeline_eval_count
+                stats["evaluation_results"]["pipeline_id"] = state.scheduler.pipeline.id
+        except Exception as e:
+            logger.warning(f"Failed to get pipeline evaluation count: {e}")
+    
+    return stats
 
 
 @app.get("/stats/store", tags=["Statistics"])
@@ -1785,43 +1927,94 @@ async def get_pipeline_metrics(
         # Get from database
         try:
             from ..db.models import EvaluationResultModel
-            session = state.db_service.get_session()
-            results = session.query(EvaluationResultModel).filter(
-                EvaluationResultModel.pipeline_id == pipeline.id
-            ).all()
+            from ..db import session_scope
             
-            # Group by workflow
-            by_workflow = {}
-            for r in results:
-                if r.workflow_id not in by_workflow:
-                    by_workflow[r.workflow_id] = {
-                        "metrics": {},
-                        "run": [],
-                        "skipped": []
-                    }
+            with session_scope() as session:
+                results = session.query(EvaluationResultModel).filter(
+                    EvaluationResultModel.pipeline_id == pipeline.id
+                ).all()
                 
-                if r.skipped:
-                    by_workflow[r.workflow_id]["skipped"].append(r.evaluator_name)
-                else:
-                    by_workflow[r.workflow_id]["run"].append(r.evaluator_name)
-                    for metric_name, value in (r.metrics or {}).items():
-                        by_workflow[r.workflow_id]["metrics"][metric_name] = value
-                        metric_names.add(metric_name)
-            
-            for wf in pipeline.workflows:
-                wf_data = by_workflow.get(wf.id, {"metrics": {}, "run": [], "skipped": []})
-                all_metrics.append(WorkflowMetrics(
-                    workflow_id=wf.id,
-                    workflow_name=wf.name,
-                    metrics=wf_data["metrics"],
-                    evaluators_run=wf_data["run"],
-                    evaluators_skipped=wf_data["skipped"]
-                ))
+                logger.debug(f"Found {len(results)} evaluation results in database for pipeline {pipeline.id}")
+                
+                # Group by workflow
+                by_workflow = {}
+                for r in results:
+                    if r.workflow_id not in by_workflow:
+                        by_workflow[r.workflow_id] = {
+                            "metrics": {},
+                            "run": [],
+                            "skipped": []
+                        }
+                    
+                    if r.skipped:
+                        by_workflow[r.workflow_id]["skipped"].append(r.evaluator_name)
+                    else:
+                        by_workflow[r.workflow_id]["run"].append(r.evaluator_name)
+                        for metric_name, value in (r.metrics or {}).items():
+                            by_workflow[r.workflow_id]["metrics"][metric_name] = value
+                            metric_names.add(metric_name)
+                
+                for wf in pipeline.workflows:
+                    wf_data = by_workflow.get(wf.id, {"metrics": {}, "run": [], "skipped": []})
+                    all_metrics.append(WorkflowMetrics(
+                        workflow_id=wf.id,
+                        workflow_name=wf.name,
+                        metrics=wf_data["metrics"],
+                        evaluators_run=wf_data["run"],
+                        evaluators_skipped=wf_data["skipped"]
+                    ))
                 
         except Exception as e:
-            logger.warning(f"Failed to get metrics from database: {e}")
+            logger.warning(f"Failed to get metrics from database: {e}", exc_info=True)
     
-    # If no database results, return empty metrics
+    # If database is not available or returned no results, fall back to in-memory task metadata.
+    # This ensures the Metrics dashboard still works in development setups without a database.
+    if not all_metrics:
+        by_workflow = {
+            wf.id: {"metrics": {}, "run": [], "skipped": []} for wf in pipeline.workflows
+        }
+        
+        # Walk over all evaluation tasks and extract evaluation_result from task metadata
+        for wf in pipeline.workflows:
+            for task in wf.tasks:
+                if task.task_type != TaskType.EVALUATION:
+                    continue
+                
+                meta = state.task_metadata.get(task.id) or {}
+                result = meta.get("result") or {}
+                eval_result = result.get("evaluation_result")
+                if not isinstance(eval_result, dict):
+                    continue
+                
+                evaluator_name = task.tool.name
+                metrics_dict = eval_result.get("metrics") or {}
+                skipped = bool(eval_result.get("skipped"))
+                
+                wf_data = by_workflow[wf.id]
+                if skipped:
+                    wf_data["skipped"].append(evaluator_name)
+                    continue
+                
+                wf_data["run"].append(evaluator_name)
+                for metric_name, value in metrics_dict.items():
+                    try:
+                        numeric_val = float(value)
+                    except (TypeError, ValueError):
+                        continue
+                    wf_data["metrics"][metric_name] = numeric_val
+                    metric_names.add(metric_name)
+        
+        for wf in pipeline.workflows:
+            wf_data = by_workflow.get(wf.id, {"metrics": {}, "run": [], "skipped": []})
+            all_metrics.append(WorkflowMetrics(
+                workflow_id=wf.id,
+                workflow_name=wf.name,
+                metrics=wf_data["metrics"],
+                evaluators_run=wf_data["run"],
+                evaluators_skipped=wf_data["skipped"]
+            ))
+    
+    # If still no results, return empty metrics
     if not all_metrics:
         for wf in pipeline.workflows:
             all_metrics.append(WorkflowMetrics(
