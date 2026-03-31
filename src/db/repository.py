@@ -16,9 +16,12 @@ from .models import (
     WorkerModel,
     WorkflowModel,
     PipelineModel,
+    PipelineConfigModel,
+    PipelineRunModel,
     ArtifactModel,
     TaskStatus,
     WorkerStatus,
+    PipelineRunStatus,
 )
 
 logger = get_logger(__name__)
@@ -631,3 +634,168 @@ class ArtifactRepository:
             func.sum(ArtifactModel.size_bytes)
         ).scalar()
         return result or 0
+    
+    def get_by_run_id(self, run_id: str) -> List[ArtifactModel]:
+        """Get all artifacts created by a specific run."""
+        return self.session.query(ArtifactModel).filter(
+            ArtifactModel.created_by_run_id == run_id
+        ).all()
+    
+    def delete_by_run_id(self, run_id: str) -> int:
+        """Delete all artifacts created by a specific run. Returns count deleted."""
+        artifacts = self.get_by_run_id(run_id)
+        count = len(artifacts)
+        for artifact in artifacts:
+            self.session.delete(artifact)
+        self.session.flush()
+        logger.info(f"Deleted {count} artifacts for run {run_id}")
+        return count
+
+
+class PipelineConfigRepository:
+    """Repository for PipelineConfig operations."""
+    
+    def __init__(self, session: Session):
+        """Initialize with database session."""
+        self.session = session
+    
+    def create(self, config_data: Dict[str, Any]) -> PipelineConfigModel:
+        """Create a new pipeline config."""
+        config = PipelineConfigModel(**config_data)
+        self.session.add(config)
+        self.session.flush()
+        logger.debug(f"Created pipeline config: {config.id}")
+        return config
+    
+    def get_by_id(self, config_id: str) -> Optional[PipelineConfigModel]:
+        """Get config by ID."""
+        return self.session.query(PipelineConfigModel).filter(
+            PipelineConfigModel.id == config_id
+        ).first()
+    
+    def get_by_path(self, config_path: str) -> Optional[PipelineConfigModel]:
+        """Get config by file path."""
+        return self.session.query(PipelineConfigModel).filter(
+            PipelineConfigModel.config_path == config_path
+        ).first()
+    
+    def get_all(self) -> List[PipelineConfigModel]:
+        """Get all pipeline configs."""
+        return self.session.query(PipelineConfigModel).order_by(
+            PipelineConfigModel.name
+        ).all()
+    
+    def update(self, config_id: str, updates: Dict[str, Any]) -> Optional[PipelineConfigModel]:
+        """Update a pipeline config."""
+        config = self.get_by_id(config_id)
+        if not config:
+            return None
+        
+        for key, value in updates.items():
+            if hasattr(config, key):
+                setattr(config, key, value)
+        
+        config.updated_at = datetime.utcnow()
+        self.session.flush()
+        return config
+    
+    def delete(self, config_id: str) -> bool:
+        """Delete a pipeline config and all its runs."""
+        config = self.get_by_id(config_id)
+        if not config:
+            return False
+        
+        self.session.delete(config)
+        self.session.flush()
+        logger.debug(f"Deleted pipeline config: {config_id}")
+        return True
+
+
+class PipelineRunRepository:
+    """Repository for PipelineRun operations."""
+    
+    def __init__(self, session: Session):
+        """Initialize with database session."""
+        self.session = session
+    
+    def create(self, run_data: Dict[str, Any]) -> PipelineRunModel:
+        """Create a new pipeline run."""
+        run = PipelineRunModel(**run_data)
+        self.session.add(run)
+        self.session.flush()
+        logger.debug(f"Created pipeline run: {run.id}")
+        return run
+    
+    def get_by_id(self, run_id: str) -> Optional[PipelineRunModel]:
+        """Get run by ID."""
+        return self.session.query(PipelineRunModel).filter(
+            PipelineRunModel.id == run_id
+        ).first()
+    
+    def get_by_config_id(self, config_id: str) -> List[PipelineRunModel]:
+        """Get all runs for a config, ordered by run_number DESC."""
+        return self.session.query(PipelineRunModel).filter(
+            PipelineRunModel.pipeline_config_id == config_id
+        ).order_by(PipelineRunModel.run_number.desc()).all()
+    
+    def get_active_runs_for_config(self, config_id: str) -> List[PipelineRunModel]:
+        """Get active (pending/running/stopping) runs for a config."""
+        return self.session.query(PipelineRunModel).filter(
+            PipelineRunModel.pipeline_config_id == config_id,
+            PipelineRunModel.status.in_([
+                PipelineRunStatus.PENDING,
+                PipelineRunStatus.RUNNING,
+                PipelineRunStatus.STOPPING
+            ])
+        ).all()
+    
+    def get_next_run_number(self, config_id: str) -> int:
+        """Get the next run number for a config."""
+        result = self.session.query(
+            func.max(PipelineRunModel.run_number)
+        ).filter(
+            PipelineRunModel.pipeline_config_id == config_id
+        ).scalar()
+        return (result or 0) + 1
+    
+    def update_status(
+        self,
+        run_id: str,
+        status: PipelineRunStatus,
+        error_message: Optional[str] = None
+    ) -> Optional[PipelineRunModel]:
+        """Update run status."""
+        run = self.get_by_id(run_id)
+        if not run:
+            return None
+        
+        run.status = status
+        if error_message:
+            run.error_message = error_message
+        
+        if status == PipelineRunStatus.RUNNING and not run.started_at:
+            run.started_at = datetime.utcnow()
+        elif status in (PipelineRunStatus.COMPLETED, PipelineRunStatus.FAILED, PipelineRunStatus.CANCELLED):
+            if not run.completed_at:
+                run.completed_at = datetime.utcnow()
+        
+        self.session.flush()
+        return run
+    
+    def get_all(self, config_id: Optional[str] = None) -> List[PipelineRunModel]:
+        """Get all runs, optionally filtered by config."""
+        query = self.session.query(PipelineRunModel)
+        if config_id:
+            query = query.filter(PipelineRunModel.pipeline_config_id == config_id)
+        return query.order_by(PipelineRunModel.created_at.desc()).all()
+    
+    def delete(self, run_id: str) -> bool:
+        """Delete a pipeline run."""
+        run = self.get_by_id(run_id)
+        if not run:
+            return False
+        
+        self.session.delete(run)
+        self.session.flush()
+        logger.debug(f"Deleted pipeline run: {run_id}")
+        return True

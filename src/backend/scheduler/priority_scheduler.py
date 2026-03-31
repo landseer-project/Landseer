@@ -8,9 +8,16 @@ This scheduler prioritizes tasks based on:
 
 from typing import Optional, List, Dict
 
-from ...pipeline.tasks import Task, TaskStatus
+from ...pipeline.tasks import Task, TaskStatus, TaskType
 from ...pipeline.pipeline import Pipeline
 from .base_scheduler import Scheduler
+
+# After depth + counter scoring, evaluation tasks get this boost so a workflow’s
+# metrics run soon once its tool chain is done—before starting/heavy other
+# workflows’ mid-pipeline tasks when those are also ready.
+EVALUATION_PRIORITY_BOOST = 32
+# Pre-training roots can reach 100 + min(counter, 9) == 109; cap eval below that tier.
+EVALUATION_PRIORITY_CAP = 108
 
 
 class PriorityScheduler(Scheduler):
@@ -22,6 +29,11 @@ class PriorityScheduler(Scheduler):
     - Secondary: Usage counter (how many workflows use this task)
     
     Tasks with fewer dependencies and higher usage get scheduled first.
+    
+    Evaluation tasks get an extra boost (capped below the pre-training tier) so
+    ready evaluators tend to run before other workflows’ in/post/deploy work,
+    while dependencies still guarantee evaluators never run before their own
+    deployment task completes.
     """
     
     def __init__(self, pipeline: Pipeline):
@@ -79,7 +91,13 @@ class PriorityScheduler(Scheduler):
             counter_bonus = min(task.counter, 9)
             
             # Higher number = runs first
-            task.priority = base_priority + counter_bonus
+            priority = base_priority + counter_bonus
+            if task.task_type == TaskType.EVALUATION:
+                priority = min(
+                    priority + EVALUATION_PRIORITY_BOOST,
+                    EVALUATION_PRIORITY_CAP,
+                )
+            task.priority = priority
     
     def get_next_task(self) -> Optional[Task]:
         """

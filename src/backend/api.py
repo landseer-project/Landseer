@@ -73,6 +73,7 @@ class TaskResponse(BaseModel):
     workflows: List[str] = Field(default_factory=list, description="Workflow IDs using this task")
     workflow_names: List[str] = Field(default_factory=list, description="Workflow names using this task")
     pipeline_id: str = Field(description="ID of the pipeline this task belongs to")
+    run_id: Optional[str] = Field(default=None, description="ID of the pipeline run this task belongs to")
     dependency_ids: List[str] = Field(default_factory=list, description="IDs of dependent tasks")
     cache_hit: Optional[bool] = Field(default=None, description="Whether this task used cache")
     cache_key: Optional[str] = Field(default=None, description="Cache key if cache was used")
@@ -506,6 +507,9 @@ def task_to_response(task, state: Optional["SchedulerState"] = None) -> TaskResp
             cache_hit = result.get("cache_hit")
             cache_key = result.get("cache_key")
     
+    # Get run_id from task
+    run_id = getattr(task, 'run_id', None)
+    
     return TaskResponse(
         id=task.id,
         tool=ToolInfo(
@@ -525,6 +529,7 @@ def task_to_response(task, state: Optional["SchedulerState"] = None) -> TaskResp
         workflows=list(task.workflows),
         workflow_names=workflow_names,
         pipeline_id=task.pipeline_id,
+        run_id=run_id,
         dependency_ids=[dep.id for dep in task.dependencies],
         cache_hit=cache_hit,
         cache_key=cache_key,
@@ -750,6 +755,7 @@ async def update_task_status(
         if task and task.task_type == TaskType.EVALUATION:
             eval_data = request.result["evaluation_result"]
             evaluator_name = task.tool.name
+            run_id = getattr(task, 'run_id', None)
             for workflow_id in task.workflows:
                 state.db_service.save_evaluation_result(
                     workflow_id=workflow_id,
@@ -757,7 +763,8 @@ async def update_task_status(
                     evaluator_name=evaluator_name,
                     result_data=eval_data,
                     evaluation_task_id=request.task_id,
-                    evaluator_image=task.tool.container.image
+                    evaluator_image=task.tool.container.image,
+                    run_id=run_id
                 )
     
     status_str = "completed successfully" if new_status == TaskStatus.COMPLETED else "failed"
@@ -1950,9 +1957,9 @@ async def get_pipeline_metrics(
                         by_workflow[r.workflow_id]["skipped"].append(r.evaluator_name)
                     else:
                         by_workflow[r.workflow_id]["run"].append(r.evaluator_name)
-                        for metric_name, value in (r.metrics or {}).items():
-                            by_workflow[r.workflow_id]["metrics"][metric_name] = value
-                            metric_names.add(metric_name)
+                    for metric_name, value in (r.metrics or {}).items():
+                        by_workflow[r.workflow_id]["metrics"][metric_name] = value
+                        metric_names.add(metric_name)
                 
                 for wf in pipeline.workflows:
                     wf_data = by_workflow.get(wf.id, {"metrics": {}, "run": [], "skipped": []})
@@ -1993,9 +2000,8 @@ async def get_pipeline_metrics(
                 wf_data = by_workflow[wf.id]
                 if skipped:
                     wf_data["skipped"].append(evaluator_name)
-                    continue
-                
-                wf_data["run"].append(evaluator_name)
+                else:
+                    wf_data["run"].append(evaluator_name)
                 for metric_name, value in metrics_dict.items():
                     try:
                         numeric_val = float(value)
@@ -2105,6 +2111,508 @@ async def get_workflow_metrics(
         "evaluators_run": evaluators_run,
         "evaluators_skipped": evaluators_skipped
     }
+
+
+# ==============================================================================
+# Pipeline Config and Run Management
+# ==============================================================================
+
+class PipelineConfigResponse(BaseModel):
+    """Response model for a pipeline config."""
+    id: str = Field(description="Config ID")
+    name: str = Field(description="Config name")
+    description: Optional[str] = Field(default=None, description="Config description")
+    config_path: str = Field(description="Path to pipeline config YAML")
+    attack_config_path: Optional[str] = Field(default=None, description="Path to attack config YAML")
+    config_hash: Optional[str] = Field(default=None, description="Config hash for change detection")
+    created_at: Optional[str] = Field(default=None, description="Creation timestamp")
+    updated_at: Optional[str] = Field(default=None, description="Last update timestamp")
+
+
+class PipelineConfigListResponse(BaseModel):
+    """Response model for list of pipeline configs."""
+    configs: List[PipelineConfigResponse] = Field(description="List of configs")
+    total: int = Field(description="Total number of configs")
+
+
+class StartPipelineRunRequest(BaseModel):
+    """Request to start a new pipeline run."""
+    use_cache: bool = Field(default=True, description="Whether to use cache")
+    combo_id: Optional[str] = Field(default=None, description="Specific combination ID to run (optional)")
+    dry_run: bool = Field(default=False, description="Dry run mode (validate only)")
+    attack_config_path: Optional[str] = Field(default=None, description="Override attack config path")
+
+
+class PipelineRunResponse(BaseModel):
+    """Response model for a pipeline run."""
+    id: str = Field(description="Run ID")
+    pipeline_config_id: str = Field(description="Config ID")
+    run_number: int = Field(description="Run number for this config")
+    use_cache: bool = Field(description="Whether cache was used")
+    status: str = Field(description="Run status")
+    error_message: Optional[str] = Field(default=None, description="Error message if failed")
+    created_at: str = Field(description="Creation timestamp")
+    started_at: Optional[str] = Field(default=None, description="Start timestamp")
+    completed_at: Optional[str] = Field(default=None, description="Completion timestamp")
+
+
+class PipelineRunListResponse(BaseModel):
+    """Response model for list of pipeline runs."""
+    runs: List[PipelineRunResponse] = Field(description="List of runs")
+    total: int = Field(description="Total number of runs")
+
+
+class RestartPipelineRunRequest(BaseModel):
+    """Request to restart a pipeline run."""
+    use_cache: bool = Field(default=True, description="Whether to use cache")
+
+
+@app.get("/api/pipeline-configs", response_model=PipelineConfigListResponse, tags=["Pipeline Configs"])
+async def get_pipeline_configs():
+    """Get all available pipeline configurations."""
+    try:
+        from .config_discovery import sync_configs_to_db, get_all_configs
+        
+        # Sync configs from filesystem to DB
+        sync_configs_to_db()
+        
+        # Get all configs
+        configs = get_all_configs()
+        
+        return PipelineConfigListResponse(
+            configs=[
+                PipelineConfigResponse(
+                    id=config.id,
+                    name=config.name,
+                    description=config.description,
+                    config_path=config.config_path,
+                    attack_config_path=config.attack_config_path,
+                    config_hash=config.config_hash,
+                    created_at=config.created_at.isoformat() if config.created_at else None,
+                    updated_at=config.updated_at.isoformat() if config.updated_at else None,
+                )
+                for config in configs
+            ],
+            total=len(configs)
+        )
+    except Exception as e:
+        logger.error(f"Failed to get pipeline configs: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get pipeline configs: {str(e)}")
+
+
+@app.get("/api/pipeline-configs/{config_id}", response_model=PipelineConfigResponse, tags=["Pipeline Configs"])
+async def get_pipeline_config(config_id: str):
+    """Get a specific pipeline configuration."""
+    try:
+        from .config_discovery import get_config_by_id
+        
+        config = get_config_by_id(config_id)
+        if not config:
+            raise HTTPException(status_code=404, detail=f"Pipeline config '{config_id}' not found")
+        
+        return PipelineConfigResponse(
+            id=config.id,
+            name=config.name,
+            description=config.description,
+            config_path=config.config_path,
+            attack_config_path=config.attack_config_path,
+            config_hash=config.config_hash,
+            created_at=config.created_at.isoformat() if config.created_at else None,
+            updated_at=config.updated_at.isoformat() if config.updated_at else None,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get pipeline config {config_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get pipeline config: {str(e)}")
+
+
+@app.post("/api/pipeline-configs/{config_id}/runs", response_model=PipelineRunResponse, tags=["Pipeline Runs"])
+async def start_pipeline_run(
+    config_id: str,
+    request: StartPipelineRunRequest,
+    state: SchedulerState = Depends(get_scheduler_state)
+):
+    """Start a new pipeline run for a configuration."""
+    try:
+        from .config_discovery import get_config_by_id
+        from ..db import get_session, session_scope, PipelineRunRepository, PipelineRunStatus
+        from ..pipeline.config_loader import create_pipeline_from_config
+        from ..pipeline.tasks import generate_pipeline_id
+        import uuid
+        from datetime import datetime
+        
+        # Get config
+        config = get_config_by_id(config_id)
+        if not config:
+            raise HTTPException(status_code=404, detail=f"Pipeline config '{config_id}' not found")
+        
+        # Check for active runs
+        with session_scope() as session:
+            run_repo = PipelineRunRepository(session)
+            active_runs = run_repo.get_active_runs_for_config(config_id)
+            if active_runs:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Cannot start new run: {len(active_runs)} active run(s) already exist for this config"
+                )
+            
+            # Create new run
+            run_number = run_repo.get_next_run_number(config_id)
+            run_id = f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+            
+            run = run_repo.create({
+                "id": run_id,
+                "pipeline_config_id": config_id,
+                "run_number": run_number,
+                "use_cache": request.use_cache,
+                "status": PipelineRunStatus.PENDING,
+            })
+            
+            # Load pipeline from config
+            attack_config_path = request.attack_config_path or config.attack_config_path
+            pipeline = create_pipeline_from_config(
+                config_path=config.config_path,
+                tools_yaml_path="configs/tools.yaml",
+                evaluators_yaml_path="configs/evaluators.yaml",
+                pipeline_name=f"{config.name} (Run {run_number})",
+                clear_registry=True,
+                include_evaluation=True
+            )
+            
+            # Set pipeline ID to run_id
+            pipeline.id = run_id
+            
+            # Set run_id on all tasks and workflows
+            for workflow in pipeline.workflows:
+                workflow.pipeline_id = run_id
+                workflow.run_id = run_id
+                for task in workflow.tasks:
+                    task.pipeline_id = run_id
+                    task.run_id = run_id
+            
+            # Initialize scheduler with this pipeline
+            state.initialize(pipeline, scheduler_type="priority")
+            
+            # Update run status to running
+            run_repo.update_status(run_id, PipelineRunStatus.RUNNING)
+            
+            # Sync pipeline to DB
+            if state.db_service and state.db_service.is_available():
+                state.db_service.sync_pipeline_to_db(pipeline)
+            
+            return PipelineRunResponse(
+                id=run.id,
+                pipeline_config_id=run.pipeline_config_id,
+                run_number=run.run_number,
+                use_cache=run.use_cache,
+                status=run.status.value,
+                error_message=run.error_message,
+                created_at=run.created_at.isoformat(),
+                started_at=run.started_at.isoformat() if run.started_at else None,
+                completed_at=run.completed_at.isoformat() if run.completed_at else None,
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to start pipeline run: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to start pipeline run: {str(e)}")
+
+
+@app.get("/api/pipeline-runs/{run_id}", response_model=PipelineRunResponse, tags=["Pipeline Runs"])
+async def get_pipeline_run(run_id: str):
+    """Get status of a pipeline run."""
+    try:
+        from ..db import get_session, session_scope, PipelineRunRepository
+        
+        with session_scope() as session:
+            run_repo = PipelineRunRepository(session)
+            run = run_repo.get_by_id(run_id)
+            
+            if not run:
+                raise HTTPException(status_code=404, detail=f"Pipeline run '{run_id}' not found")
+            
+            return PipelineRunResponse(
+                id=run.id,
+                pipeline_config_id=run.pipeline_config_id,
+                run_number=run.run_number,
+                use_cache=run.use_cache,
+                status=run.status.value,
+                error_message=run.error_message,
+                created_at=run.created_at.isoformat(),
+                started_at=run.started_at.isoformat() if run.started_at else None,
+                completed_at=run.completed_at.isoformat() if run.completed_at else None,
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get pipeline run {run_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get pipeline run: {str(e)}")
+
+
+@app.get("/api/pipeline-configs/{config_id}/runs", response_model=PipelineRunListResponse, tags=["Pipeline Runs"])
+async def get_pipeline_runs(config_id: str):
+    """Get all runs for a pipeline config."""
+    try:
+        from ..db import get_session, session_scope, PipelineRunRepository
+        
+        with session_scope() as session:
+            run_repo = PipelineRunRepository(session)
+            runs = run_repo.get_by_config_id(config_id)
+            
+            return PipelineRunListResponse(
+                runs=[
+                    PipelineRunResponse(
+                        id=run.id,
+                        pipeline_config_id=run.pipeline_config_id,
+                        run_number=run.run_number,
+                        use_cache=run.use_cache,
+                        status=run.status.value,
+                        error_message=run.error_message,
+                        created_at=run.created_at.isoformat(),
+                        started_at=run.started_at.isoformat() if run.started_at else None,
+                        completed_at=run.completed_at.isoformat() if run.completed_at else None,
+                    )
+                    for run in runs
+                ],
+                total=len(runs)
+            )
+    except Exception as e:
+        logger.error(f"Failed to get pipeline runs for {config_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get pipeline runs: {str(e)}")
+
+
+@app.post("/api/pipeline-runs/{run_id}/stop", response_model=PipelineRunResponse, tags=["Pipeline Runs"])
+async def stop_pipeline_run(
+    run_id: str,
+    state: SchedulerState = Depends(get_scheduler_state),
+    scheduler: Scheduler = Depends(get_scheduler)
+):
+    """Stop a running pipeline."""
+    try:
+        from ..db import get_session, session_scope, PipelineRunRepository, PipelineRunStatus
+        from ..pipeline.tasks import TaskStatus
+        
+        with session_scope() as session:
+            run_repo = PipelineRunRepository(session)
+            run = run_repo.get_by_id(run_id)
+            
+            if not run:
+                raise HTTPException(status_code=404, detail=f"Pipeline run '{run_id}' not found")
+            
+            if run.status not in (PipelineRunStatus.PENDING, PipelineRunStatus.RUNNING):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot stop run with status '{run.status.value}'"
+                )
+            
+            # Update status to stopping
+            run_repo.update_status(run_id, PipelineRunStatus.STOPPING)
+            
+            # Remove pending tasks from scheduler
+            if scheduler and scheduler.pipeline and scheduler.pipeline.id == run_id:
+                # Cancel all pending tasks for this run
+                for task in scheduler._all_tasks:
+                    if task.status == TaskStatus.PENDING and task.run_id == run_id:
+                        task.status = TaskStatus.CANCELLED
+                        if state.db_service:
+                            state.db_service.sync_task_status(
+                                task.id,
+                                TaskStatus.CANCELLED,
+                                error_message="Pipeline stopped by user"
+                            )
+            
+            # Update status to cancelled
+            run_repo.update_status(run_id, PipelineRunStatus.CANCELLED)
+            
+            # TODO: Trigger cache cleanup (will implement in cache cleanup task)
+            
+            run = run_repo.get_by_id(run_id)
+            return PipelineRunResponse(
+                id=run.id,
+                pipeline_config_id=run.pipeline_config_id,
+                run_number=run.run_number,
+                use_cache=run.use_cache,
+                status=run.status.value,
+                error_message=run.error_message,
+                created_at=run.created_at.isoformat(),
+                started_at=run.started_at.isoformat() if run.started_at else None,
+                completed_at=run.completed_at.isoformat() if run.completed_at else None,
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to stop pipeline run {run_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to stop pipeline run: {str(e)}")
+
+
+@app.post("/api/pipeline-runs/{run_id}/restart", response_model=PipelineRunResponse, tags=["Pipeline Runs"])
+async def restart_pipeline_run(
+    run_id: str,
+    request: RestartPipelineRunRequest,
+    state: SchedulerState = Depends(get_scheduler_state)
+):
+    """Restart a stopped/failed pipeline run."""
+    try:
+        from ..db import get_session, session_scope, PipelineRunRepository, PipelineRunStatus
+        from .config_discovery import get_config_by_id
+        from ..pipeline.config_loader import create_pipeline_from_config
+        import uuid
+        from datetime import datetime
+        
+        with session_scope() as session:
+            run_repo = PipelineRunRepository(session)
+            old_run = run_repo.get_by_id(run_id)
+            
+            if not old_run:
+                raise HTTPException(status_code=404, detail=f"Pipeline run '{run_id}' not found")
+            
+            # Check if old run is still active
+            if old_run.status in (PipelineRunStatus.PENDING, PipelineRunStatus.RUNNING, PipelineRunStatus.STOPPING):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot restart an active run. Stop it first."
+                )
+            
+            # Get config
+            config = get_config_by_id(old_run.pipeline_config_id)
+            if not config:
+                raise HTTPException(status_code=404, detail=f"Pipeline config '{old_run.pipeline_config_id}' not found")
+            
+            # If not using cache, delete cache from previous run
+            if not request.use_cache:
+                # TODO: Implement cache deletion (will do in cache cleanup task)
+                pass
+            
+            # Create new run
+            run_number = run_repo.get_next_run_number(config.id)
+            new_run_id = f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+            
+            new_run = run_repo.create({
+                "id": new_run_id,
+                "pipeline_config_id": config.id,
+                "run_number": run_number,
+                "use_cache": request.use_cache,
+                "status": PipelineRunStatus.PENDING,
+            })
+            
+            # Load pipeline from config
+            pipeline = create_pipeline_from_config(
+                config_path=config.config_path,
+                tools_yaml_path="configs/tools.yaml",
+                evaluators_yaml_path="configs/evaluators.yaml",
+                pipeline_name=f"{config.name} (Run {run_number})",
+                clear_registry=True,
+                include_evaluation=True
+            )
+            
+            # Set pipeline ID to new run_id
+            pipeline.id = new_run_id
+            
+            # Set run_id on all tasks and workflows
+            for workflow in pipeline.workflows:
+                workflow.pipeline_id = new_run_id
+                workflow.run_id = new_run_id
+                for task in workflow.tasks:
+                    task.pipeline_id = new_run_id
+                    task.run_id = new_run_id
+            
+            # Initialize scheduler with this pipeline
+            state.initialize(pipeline, scheduler_type="priority")
+            
+            # Update run status to running
+            run_repo.update_status(new_run_id, PipelineRunStatus.RUNNING)
+            
+            # Sync pipeline to DB
+            if state.db_service and state.db_service.is_available():
+                state.db_service.sync_pipeline_to_db(pipeline)
+            
+            return PipelineRunResponse(
+                id=new_run.id,
+                pipeline_config_id=new_run.pipeline_config_id,
+                run_number=new_run.run_number,
+                use_cache=new_run.use_cache,
+                status=new_run.status.value,
+                error_message=new_run.error_message,
+                created_at=new_run.created_at.isoformat(),
+                started_at=new_run.started_at.isoformat() if new_run.started_at else None,
+                completed_at=new_run.completed_at.isoformat() if new_run.completed_at else None,
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to restart pipeline run {run_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to restart pipeline run: {str(e)}")
+
+
+@app.delete("/api/pipeline-runs/{run_id}/cache", tags=["Pipeline Runs"])
+async def delete_pipeline_run_cache(run_id: str):
+    """Delete cache entries created by a specific run."""
+    try:
+        from ..db import get_session, session_scope, PipelineRunRepository, ArtifactRepository
+        
+        with session_scope() as session:
+            run_repo = PipelineRunRepository(session)
+            run = run_repo.get_by_id(run_id)
+            
+            if not run:
+                raise HTTPException(status_code=404, detail=f"Pipeline run '{run_id}' not found")
+            
+            artifact_repo = ArtifactRepository(session)
+            deleted_count = artifact_repo.delete_by_run_id(run_id)
+            
+            # TODO: Also delete from MinIO/local cache filesystem
+            
+            return {
+                "success": True,
+                "run_id": run_id,
+                "deleted_artifacts": deleted_count,
+                "message": f"Deleted {deleted_count} cache entries for run {run_id}"
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete cache for run {run_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to delete cache: {str(e)}")
+
+
+@app.delete("/api/pipeline-runs/{run_id}/workspace", tags=["Pipeline Runs"])
+async def delete_pipeline_run_workspace(run_id: str):
+    """Delete workspace files for a specific run."""
+    try:
+        from pathlib import Path
+        import shutil
+        
+        from ..db import get_session, session_scope, PipelineRunRepository
+        
+        with session_scope() as session:
+            run_repo = PipelineRunRepository(session)
+            run = run_repo.get_by_id(run_id)
+            
+            if not run:
+                raise HTTPException(status_code=404, detail=f"Pipeline run '{run_id}' not found")
+            
+            # Delete results directory
+            results_dir = Path(f"results/{run.pipeline_config_id}/{run_id}")
+            if results_dir.exists():
+                shutil.rmtree(results_dir)
+                return {
+                    "success": True,
+                    "run_id": run_id,
+                    "deleted_path": str(results_dir),
+                    "message": f"Deleted workspace for run {run_id}"
+                }
+            else:
+                return {
+                    "success": True,
+                    "run_id": run_id,
+                    "message": f"No workspace found for run {run_id}"
+                }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete workspace for run {run_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to delete workspace: {str(e)}")
 
 
 # ==============================================================================
