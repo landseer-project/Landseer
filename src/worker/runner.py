@@ -313,7 +313,12 @@ class DockerRunner:
         # Add common environment variables
         docker_cmd.extend([
             "-e", "INPUT_DIR=/input",
-            "-e", "OUTPUT_DIR=/output"
+            "-e", "OUTPUT_DIR=/output",
+            # Evaluator/tool containers in this repo commonly use WORKSPACE=/workspace
+            # and then read/write under $WORKSPACE/input and $WORKSPACE/output.
+            # We mount host input/output at /input and /output, so set WORKSPACE=/
+            # to make $WORKSPACE/input == /input and $WORKSPACE/output == /output.
+            "-e", "WORKSPACE=/",
         ])
         
         # Add GPU-related environment variables.
@@ -531,6 +536,9 @@ class ApptainerRunner:
         env_vars = env or {}
         env_vars["INPUT_DIR"] = "/input"
         env_vars["OUTPUT_DIR"] = "/output"
+        # See DockerRunner comment above: align /workspace/{input,output} defaults
+        # to our mounted /input and /output paths.
+        env_vars["WORKSPACE"] = "/"
         if self.gpu_id is not None:
             env_vars["CUDA_VISIBLE_DEVICES"] = str(self.gpu_id)
         

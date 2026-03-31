@@ -110,12 +110,13 @@ class DatabaseService:
     # Pipeline Sync Operations
     # =========================================================================
     
-    def sync_pipeline_to_db(self, pipeline: Pipeline) -> Optional[str]:
+    def sync_pipeline_to_db(self, pipeline: Pipeline, run_id: Optional[str] = None) -> Optional[str]:
         """
         Sync a pipeline and all its workflows/tasks to the database.
         
         Args:
             pipeline: Pipeline to sync
+            run_id: Optional run ID to associate with this pipeline
             
         Returns:
             Pipeline ID if successful, None otherwise
@@ -129,17 +130,30 @@ class DatabaseService:
                 workflow_repo = WorkflowRepository(session)
                 task_repo = TaskRepository(session)
                 
+                # Get run_id from pipeline if not provided
+                if run_id is None:
+                    run_id = getattr(pipeline, 'run_id', None)
+                    if not run_id:
+                        # Try to get from first workflow
+                        if pipeline.workflows:
+                            run_id = getattr(pipeline.workflows[0], 'run_id', None)
+                
                 # Create or update pipeline
                 db_pipeline = pipeline_repo.get_by_id(pipeline.id)
                 if not db_pipeline:
                     db_pipeline = pipeline_repo.create({
                         "id": pipeline.id,
                         "name": pipeline.name,
+                        "run_id": run_id,
                         "config": pipeline.config,
                         "dataset_config": pipeline.dataset,
                         "model_config": pipeline.model,
                         "status": "pending"
                     })
+                else:
+                    # Update run_id if provided
+                    if run_id:
+                        db_pipeline.run_id = run_id
                 
                 # Collect all unique tasks
                 task_map: Dict[str, Task] = {}
@@ -149,6 +163,7 @@ class DatabaseService:
                 
                 # Create tasks
                 for task in task_map.values():
+                    task_run_id = getattr(task, 'run_id', None) or run_id
                     db_task = task_repo.get_by_id(task.id)
                     if not db_task:
                         task_repo.create({
@@ -163,19 +178,30 @@ class DatabaseService:
                             "task_type": task.task_type.value,
                             "task_hash": task.get_hash(),
                             "counter": task.counter,
-                            "pipeline_id": pipeline.id
+                            "pipeline_id": pipeline.id,
+                            "run_id": task_run_id
                         })
+                    else:
+                        # Update run_id if not set
+                        if task_run_id and not db_task.run_id:
+                            db_task.run_id = task_run_id
                 
                 # Create workflows and link tasks
                 for workflow in pipeline.workflows:
+                    workflow_run_id = getattr(workflow, 'run_id', None) or run_id
                     db_workflow = workflow_repo.get_by_id(workflow.id)
                     if not db_workflow:
                         db_workflow = workflow_repo.create({
                             "id": workflow.id,
                             "name": workflow.name,
                             "pipeline_id": pipeline.id,
+                            "run_id": workflow_run_id,
                             "status": "pending"
                         })
+                    else:
+                        # Update run_id if not set
+                        if workflow_run_id and not db_workflow.run_id:
+                            db_workflow.run_id = workflow_run_id
                     
                     # Link tasks to workflow
                     for task in workflow.tasks:
@@ -192,7 +218,7 @@ class DatabaseService:
                             if db_dep and db_dep not in db_task.dependencies:
                                 db_task.dependencies.append(db_dep)
                 
-                logger.info(f"Synced pipeline {pipeline.id} to database")
+                logger.info(f"Synced pipeline {pipeline.id} to database (run_id={run_id})")
                 return pipeline.id
                 
         except Exception as e:
@@ -249,7 +275,8 @@ class DatabaseService:
         evaluator_name: str,
         result_data: Dict[str, Any],
         evaluation_task_id: Optional[str] = None,
-        evaluator_image: Optional[str] = None
+        evaluator_image: Optional[str] = None,
+        run_id: Optional[str] = None
     ) -> bool:
         """
         Save or update an evaluation result for a workflow (used when workers report evaluator completion).
@@ -281,6 +308,9 @@ class DatabaseService:
                     evaluation_task_id=evaluation_task_id,
                     evaluator_image=evaluator_image
                 )
+                # Set run_id if provided
+                if run_id:
+                    er.run_id = run_id
                 session.merge(er)
             
             metrics_count = len(result_data.get("metrics", {}))
@@ -508,6 +538,7 @@ class DatabaseService:
             PipelineTaskStatus.RUNNING: DBTaskStatus.RUNNING,
             PipelineTaskStatus.COMPLETED: DBTaskStatus.COMPLETED,
             PipelineTaskStatus.FAILED: DBTaskStatus.FAILED,
+            PipelineTaskStatus.CANCELLED: DBTaskStatus.CANCELLED,
         }
         return mapping.get(status, DBTaskStatus.PENDING)
 

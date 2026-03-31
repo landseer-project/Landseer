@@ -1,0 +1,30 @@
+# Development container with uv and full Landseer setup
+FROM python:3.11-slim
+
+WORKDIR /landseer
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl build-essential libffi-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv
+RUN pip install --no-cache-dir uv
+
+# Copy project files
+COPY . .
+
+# Install into the container Python (no separate venv in dev image)
+ENV UV_SYSTEM_PYTHON=1
+
+# Install dependencies
+RUN uv sync --all-groups
+
+# Set Python path for imports
+ENV PYTHONPATH=/landseer/src:/landseer:$PYTHONPATH
+
+# Expose ports
+EXPOSE 8000 3000
+
+# Default to bash
+CMD ["/bin/bash"]

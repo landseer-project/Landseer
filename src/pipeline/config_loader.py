@@ -68,6 +68,95 @@ class EvaluatorDefinition(BaseModel):
 _EVALUATOR_REGISTRY: Dict[str, EvaluatorDefinition] = {}
 
 
+def _repo_root() -> Path:
+    """Project root (directory containing ``configs/``)."""
+    return Path(__file__).resolve().parents[2]
+
+
+def _resolve_config_path(yaml_path: str) -> Path:
+    p = Path(yaml_path)
+    if p.is_absolute():
+        return p
+    cwd_candidate = Path.cwd() / p
+    if cwd_candidate.exists():
+        return cwd_candidate
+    return _repo_root() / p
+
+
+def _builtin_evaluator_definitions() -> Dict[str, EvaluatorDefinition]:
+    """
+    Default evaluator set — always available so every workflow can attach evaluation tasks.
+
+    Images use ``ghcr.io/landseer-project/evals/<name>:<tag>``; override in ``configs/evaluators.yaml``.
+    """
+    specs: Dict[str, Dict[str, Any]] = {
+        "clean": {
+            "name": "clean",
+            "container": {"image": "ghcr.io/landseer-project/evals/clean:c528241", "command": ""},
+            "required_artifacts": [],
+            "metrics": ["clean_accuracy"],
+            "defense_types": [],
+        },
+        "backdoor": {
+            "name": "backdoor",
+            "container": {"image": "ghcr.io/landseer-project/evals/backdoor:c528241", "command": ""},
+            "required_artifacts": ["poisoning_metadata.json"],
+            "metrics": ["attack_success_rate", "clean_accuracy_post_attack", "backdoor_robustness"],
+            "defense_types": ["backdoor"],
+        },
+        "adversarial": {
+            "name": "adversarial",
+            "container": {"image": "ghcr.io/landseer-project/evals/adversarial:c528241", "command": ""},
+            "required_artifacts": [],
+            "metrics": ["clean_accuracy", "pgd_accuracy", "fgsm_accuracy", "carlini_l2_accuracy"],
+            "defense_types": ["adversarial"],
+        },
+        "fairness": {
+            "name": "fairness",
+            "container": {"image": "ghcr.io/landseer-project/evals/fairness:c528241", "command": ""},
+            "required_artifacts": ["sensitive_attributes.npy"],
+            "metrics": ["demographic_parity", "equalized_odds_diff"],
+            "defense_types": ["fairness"],
+        },
+        "fingerprinting": {
+            "name": "fingerprinting",
+            "container": {"image": "ghcr.io/landseer-project/evals/fingerprinting:c528241", "command": ""},
+            "required_artifacts": [],
+            "metrics": ["mingd_score", "fingerprint_accuracy"],
+            "defense_types": ["fingerprinting"],
+        },
+        "ood": {
+            "name": "ood",
+            "container": {"image": "ghcr.io/landseer-project/evals/ood:c528241", "command": ""},
+            "required_artifacts": [],
+            "metrics": ["ood_auc", "fpr_at_95_tpr"],
+            "defense_types": ["outlier_removal"],
+        },
+        "watermark": {
+            "name": "watermark",
+            "container": {"image": "ghcr.io/landseer-project/evals/watermark:c528241", "command": ""},
+            "required_artifacts": ["watermark_key.json"],
+            "metrics": ["watermark_accuracy", "bit_accuracy", "detection_rate"],
+            "defense_types": ["watermarking"],
+        },
+    }
+    out: Dict[str, EvaluatorDefinition] = {}
+    for key, spec in specs.items():
+        c = spec["container"]
+        out[key] = EvaluatorDefinition(
+            name=spec["name"],
+            container=EvaluatorContainerConfig(
+                image=c["image"],
+                command=c.get("command", ""),
+                runtime=c.get("runtime"),
+            ),
+            required_artifacts=spec.get("required_artifacts", []),
+            metrics=spec.get("metrics", []),
+            defense_types=spec.get("defense_types", []),
+        )
+    return out
+
+
 def load_evaluators_from_yaml(yaml_path: str) -> Dict[str, EvaluatorDefinition]:
     """
     Load evaluator definitions from YAML file.
@@ -79,10 +168,10 @@ def load_evaluators_from_yaml(yaml_path: str) -> Dict[str, EvaluatorDefinition]:
         Dictionary mapping evaluator names to definitions
     """
     evaluators = {}
-    yaml_file = Path(yaml_path)
+    yaml_file = _resolve_config_path(yaml_path)
     
     if not yaml_file.exists():
-        logger.warning(f"Evaluators config not found: {yaml_path}")
+        logger.debug(f"Evaluators config not found: {yaml_file}")
         return evaluators
     
     with open(yaml_file, 'r') as f:
@@ -106,9 +195,39 @@ def load_evaluators_from_yaml(yaml_path: str) -> Dict[str, EvaluatorDefinition]:
 
 
 def init_evaluator_registry(yaml_path: str = "configs/evaluators.yaml"):
-    """Initialize the global evaluator registry."""
+    """
+    Initialize the global evaluator registry.
+
+    Built-in evaluators are always registered. If ``configs/evaluators.yaml`` exists,
+    its entries override or extend the built-ins by evaluator key.
+    """
     global _EVALUATOR_REGISTRY
-    _EVALUATOR_REGISTRY = load_evaluators_from_yaml(yaml_path)
+    base = _builtin_evaluator_definitions()
+    path = _resolve_config_path(yaml_path)
+    if not path.exists():
+        _EVALUATOR_REGISTRY = base.copy()
+        logger.info(
+            "Using %d built-in evaluators (%s not found; optional overrides there)",
+            len(_EVALUATOR_REGISTRY),
+            yaml_path,
+        )
+        return
+    try:
+        loaded = load_evaluators_from_yaml(yaml_path)
+        _EVALUATOR_REGISTRY = {**base, **loaded}
+        logger.info(
+            "Evaluator registry: %d evaluators (built-ins merged with %s)",
+            len(_EVALUATOR_REGISTRY),
+            path,
+        )
+    except Exception as e:
+        _EVALUATOR_REGISTRY = base.copy()
+        logger.warning(
+            "Failed to parse evaluators YAML %s (%s); using %d built-in evaluators only",
+            path,
+            e,
+            len(_EVALUATOR_REGISTRY),
+        )
 
 
 def get_all_evaluators() -> Dict[str, EvaluatorDefinition]:
@@ -487,16 +606,18 @@ def create_pipeline_from_config(
     except FileNotFoundError:
         logger.warning(f"Tools config file not found at {tools_yaml_path}, continuing without tool registry")
     
-    # Load evaluators if enabled
+    # Load evaluators if enabled (built-ins always registered; YAML merges on top)
     evaluators = None
     if include_evaluation:
         try:
             init_evaluator_registry(evaluators_yaml_path)
             evaluators = get_all_evaluators()
-            if evaluators:
-                logger.info(f"Loaded {len(evaluators)} evaluators for pipeline")
+            logger.info(f"Pipeline will attach {len(evaluators)} evaluator(s) per workflow")
         except Exception as e:
             logger.warning(f"Failed to load evaluators: {e}")
+            global _EVALUATOR_REGISTRY
+            _EVALUATOR_REGISTRY = _builtin_evaluator_definitions().copy()
+            evaluators = get_all_evaluators()
     
     # Clear task registry for a fresh start if requested
     if clear_registry:

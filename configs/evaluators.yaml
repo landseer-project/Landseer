@@ -1,0 +1,93 @@
+# Evaluator containers (merged on top of built-in defaults in code).
+# Built-ins always include all evaluators; override here for registry paths/tags.
+# Published images: ghcr.io/landseer-project/evals/<name>:<tag>
+
+evaluators:
+  clean:
+    name: clean
+    container:
+      image: ghcr.io/landseer-project/evals/clean:c528241
+      command: ""
+    required_artifacts: []
+    metrics:
+      - clean_accuracy
+    defense_types: []
+
+  backdoor:
+    name: backdoor
+    container:
+      image: ghcr.io/landseer-project/evals/backdoor:c528241
+      command: ""
+    required_artifacts:
+      - poisoning_metadata.json
+    metrics:
+      - attack_success_rate
+      - clean_accuracy_post_attack
+      - backdoor_robustness
+    defense_types:
+      - backdoor
+
+  adversarial:
+    name: adversarial
+    container:
+      image: ghcr.io/landseer-project/evals/adversarial:c528241
+      command: ""
+    required_artifacts: []
+    metrics:
+      - clean_accuracy
+      - pgd_accuracy
+      - fgsm_accuracy
+      - carlini_l2_accuracy
+    defense_types:
+      - adversarial
+
+  fairness:
+    name: fairness
+    container:
+      image: ghcr.io/landseer-project/evals/fairness:c528241
+      command: ""
+    required_artifacts:
+      - sensitive_attributes.npy
+    metrics:
+      - demographic_parity
+      - equalized_odds_diff
+    defense_types:
+      - fairness
+
+  fingerprinting:
+    name: fingerprinting
+    container:
+      image: ghcr.io/landseer-project/evals/fingerprinting:c528241
+      command: ""
+    required_artifacts: []
+    metrics:
+      - mingd_score
+      - fingerprint_accuracy
+    defense_types:
+      - fingerprinting
+
+  ood:
+    name: ood
+    container:
+      image: ghcr.io/landseer-project/evals/ood:c528241
+      command: ""
+    required_artifacts: []
+    metrics:
+      - ood_auc
+      - fpr_at_95_tpr
+    defense_types:
+      - outlier_removal
+
+  watermark:
+    name: watermark
+    container:
+      image: ghcr.io/landseer-project/evals/watermark:c528241
+      command: ""
+    required_artifacts:
+      - watermark_key.json
+    metrics:
+      - watermark_accuracy
+      - bit_accuracy
+      - detection_rate
+    defense_types:
+      - watermarking

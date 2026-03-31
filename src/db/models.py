@@ -117,6 +117,14 @@ class TaskModel(Base):
         index=True
     )
     
+    # Run relationship (for tracking which run created this task)
+    run_id: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        ForeignKey('pipeline_runs.id'),
+        nullable=True,
+        index=True
+    )
+    
     # Artifact caching
     cache_key: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     artifact_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
@@ -287,6 +295,14 @@ class WorkflowModel(Base):
         index=True
     )
     
+    # Run relationship (for tracking which run created this workflow)
+    run_id: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        ForeignKey('pipeline_runs.id'),
+        nullable=True,
+        index=True
+    )
+    
     # Status (derived from tasks but cached for performance)
     status: Mapped[str] = mapped_column(String(32), default="pending")
     completed_tasks: Mapped[int] = mapped_column(Integer, default=0)
@@ -330,6 +346,7 @@ class WorkflowModel(Base):
             "id": self.id,
             "name": self.name,
             "pipeline_id": self.pipeline_id,
+            "run_id": self.run_id,
             "status": self.status,
             "completed_tasks": self.completed_tasks,
             "failed_tasks": self.failed_tasks,
@@ -370,21 +387,165 @@ class WorkflowModel(Base):
         }
 
 
+class PipelineRunStatus(str, Enum):
+    """Status of a pipeline run."""
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    STOPPING = "stopping"
+
+
+class PipelineConfigModel(Base):
+    """
+    Database model for Pipeline Configurations.
+    
+    Represents a pipeline configuration (YAML file) that can be run multiple times.
+    Each config can have multiple PipelineRun instances.
+    """
+    __tablename__ = 'pipeline_configs'
+    
+    # Primary key - e.g., "config_trades"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    
+    # Config info
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    
+    # File paths
+    config_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    attack_config_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    
+    # Config hash for change detection
+    config_hash: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
+    
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow
+    )
+    
+    # Relationships
+    runs: Mapped[List["PipelineRunModel"]] = relationship(
+        "PipelineRunModel",
+        back_populates="config",
+        cascade="all, delete-orphan"
+    )
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary representation."""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "config_path": self.config_path,
+            "attack_config_path": self.attack_config_path,
+            "config_hash": self.config_hash,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class PipelineRunModel(Base):
+    """
+    Database model for Pipeline Runs.
+    
+    Represents a single execution instance of a pipeline configuration.
+    Multiple runs of the same config can exist, each with its own status and results.
+    """
+    __tablename__ = 'pipeline_runs'
+    
+    # Primary key - e.g., "run_20250203_143022_abc123"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    
+    # Reference to pipeline config
+    pipeline_config_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey('pipeline_configs.id'),
+        nullable=False,
+        index=True
+    )
+    
+    # Run number (sequential for this config)
+    run_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    
+    # Run settings
+    use_cache: Mapped[bool] = mapped_column(Boolean, default=True)
+    
+    # Status
+    status: Mapped[PipelineRunStatus] = mapped_column(
+        SQLEnum(PipelineRunStatus),
+        default=PipelineRunStatus.PENDING,
+        index=True
+    )
+    
+    # Error info
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    
+    # Relationships
+    config: Mapped["PipelineConfigModel"] = relationship(
+        "PipelineConfigModel",
+        back_populates="runs"
+    )
+    pipeline: Mapped[Optional["PipelineModel"]] = relationship(
+        "PipelineModel",
+        back_populates="run",
+        uselist=False
+    )
+    
+    # Unique constraint: one run number per config
+    __table_args__ = (
+        UniqueConstraint('pipeline_config_id', 'run_number', name='unique_config_run'),
+    )
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary representation."""
+        return {
+            "id": self.id,
+            "pipeline_config_id": self.pipeline_config_id,
+            "run_number": self.run_number,
+            "use_cache": self.use_cache,
+            "status": self.status.value if self.status else None,
+            "error_message": self.error_message,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+        }
+
+
 class PipelineModel(Base):
     """
     Database model for Pipelines.
     
     A pipeline is a collection of workflows used to evaluate ML defenses.
+    Now linked to a PipelineRun to support multiple runs of the same config.
     """
     __tablename__ = 'pipelines'
     
-    # Primary key
+    # Primary key - now matches run_id
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     
     # Pipeline info
     name: Mapped[str] = mapped_column(String(256), nullable=False)
     
-    # Configuration (JSON)
+    # Reference to pipeline run
+    run_id: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        ForeignKey('pipeline_runs.id'),
+        nullable=True,
+        unique=True,
+        index=True
+    )
+    
+    # Configuration (JSON) - kept for backwards compatibility
     config: Mapped[dict] = mapped_column(JSON, default=dict)
     dataset_config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     model_config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
@@ -403,6 +564,11 @@ class PipelineModel(Base):
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     
     # Relationships
+    run: Mapped[Optional["PipelineRunModel"]] = relationship(
+        "PipelineRunModel",
+        back_populates="pipeline",
+        uselist=False
+    )
     workflows: Mapped[List["WorkflowModel"]] = relationship(
         "WorkflowModel",
         back_populates="pipeline",
@@ -419,6 +585,7 @@ class PipelineModel(Base):
         return {
             "id": self.id,
             "name": self.name,
+            "run_id": self.run_id,
             "config": self.config,
             "dataset_config": self.dataset_config,
             "model_config": self.model_config,
@@ -459,6 +626,14 @@ class ArtifactModel(Base):
     # Provenance (JSON: parent hashes, tool info)
     provenance: Mapped[dict] = mapped_column(JSON, default=dict)
     
+    # Run relationship (for tracking which run created this cache entry)
+    created_by_run_id: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        ForeignKey('pipeline_runs.id'),
+        nullable=True,
+        index=True
+    )
+    
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_accessed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -475,6 +650,7 @@ class ArtifactModel(Base):
             "content_type": self.content_type,
             "checksum": self.checksum,
             "provenance": self.provenance,
+            "created_by_run_id": self.created_by_run_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "last_accessed_at": self.last_accessed_at.isoformat() if self.last_accessed_at else None,
         }
@@ -513,6 +689,14 @@ class EvaluationResultModel(Base):
         String(64),
         ForeignKey('pipelines.id'),
         nullable=False,
+        index=True
+    )
+    
+    # Run relationship (for tracking which run created this evaluation)
+    run_id: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        ForeignKey('pipeline_runs.id'),
+        nullable=True,
         index=True
     )
     

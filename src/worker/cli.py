@@ -13,7 +13,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from ..common import get_logger
 from .client import LandseerClient, TaskInfo
@@ -435,13 +435,88 @@ class Worker:
         
         # Fall back to local-only cache
         if self._cache:
+            run_id = getattr(task, 'run_id', None)
             self._cache.store_result(
                 task=task,
                 output_path=output_path,
                 execution_time_ms=execution_time_ms,
-                parent_hashes=parent_hashes
+                parent_hashes=parent_hashes,
+                run_id=run_id
             )
     
+    def _extract_evaluation_result(
+        self,
+        task: TaskInfo,
+        result: ExecutionResult,
+        logs_snippet: Optional[str]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Extract evaluator metrics.
+
+        Preferred source is ``evaluation_results.json`` from evaluator output.
+        """
+        if not (
+            result.success
+            and task.task_type == "evaluation"
+            and result.output_path
+            and result.output_path.exists()
+        ):
+            return None
+
+        candidate_files = [
+            "evaluation_results.json",
+            "evaluation_result.json",
+            "results.json",
+            "metrics.json",
+        ]
+        expected_metrics = task.config.get("metrics", []) if isinstance(task.config, dict) else []
+
+        for filename in candidate_files:
+            candidate = result.output_path / filename
+            if not candidate.exists():
+                continue
+            try:
+                payload = json.loads(candidate.read_text())
+                if not isinstance(payload, dict):
+                    continue
+
+                # Normalize older formats where metrics are top-level keys.
+                if "metrics" not in payload:
+                    numeric_metrics: Dict[str, float] = {}
+                    for key, val in payload.items():
+                        try:
+                            numeric_metrics[key] = float(val)
+                        except (TypeError, ValueError):
+                            continue
+                    if numeric_metrics:
+                        payload = {
+                            "success": True,
+                            "skipped": False,
+                            "metrics": numeric_metrics,
+                        }
+
+                if isinstance(payload.get("metrics"), dict):
+                    return payload
+            except Exception as e:
+                logger.warning(f"Failed to read {filename} for task {task.id}: {e}")
+
+        # Fallback: keep compatibility with old CSV-style sentinel values.
+        skip_reason = None
+        if logs_snippet:
+            for line in logs_snippet.splitlines():
+                if "Skipping:" in line:
+                    skip_reason = line.strip()
+                    break
+
+        fallback_metrics = {metric_name: -1.0 for metric_name in expected_metrics}
+        return {
+            "success": True,
+            "skipped": True,
+            "skip_reason": skip_reason or "evaluation_results.json not produced by evaluator",
+            "metrics": fallback_metrics,
+            "parameters": {"source": "worker_fallback"},
+        }
+
     def _report_result(self, task: TaskInfo, result: ExecutionResult) -> None:
         """
         Report task result to backend.
@@ -485,22 +560,12 @@ class Worker:
                 "log_path": str(log_path) if log_path.exists() else None,
             }
 
-            # For evaluator tasks, read evaluation_results.json from output and send to backend
-            # so metrics can be stored and shown on the Metrics dashboard.
-            if (
-                result.success
-                and getattr(task, "task_type", "") == "evaluation"
-                and result.output_path
-                and result.output_path.exists()
-            ):
-                eval_path = result.output_path / "evaluation_results.json"
-                if eval_path.exists():
-                    try:
-                        eval_data = json.loads(eval_path.read_text())
-                        result_payload["evaluation_result"] = eval_data
-                        logger.debug(f"Included evaluation_result for task {task.id}")
-                    except Exception as e:
-                        logger.warning(f"Failed to read evaluation_results.json for task {task.id}: {e}")
+            # For evaluator tasks, include structured evaluation_result so backend
+            # can persist metrics and expose them on metrics endpoints.
+            eval_data = self._extract_evaluation_result(task, result, logs_snippet)
+            if eval_data is not None:
+                result_payload["evaluation_result"] = eval_data
+                logger.debug(f"Included evaluation_result for task {task.id}")
 
             if result.success:
                 self._client.report_task_completed(

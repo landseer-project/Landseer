@@ -38,6 +38,7 @@ class TaskInfo:
     workflows: list
     pipeline_id: str
     dependency_ids: list
+    run_id: Optional[str] = None  # ID of the pipeline run this task belongs to
 
     @classmethod
     def from_api_response(cls, data: Dict[str, Any]) -> "TaskInfo":
@@ -59,7 +60,8 @@ class TaskInfo:
             counter=data.get("counter", 0),
             workflows=data.get("workflows", []),
             pipeline_id=data.get("pipeline_id", ""),
-            dependency_ids=data.get("dependency_ids", [])
+            dependency_ids=data.get("dependency_ids", []),
+            run_id=data.get("run_id")
         )
 
 

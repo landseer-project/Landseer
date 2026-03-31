@@ -65,10 +65,11 @@ class ArtifactMetadata:
     created_at: str
     execution_time_ms: int
     files: List[Dict[str, Any]] = field(default_factory=list)
+    run_id: Optional[str] = None  # ID of the pipeline run that created this artifact
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
-        return {
+        result = {
             "node_hash": self.node_hash,
             "task_id": self.task_id,
             "tool_name": self.tool_name,
@@ -78,6 +79,9 @@ class ArtifactMetadata:
             "execution_time_ms": self.execution_time_ms,
             "files": self.files
         }
+        if self.run_id:
+            result["run_id"] = self.run_id
+        return result
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ArtifactMetadata":
@@ -90,7 +94,8 @@ class ArtifactMetadata:
             parent_hashes=data.get("parent_hashes", []),
             created_at=data["created_at"],
             execution_time_ms=data.get("execution_time_ms", 0),
-            files=data.get("files", [])
+            files=data.get("files", []),
+            run_id=data.get("run_id")
         )
 
 
@@ -315,7 +320,8 @@ class ArtifactCacheDB:
         output_path: Path,
         task: TaskInfo,
         execution_time_ms: int = 0,
-        parent_hashes: Optional[List[str]] = None
+        parent_hashes: Optional[List[str]] = None,
+        run_id: Optional[str] = None
     ) -> bool:
         """
         Store an artifact in the cache.
@@ -366,6 +372,10 @@ class ArtifactCacheDB:
                     except Exception:
                         pass
             
+            # Get run_id from task if not provided
+            if run_id is None:
+                run_id = getattr(task, 'run_id', None)
+            
             # Create metadata
             metadata = ArtifactMetadata(
                 node_hash=node_hash,
@@ -375,7 +385,8 @@ class ArtifactCacheDB:
                 parent_hashes=parent_hashes or [],
                 created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 execution_time_ms=execution_time_ms,
-                files=files
+                files=files,
+                run_id=run_id
             )
             
             # Write manifest
@@ -592,7 +603,8 @@ class CacheManager:
         task: TaskInfo,
         output_path: Path,
         execution_time_ms: int,
-        parent_hashes: Optional[List[str]] = None
+        parent_hashes: Optional[List[str]] = None,
+        run_id: Optional[str] = None
     ) -> str:
         """
         Store task result in cache.
@@ -602,17 +614,22 @@ class CacheManager:
             output_path: Path to output directory
             execution_time_ms: Execution time in milliseconds
             parent_hashes: Parent artifact hashes
+            run_id: Optional run ID to tag this cache entry
             
         Returns:
             Node hash of stored artifact
         """
         node_hash = self.db.compute_task_hash(task, parent_hashes or [])
+        # Get run_id from task if not provided
+        if run_id is None:
+            run_id = getattr(task, 'run_id', None)
         self.db.store_artifact(
             node_hash=node_hash,
             output_path=output_path,
             task=task,
             execution_time_ms=execution_time_ms,
-            parent_hashes=parent_hashes
+            parent_hashes=parent_hashes,
+            run_id=run_id
         )
         return node_hash
     

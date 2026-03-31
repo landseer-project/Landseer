@@ -289,9 +289,14 @@ class TestWorkflowMountsLatestArtifacts:
         dependency_outputs = {dep_id: dep_output_dir}
 
         # Patch Docker invocation so we can inspect the generated command.
-        with patch("src.worker.runner.subprocess.run") as mock_run, \
+        with patch("src.worker.runner.subprocess.Popen") as mock_popen, \
              patch.object(worker._runner._container_runner, "pull_image", return_value=True):
-            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            proc = MagicMock()
+            proc.poll.return_value = 0
+            proc.returncode = 0
+            proc.stdout.readline.return_value = ""
+            proc.stderr.readline.return_value = ""
+            mock_popen.return_value = proc
 
             worker._runner.run_task(
                 task,
@@ -303,7 +308,7 @@ class TestWorkflowMountsLatestArtifacts:
         task_input_dir = temp_workspace / task.id / "input"
 
         # Extract the docker command list from the subprocess call
-        call_args = mock_run.call_args[0][0]
+        call_args = mock_popen.call_args[0][0]
         mounts = [call_args[i + 1] for i, arg in enumerate(call_args) if arg == "-v"]
 
         input_mount = next((m for m in mounts if m.endswith(":\/input:ro") or m.endswith(":/input:ro")), None)
@@ -339,6 +344,7 @@ class TestWorkerDependencyHandling:
         
         # Initialize components (this sets up _runner)
         worker._init_components()
+        worker.use_cache = False
         
         # Create a task with dependency
         task = TaskInfo(

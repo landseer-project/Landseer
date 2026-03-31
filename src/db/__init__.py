@@ -24,14 +24,22 @@ from .models import (
     WorkerModel,
     WorkflowModel,
     PipelineModel,
+    PipelineConfigModel,
+    PipelineRunModel,
+    ArtifactModel,
+    EvaluationResultModel,
     TaskStatus as DBTaskStatus,
     WorkerStatus,
+    PipelineRunStatus,
 )
 from .repository import (
     TaskRepository,
     WorkerRepository,
     WorkflowRepository,
     PipelineRepository,
+    PipelineConfigRepository,
+    PipelineRunRepository,
+    ArtifactRepository,
 )
 
 __all__ = [
@@ -48,11 +56,19 @@ __all__ = [
     'WorkerModel',
     'WorkflowModel',
     'PipelineModel',
+    'PipelineConfigModel',
+    'PipelineRunModel',
+    'ArtifactModel',
+    'EvaluationResultModel',
     'DBTaskStatus',
     'WorkerStatus',
+    'PipelineRunStatus',
     # Repositories
     'TaskRepository',
     'WorkerRepository',
     'WorkflowRepository',
     'PipelineRepository',
+    'PipelineConfigRepository',
+    'PipelineRunRepository',
+    'ArtifactRepository',
 ]

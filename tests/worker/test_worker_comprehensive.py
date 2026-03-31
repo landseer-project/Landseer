@@ -568,6 +568,49 @@ class TestTaskExecution:
         
         worker._cache.store_result.assert_called_once()
     
+    def test_execute_task_stores_with_run_id_when_task_has_run_id(
+        self, temp_workspace, temp_cache_dir
+    ):
+        """_store_in_cache should pass run_id to store_result when task has run_id (Improvement: run ID propagation)."""
+        worker = Worker(workspace_dir=temp_workspace, cache_dir=temp_cache_dir, use_cache=True)
+        worker._cache = MagicMock()
+        worker._runner = MagicMock()
+        worker._runner.workspace_dir = temp_workspace
+        
+        task_with_run = TaskInfo(
+            id="test_task_run",
+            tool_name="test_tool",
+            tool_image="test/image:latest",
+            tool_command="python main.py",
+            tool_runtime=None,
+            tool_is_baseline=False,
+            config={},
+            priority=100,
+            status="pending",
+            task_type="pre_training",
+            counter=1,
+            workflows=["wf_1"],
+            pipeline_id="pipeline_1",
+            dependency_ids=[],
+            run_id="run_20250203_120000_abc123",
+        )
+        output_path = temp_workspace / "test_task_run" / "output"
+        output_path.mkdir(parents=True, exist_ok=True)
+        result = ExecutionResult(
+            success=True,
+            exit_code=0,
+            execution_time_ms=1000,
+            output_path=output_path,
+        )
+        worker._runner.run_task.return_value = result
+        worker._cache.check_cache.return_value = None
+        
+        worker._execute_task(task_with_run)
+        
+        worker._cache.store_result.assert_called_once()
+        call_kw = worker._cache.store_result.call_args[1]
+        assert call_kw.get("run_id") == "run_20250203_120000_abc123"
+    
     def test_execute_task_mounts_data_directory(self, temp_workspace, temp_data_dir, mock_task):
         """_execute_task should mount data directory if available."""
         worker = Worker(workspace_dir=temp_workspace, data_path=temp_data_dir)
