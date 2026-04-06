@@ -14,6 +14,8 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
+from model_loader import load_torch_model_for_eval
+
 
 def evaluate_clean_accuracy(model, loader, device):
     """Compute top-1 accuracy on clean samples."""
@@ -81,8 +83,7 @@ def main():
         return
 
     try:
-        model = torch.load(model_path, map_location=device)
-        model.eval()
+        model = load_torch_model_for_eval(model_path, input_dir, device)
     except Exception as exc:
         write_results(
             output_dir,

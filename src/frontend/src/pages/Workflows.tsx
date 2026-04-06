@@ -24,6 +24,7 @@ export function Workflows() {
   const { data: workflowsData, isLoading, isFetching } = useQuery({
     queryKey: ['workflows'],
     queryFn: getWorkflows,
+    refetchInterval: 15_000,
   });
 
   const workflows = workflowsData?.workflows || [];
@@ -99,13 +100,9 @@ export function Workflows() {
             </div>
             <div>
               <p className="text-2xl font-bold">
-                {Math.round(
-                  (workflows.reduce((acc, wf) => acc + wf.task_count, 0) /
-                    Math.max(workflows.length, 1)) *
-                    10
-                ) / 10}
+                {workflows.reduce((acc, wf) => acc + wf.task_count, 0)}
               </p>
-              <p className="text-sm text-muted-foreground">Avg Tasks/Workflow</p>
+              <p className="text-sm text-muted-foreground">Total Tasks</p>
             </div>
           </CardContent>
         </Card>
@@ -146,6 +143,8 @@ function WorkflowCard({ workflow }: { workflow: WorkflowInfo }) {
   const { data: detail } = useQuery({
     queryKey: ['workflow-detail', workflow.id],
     queryFn: () => getWorkflowDetail(workflow.id),
+    staleTime: 20_000,
+    refetchInterval: 30_000,
   });
 
   const progress = detail

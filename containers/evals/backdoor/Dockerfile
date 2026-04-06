@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir \
     numpy==1.24.0 \
     scikit-learn==1.3.0
 
-COPY evaluate.py .
+COPY common/model_loader.py ./model_loader.py
+COPY backdoor/evaluate.py ./evaluate.py
 
 ENTRYPOINT ["python", "evaluate.py"]

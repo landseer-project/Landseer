@@ -8,6 +8,7 @@ This module handles the actual execution of tasks, including:
 - Logging and result collection
 """
 
+import errno
 import os
 import shutil
 import subprocess
@@ -21,6 +22,22 @@ from ..common import get_logger
 from .client import TaskInfo
 
 logger = get_logger(__name__)
+
+
+def _link_or_copy(src: Path, dst: Path) -> None:
+    """Hard-link *src* to *dst*; fall back to copy on cross-filesystem or permission error.
+
+    Hard links share the same inode so no bytes are duplicated on disk.
+    The fallback preserves behaviour on cross-device mounts (EXDEV) or
+    systems where linking is disallowed (EPERM/EACCES).
+    """
+    try:
+        os.link(src, dst)
+    except OSError as exc:
+        if exc.errno in (errno.EXDEV, errno.EPERM, errno.EACCES):
+            shutil.copy2(src, dst)
+        else:
+            raise
 
 
 @dataclass
@@ -764,19 +781,25 @@ class TaskRunner:
         env: Optional[Dict[str, str]] = None,
         extra_mounts: Optional[Dict[str, str]] = None,
         model_script_path: Optional[Path] = None,
-        dependency_outputs: Optional[Dict[str, Path]] = None
+        dependency_outputs: Optional[Dict[str, Path]] = None,
+        ancestor_dirs: Optional[List[Path]] = None,
     ) -> ExecutionResult:
         """
         Execute a task.
-        
+
         Args:
             task: Task to execute
             input_path: Path to input data (optional)
             env: Additional environment variables
             extra_mounts: Additional volume mounts
             model_script_path: Path to model config script (e.g., config_model.py)
-            dependency_outputs: Dict mapping dependency task IDs to their output directories
-            
+            dependency_outputs: Dict mapping dependency task IDs to their output directories.
+                Kept for backward compatibility; prefer ancestor_dirs.
+            ancestor_dirs: Ordered list of all ancestor output directories (earliest stage
+                first). Later entries override earlier ones when filenames collide — so the
+                most-recently-produced model.pt always wins.  Files are hard-linked (same
+                inode, zero data copy) with a shutil.copy2 fallback for cross-filesystem.
+
         Returns:
             ExecutionResult with execution details
         """
@@ -811,33 +834,43 @@ class TaskRunner:
                 else:
                     shutil.copy2(input_path, input_dir / input_path.name)
             
-            # Copy outputs from dependent tasks to input directory
-            # This is critical for artifact chaining (e.g., model.pt from in_training -> post_training)
-            if dependency_outputs:
-                for dep_task_id, dep_output_path in dependency_outputs.items():
-                    if dep_output_path and dep_output_path.exists():
-                        logger.info(f"Copying outputs from dependency {dep_task_id} to input directory")
-                        if dep_output_path.is_dir():
-                            # Copy all files from dependency output directory
-                            for item in dep_output_path.iterdir():
-                                dest = input_dir / item.name
-                                if item.is_file():
-                                    shutil.copy2(item, dest)
-                                    logger.debug(f"Copied {item.name} from dependency {dep_task_id}")
-                                elif item.is_dir():
-                                    shutil.copytree(item, dest, dirs_exist_ok=True)
-                                    logger.debug(f"Copied directory {item.name} from dependency {dep_task_id}")
-                        else:
-                            # Single file output
-                            shutil.copy2(dep_output_path, input_dir / dep_output_path.name)
-                            logger.debug(f"Copied {dep_output_path.name} from dependency {dep_task_id}")
-                    else:
-                        logger.warning(f"Dependency {dep_task_id} output not found at {dep_output_path}")
+            # Merge ancestor outputs into input_dir earliest-first; later entries
+            # override earlier ones on filename collision (e.g. post_dp's model.pt
+            # wins over in_trades'). dependency_outputs kept for backward-compat.
+            dirs_to_merge: List[Path] = (
+                list(ancestor_dirs) if ancestor_dirs
+                else [p for p in (dependency_outputs or {}).values() if p]
+            )
+
+            for dep_output_path in dirs_to_merge:
+                if not dep_output_path or not dep_output_path.exists():
+                    logger.warning(f"Ancestor/dependency output not found: {dep_output_path}")
+                    continue
+                logger.info(f"Merging ancestor output into input dir: {dep_output_path}")
+                if dep_output_path.is_dir():
+                    for item in dep_output_path.iterdir():
+                        dest = input_dir / item.name
+                        if item.is_file():
+                            if dest.exists():
+                                dest.unlink()
+                            _link_or_copy(item, dest)
+                            logger.debug(f"Linked {item.name} from {dep_output_path.name}")
+                        elif item.is_dir():
+                            if dest.exists():
+                                shutil.rmtree(dest)
+                            shutil.copytree(item, dest)
+                            logger.debug(f"Copied dir {item.name} from {dep_output_path.name}")
+                else:
+                    dest = input_dir / dep_output_path.name
+                    if dest.exists():
+                        dest.unlink()
+                    _link_or_copy(dep_output_path, dest)
             
-            # Copy model script to input directory if provided
-            # This allows containers to import config_model
+            # Copy model script to input directory if provided.
+            # Always named config_model.py so containers can do
+            # "from config_model import config" regardless of the source filename.
             if model_script_path and model_script_path.exists():
-                dest_path = input_dir / model_script_path.name
+                dest_path = input_dir / "config_model.py"
                 shutil.copy2(model_script_path, dest_path)
                 logger.debug(f"Copied model script to: {dest_path}")
             

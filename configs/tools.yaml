@@ -17,6 +17,14 @@ tools:
       runtime: null
 
   # In-training (during training) tools
+  in_dp:
+    name: in-dp
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/in_dp:v10
+      command: python3 main.py
+      runtime: null
+
   in_noop:
     name: in_noop
     is_baseline: true

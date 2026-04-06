@@ -11,6 +11,7 @@ Usage:
     for task management. Start with `run_server()` or use the `app` directly.
 """
 
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -77,6 +78,8 @@ class TaskResponse(BaseModel):
     dependency_ids: List[str] = Field(default_factory=list, description="IDs of dependent tasks")
     cache_hit: Optional[bool] = Field(default=None, description="Whether this task used cache")
     cache_key: Optional[str] = Field(default=None, description="Cache key if cache was used")
+    output_path: Optional[str] = Field(default=None, description="Resolved output directory path for task artifacts")
+    log_path: Optional[str] = Field(default=None, description="Worker log file path for this task")
     worker_id: Optional[str] = Field(default=None, description="ID of worker that executed this task")
     error_message: Optional[str] = Field(default=None, description="Error message if task failed")
     execution_time_ms: Optional[int] = Field(default=None, description="Execution time in milliseconds")
@@ -418,6 +421,48 @@ class SchedulerState:
                     execution_time_ms=execution_time_ms
                 )
     
+    def reclaim_stale_workers(self, stale_timeout_seconds: float = 90.0) -> dict:
+        """
+        Detect workers whose heartbeat has gone silent, reset their RUNNING tasks
+        to PENDING, and mark those workers offline.
+
+        Called automatically by the background reclaim loop every 60 s.
+        Also called manually via POST /scheduler/reclaim-stale.
+
+        stale_timeout_seconds: seconds since last heartbeat before a worker is
+        considered dead. Default 90 s = 3× the 30 s worker heartbeat interval.
+        """
+        now = datetime.now()
+        reclaimed_tasks: List[str] = []
+        stale_worker_ids: List[str] = []
+
+        for worker_id, worker in self.workers.items():
+            last_hb_str = worker.get("last_heartbeat")
+            if not last_hb_str:
+                continue
+            elapsed = (now - datetime.fromisoformat(last_hb_str)).total_seconds()
+            if elapsed < stale_timeout_seconds:
+                continue  # worker is alive
+
+            stale_worker_ids.append(worker_id)
+            task_id = worker.get("current_task_id")
+            if task_id and self.scheduler:
+                task = self.scheduler._find_task_by_id(task_id)
+                if task and task.status == TaskStatus.RUNNING:
+                    task.status = TaskStatus.PENDING
+                    reclaimed_tasks.append(task_id)
+                    logger.info(f"Reclaimed task {task_id} from stale worker {worker_id} "
+                                f"(no heartbeat for {elapsed:.0f}s)")
+
+            worker["status"] = "offline"
+            worker["current_task_id"] = None
+
+        if stale_worker_ids:
+            logger.warning(f"Stale workers: {stale_worker_ids} | "
+                           f"Reclaimed tasks: {reclaimed_tasks}")
+
+        return {"stale_workers": stale_worker_ids, "reclaimed_tasks": reclaimed_tasks}
+
     def add_tool(
         self,
         name: str,
@@ -493,6 +538,8 @@ def task_to_response(task, state: Optional["SchedulerState"] = None) -> TaskResp
     # Get execution metadata from task metadata
     cache_hit = None
     cache_key = None
+    output_path = None
+    log_path = None
     worker_id = None
     error_message = None
     execution_time_ms = None
@@ -506,6 +553,8 @@ def task_to_response(task, state: Optional["SchedulerState"] = None) -> TaskResp
         if isinstance(result, dict):
             cache_hit = result.get("cache_hit")
             cache_key = result.get("cache_key")
+            output_path = result.get("output_path")
+            log_path = result.get("log_path")
     
     # Get run_id from task
     run_id = getattr(task, 'run_id', None)
@@ -533,6 +582,8 @@ def task_to_response(task, state: Optional["SchedulerState"] = None) -> TaskResp
         dependency_ids=[dep.id for dep in task.dependencies],
         cache_hit=cache_hit,
         cache_key=cache_key,
+        output_path=output_path,
+        log_path=log_path,
         worker_id=worker_id,
         error_message=error_message,
         execution_time_ms=execution_time_ms
@@ -543,17 +594,48 @@ def task_to_response(task, state: Optional["SchedulerState"] = None) -> TaskResp
 # FastAPI Application & Lifespan
 # ==============================================================================
 
+async def _stale_worker_reclaim_loop(
+    state: "SchedulerState",
+    check_interval: float = 60.0,
+    stale_timeout: float = 90.0,
+) -> None:
+    """
+    Background coroutine: wake every `check_interval` seconds and reclaim tasks
+    from workers that have stopped heartbeating for longer than `stale_timeout`.
+
+    Default: check every 60 s, declare a worker stale after 90 s of silence
+    (= 3 missed heartbeats at the default 30 s heartbeat interval).
+    """
+    logger.info(
+        f"Stale-worker reclaim loop started "
+        f"(check_interval={check_interval}s, stale_timeout={stale_timeout}s)"
+    )
+    while True:
+        await asyncio.sleep(check_interval)
+        if not state.is_initialized():
+            continue
+        try:
+            result = state.reclaim_stale_workers(stale_timeout_seconds=stale_timeout)
+            if result["stale_workers"]:
+                logger.info(
+                    f"Auto-reclaim: reset {len(result['reclaimed_tasks'])} task(s) to pending "
+                    f"from {len(result['stale_workers'])} stale worker(s)"
+                )
+        except Exception as exc:
+            logger.warning(f"Stale-worker reclaim loop error (will retry): {exc}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
     Application lifespan handler.
-    
+
     Initializes the scheduler from the backend context on startup
     and performs cleanup on shutdown.
     """
     # Startup
     logger.info("Starting Landseer API server...")
-    
+
     # Try to initialize from backend context if available
     context = get_backend_context()
     if context is not None:
@@ -561,10 +643,20 @@ async def lifespan(app: FastAPI):
         logger.info(f"Scheduler auto-initialized with pipeline: {context.pipeline.name}")
     else:
         logger.warning("No backend context found. Scheduler must be initialized via API.")
-    
+
+    # Start the background stale-worker reclaim loop
+    reclaim_task = asyncio.create_task(
+        _stale_worker_reclaim_loop(_scheduler_state, check_interval=60.0, stale_timeout=90.0)
+    )
+
     yield
-    
-    # Shutdown
+
+    # Shutdown — cancel the background loop cleanly
+    reclaim_task.cancel()
+    try:
+        await reclaim_task
+    except asyncio.CancelledError:
+        pass
     logger.info("Shutting down Landseer API server...")
 
 
@@ -1043,6 +1135,47 @@ async def initialize_scheduler(
         }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/scheduler/reclaim-stale", tags=["Scheduler"])
+async def reclaim_stale_tasks(state: SchedulerState = Depends(get_scheduler_state)):
+    """
+    Reclaim zombie tasks: reset RUNNING tasks whose worker has gone silent (or has no
+    worker at all) back to PENDING. Preserves COMPLETED/FAILED task state.
+
+    Combines two passes:
+    1. Heartbeat-based: workers with a stale heartbeat are marked offline and their task reclaimed.
+    2. Ownership-based: RUNNING tasks with no worker claiming them are also reclaimed
+       (handles tasks left over after a backend restart).
+    """
+    if not state.is_initialized():
+        raise HTTPException(status_code=503, detail="Scheduler not initialized.")
+
+    # Pass 1 — heartbeat-based (stale_timeout=0 reclaims any worker with any elapsed time,
+    # effectively marking every worker that currently has a task as stale so we get a clean sweep.
+    # Use a small positive value to avoid false-positives on a freshly-registered worker.)
+    result = state.reclaim_stale_workers(stale_timeout_seconds=1.0)
+    reclaimed = list(result["reclaimed_tasks"])
+
+    # Pass 2 — ownership-based: RUNNING tasks with absolutely no worker claiming them
+    claimed_task_ids = {
+        w["current_task_id"]
+        for w in state.workers.values()
+        if w.get("current_task_id")
+    }
+    for task in state.scheduler.get_all_tasks():
+        if task.status == TaskStatus.RUNNING and task.id not in claimed_task_ids and task.id not in reclaimed:
+            task.status = TaskStatus.PENDING
+            reclaimed.append(task.id)
+            logger.info(f"Reclaimed unclaimed task {task.id} (no worker assigned)")
+
+    logger.info(f"Manual reclaim: {len(reclaimed)} task(s) reset to pending")
+    return {
+        "success": True,
+        "reclaimed_count": len(reclaimed),
+        "reclaimed_task_ids": reclaimed,
+        "stale_workers": result["stale_workers"],
+    }
 
 
 @app.post("/scheduler/reset", tags=["Scheduler"])
@@ -1929,54 +2062,61 @@ async def get_pipeline_metrics(
     # Try to get metrics from database
     all_metrics = []
     metric_names = set()
-    
+    db_matched = False  # True only when DB has rows matching current workflow IDs
+
     if state.db_service and state.db_service.is_available():
         # Get from database
         try:
             from ..db.models import EvaluationResultModel
             from ..db import session_scope
-            
+
+            current_workflow_ids = {wf.id for wf in pipeline.workflows}
+
             with session_scope() as session:
                 results = session.query(EvaluationResultModel).filter(
-                    EvaluationResultModel.pipeline_id == pipeline.id
+                    EvaluationResultModel.pipeline_id == pipeline.id,
+                    EvaluationResultModel.workflow_id.in_(current_workflow_ids)
                 ).all()
-                
+
                 logger.debug(f"Found {len(results)} evaluation results in database for pipeline {pipeline.id}")
-                
-                # Group by workflow
-                by_workflow = {}
-                for r in results:
-                    if r.workflow_id not in by_workflow:
-                        by_workflow[r.workflow_id] = {
-                            "metrics": {},
-                            "run": [],
-                            "skipped": []
-                        }
-                    
-                    if r.skipped:
-                        by_workflow[r.workflow_id]["skipped"].append(r.evaluator_name)
-                    else:
-                        by_workflow[r.workflow_id]["run"].append(r.evaluator_name)
-                    for metric_name, value in (r.metrics or {}).items():
-                        by_workflow[r.workflow_id]["metrics"][metric_name] = value
-                        metric_names.add(metric_name)
-                
-                for wf in pipeline.workflows:
-                    wf_data = by_workflow.get(wf.id, {"metrics": {}, "run": [], "skipped": []})
-                    all_metrics.append(WorkflowMetrics(
-                        workflow_id=wf.id,
-                        workflow_name=wf.name,
-                        metrics=wf_data["metrics"],
-                        evaluators_run=wf_data["run"],
-                        evaluators_skipped=wf_data["skipped"]
-                    ))
-                
+
+                if results:
+                    db_matched = True
+                    # Group by workflow
+                    by_workflow = {}
+                    for r in results:
+                        if r.workflow_id not in by_workflow:
+                            by_workflow[r.workflow_id] = {
+                                "metrics": {},
+                                "run": [],
+                                "skipped": []
+                            }
+
+                        if r.skipped:
+                            by_workflow[r.workflow_id]["skipped"].append(r.evaluator_name)
+                        else:
+                            by_workflow[r.workflow_id]["run"].append(r.evaluator_name)
+                        for metric_name, value in (r.metrics or {}).items():
+                            by_workflow[r.workflow_id]["metrics"][metric_name] = value
+                            metric_names.add(metric_name)
+
+                    for wf in pipeline.workflows:
+                        wf_data = by_workflow.get(wf.id, {"metrics": {}, "run": [], "skipped": []})
+                        all_metrics.append(WorkflowMetrics(
+                            workflow_id=wf.id,
+                            workflow_name=wf.name,
+                            metrics=wf_data["metrics"],
+                            evaluators_run=wf_data["run"],
+                            evaluators_skipped=wf_data["skipped"]
+                        ))
+
         except Exception as e:
             logger.warning(f"Failed to get metrics from database: {e}", exc_info=True)
-    
-    # If database is not available or returned no results, fall back to in-memory task metadata.
-    # This ensures the Metrics dashboard still works in development setups without a database.
-    if not all_metrics:
+
+    # If database had no rows matching current workflow IDs, fall back to in-memory task metadata.
+    # This handles: DB unavailable, fresh backend restart (new sequential IDs), or stale DB rows
+    # from a previous run that used different workflow IDs.
+    if not db_matched:
         by_workflow = {
             wf.id: {"metrics": {}, "run": [], "skipped": []} for wf in pipeline.workflows
         }

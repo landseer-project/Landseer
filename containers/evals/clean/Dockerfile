@@ -1,3 +1,5 @@
+# Build with context directory containers/evals:
+#   docker build -f clean/Dockerfile .
 FROM pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime
 
 LABEL org.opencontainers.image.title="Clean Evaluator"
@@ -13,6 +15,7 @@ WORKDIR /app
 RUN pip install --no-cache-dir \
     numpy==1.24.0
 
-COPY evaluate.py .
+COPY common/model_loader.py ./model_loader.py
+COPY clean/evaluate.py ./evaluate.py
 
 ENTRYPOINT ["python", "evaluate.py"]

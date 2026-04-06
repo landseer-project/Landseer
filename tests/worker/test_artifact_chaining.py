@@ -376,10 +376,9 @@ class TestWorkerDependencyHandling:
             # Execute task
             result = worker._execute_task(task)
             
-            # Verify run_task was called with dependency_outputs
+            # Verify run_task was called with ancestor_dirs containing the dep output
             call_kwargs = mock_run_task.call_args[1]
-            assert "dependency_outputs" in call_kwargs, "run_task should be called with dependency_outputs"
-            dependency_outputs = call_kwargs["dependency_outputs"]
-            assert dependency_outputs is not None, "dependency_outputs should not be None"
-            assert dep_id in dependency_outputs, f"Dependency {dep_id} should be in dependency_outputs"
-            assert dependency_outputs[dep_id] == dep_output_dir, "Dependency output path should match"
+            assert "ancestor_dirs" in call_kwargs, "run_task should be called with ancestor_dirs"
+            ancestor_dirs = call_kwargs["ancestor_dirs"]
+            assert ancestor_dirs is not None, "ancestor_dirs should not be None"
+            assert dep_output_dir in ancestor_dirs, f"Dependency output {dep_output_dir} should be in ancestor_dirs"

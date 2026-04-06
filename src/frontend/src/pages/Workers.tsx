@@ -40,6 +40,7 @@ export function Workers() {
   const { data: workersData, isLoading, isFetching } = useQuery({
     queryKey: ['workers'],
     queryFn: getWorkers,
+    refetchInterval: 5_000,
   });
 
   const registerMutation = useMutation({

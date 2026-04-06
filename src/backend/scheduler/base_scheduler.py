@@ -36,17 +36,15 @@ class Scheduler(ABC):
     
     def _initialize_tasks(self) -> None:
         """
-        Extract and initialize all tasks from the pipeline's workflows.
-        Sets up initial task states and prepares for scheduling.
+        Extract and deduplicate all tasks from the pipeline's workflows.
+        Task statuses are preserved as-is; callers are responsible for
+        ensuring tasks are in the correct state before creating a scheduler.
         """
         self._all_tasks = []
         for workflow in self.pipeline.workflows:
             for task in workflow.tasks:
                 if task not in self._all_tasks:
                     self._all_tasks.append(task)
-                    # Ensure task starts in pending status
-                    if task.status != TaskStatus.PENDING:
-                        task.status = TaskStatus.PENDING
     
     @abstractmethod
     def get_next_task(self) -> Optional[Task]:

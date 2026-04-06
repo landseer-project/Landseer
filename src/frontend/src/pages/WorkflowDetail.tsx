@@ -8,7 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
 import { StatusBadge } from '@/components/StatusBadge';
 import { getWorkflowDetail, getWorkflowResults } from '@/lib/api';
-import { truncateId } from '@/lib/utils';
+import { truncateId, formatDuration } from '@/lib/utils';
 import {
   ArrowLeft,
   GitBranch,
@@ -28,12 +28,14 @@ export function WorkflowDetail() {
     queryKey: ['workflow-detail', id],
     queryFn: () => getWorkflowDetail(id!),
     enabled: !!id,
+    refetchInterval: 5_000,
   });
 
   const { data: results } = useQuery({
     queryKey: ['workflow-results', id],
     queryFn: () => getWorkflowResults(id!),
     enabled: !!id,
+    refetchInterval: 5_000,
   });
 
   const isRefreshing = isFetching && !isLoading;
@@ -164,7 +166,7 @@ export function WorkflowDetail() {
       <Tabs defaultValue="tasks">
         <TabsList>
           <TabsTrigger value="tasks">Tasks ({workflow.task_count})</TabsTrigger>
-          <TabsTrigger value="results">Results</TabsTrigger>
+          <TabsTrigger value="results">Execution Details</TabsTrigger>
           {workflow.failure_reasons.length > 0 && (
             <TabsTrigger value="errors" className="text-red-500">
               Errors ({workflow.failure_reasons.length})
@@ -233,9 +235,9 @@ export function WorkflowDetail() {
         <TabsContent value="results" className="mt-4">
           <Card>
             <CardHeader>
-              <CardTitle>Execution Results</CardTitle>
+              <CardTitle>Execution Details</CardTitle>
               <CardDescription>
-                Detailed results for each task execution
+                Timing, worker assignment, and errors for each task
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -264,7 +266,7 @@ export function WorkflowDetail() {
                           <span className="text-muted-foreground">Execution time:</span>{' '}
                           <span className="font-medium">
                             {result.execution_time_ms
-                              ? `${result.execution_time_ms}ms`
+                              ? formatDuration(result.execution_time_ms / 1000)
                               : '--'}
                           </span>
                         </div>
