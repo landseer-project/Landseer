@@ -22,7 +22,7 @@ import {
 } from '@/components/ui/dialog';
 import { StatusBadge } from '@/components/StatusBadge';
 import { getAllTasks, getTaskPriority, getReadyTasks, getBlockedTasks, getTaskLogs } from '@/lib/api';
-import { truncateId } from '@/lib/utils';
+import { truncateId, formatDuration } from '@/lib/utils';
 import type { TaskResponse } from '@/types/api';
 import {
   Search,
@@ -53,6 +53,7 @@ export function Tasks() {
   const { data: tasksData, isLoading, isFetching } = useQuery({
     queryKey: ['tasks', statusFilter === 'all' ? undefined : statusFilter],
     queryFn: () => getAllTasks(statusFilter === 'all' ? undefined : statusFilter),
+    refetchInterval: 5_000,
   });
 
   const { data: readyTasksData, isFetching: isReadyFetching } = useQuery({
@@ -112,7 +113,7 @@ export function Tasks() {
     .sort((a, b) => {
       switch (sortBy) {
         case 'priority':
-          return a.priority - b.priority;
+          return b.priority - a.priority;
         case 'status':
           const statusOrder = { running: 0, pending: 1, completed: 2, failed: 3 };
           return (statusOrder[a.status as keyof typeof statusOrder] || 4) - 
@@ -163,13 +164,14 @@ export function Tasks() {
             <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-purple-100 dark:bg-purple-900/30">
               <PlayCircle className="h-6 w-6 text-purple-600 dark:text-purple-400" />
             </div>
-            <div>
+            <div className="flex-1">
               <div className="flex items-center gap-2">
                 <p className="text-2xl font-bold">{readyTasks.length}</p>
                 {isReadyFetching && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
               </div>
               <p className="text-sm text-muted-foreground">Ready Queue</p>
             </div>
+            <ChevronRight className={`h-4 w-4 text-muted-foreground transition-transform ${showReadyQueue ? 'rotate-90' : ''}`} />
           </CardContent>
         </Card>
 
@@ -178,13 +180,14 @@ export function Tasks() {
             <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-orange-100 dark:bg-orange-900/30">
               <Ban className="h-6 w-6 text-orange-600 dark:text-orange-400" />
             </div>
-            <div>
+            <div className="flex-1">
               <div className="flex items-center gap-2">
                 <p className="text-2xl font-bold">{blockedTasks.length}</p>
                 {isBlockedFetching && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
               </div>
               <p className="text-sm text-muted-foreground">Blocked</p>
             </div>
+            <ChevronRight className={`h-4 w-4 text-muted-foreground transition-transform ${showBlockedTasks ? 'rotate-90' : ''}`} />
           </CardContent>
         </Card>
 
@@ -203,7 +206,7 @@ export function Tasks() {
         <Card className="cursor-pointer transition-shadow hover:shadow-md" onClick={() => setStatusFilter('running')}>
           <CardContent className="flex items-center gap-4 p-4">
             <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
-              <Loader2 className="h-6 w-6 animate-spin text-blue-600 dark:text-blue-400" />
+              <PlayCircle className="h-6 w-6 text-blue-600 dark:text-blue-400" />
             </div>
             <div>
               <p className="text-2xl font-bold">{stats.running}</p>
@@ -523,8 +526,8 @@ export function Tasks() {
                     <Badge variant="outline">{selectedTask.task_type}</Badge>
                   </div>
                   <div className="space-y-1">
-                    <p className="text-sm text-muted-foreground">Usage Count</p>
-                    <p className="font-medium">{selectedTask.counter}</p>
+                    <p className="text-sm text-muted-foreground">Shared by</p>
+                    <p className="font-medium">{selectedTask.counter} workflow{selectedTask.counter !== 1 ? 's' : ''}</p>
                   </div>
                   {selectedTask.worker_id && (
                     <div className="space-y-1">
@@ -535,7 +538,7 @@ export function Tasks() {
                   {selectedTask.execution_time_ms && (
                     <div className="space-y-1">
                       <p className="text-sm text-muted-foreground">Execution Time</p>
-                      <p className="font-medium">{selectedTask.execution_time_ms}ms</p>
+                      <p className="font-medium">{formatDuration(selectedTask.execution_time_ms / 1000)}</p>
                     </div>
                   )}
                   {selectedTask.cache_hit && (
@@ -554,15 +557,6 @@ export function Tasks() {
                       </div>
                     </div>
                   )}
-                </div>
-
-                <div className="space-y-2">
-                  <p className="text-sm text-muted-foreground">Input/Configuration</p>
-                  <div className="rounded-lg bg-muted p-3">
-                    <pre className="text-xs overflow-x-auto">
-                      {JSON.stringify(selectedTask.config, null, 2)}
-                    </pre>
-                  </div>
                 </div>
 
                 <div className="space-y-2">

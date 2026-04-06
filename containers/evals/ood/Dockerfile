@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir \
     scikit-learn==1.3.0 \
     torchvision==0.16.0
 
-COPY evaluate.py .
+COPY common/model_loader.py ./model_loader.py
+COPY ood/evaluate.py ./evaluate.py
 
 ENTRYPOINT ["python", "evaluate.py"]

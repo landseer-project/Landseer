@@ -38,13 +38,12 @@ class Pipeline(ABC):
         """Initialize pipeline with unique ID."""
         if not self.id:
             self.id = generate_pipeline_id()
-        # Set pipeline_id for all workflows and register existing tasks
+        # Propagate pipeline_id to all workflows.
+        # Task counter/workflow membership is tracked only through explicit
+        # Workflow.add_task or Task.add_to_workflow calls, not here, so that
+        # tasks passed via the constructor don't get their counter inflated.
         for workflow in self.workflows:
             workflow.pipeline_id = self.id
-            # Register existing tasks with this workflow
-            # (tasks may have been added before pipeline_id was set)
-            for task in workflow.tasks:
-                task.add_to_workflow(workflow.id, self.id)
     
     @abstractmethod
     def run(self, data: Any = None) -> Any:

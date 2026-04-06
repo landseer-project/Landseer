@@ -19,10 +19,10 @@ export function ProgressRing({
 
   const getColor = () => {
     if (progress >= 100) return 'text-green-500';
-    if (progress >= 75) return 'text-blue-500';
-    if (progress >= 50) return 'text-yellow-500';
-    if (progress >= 25) return 'text-orange-500';
-    return 'text-red-500';
+    if (progress >= 75) return 'text-green-400';
+    if (progress >= 50) return 'text-blue-500';
+    if (progress >= 25) return 'text-blue-400';
+    return 'text-blue-300';
   };
 
   return (

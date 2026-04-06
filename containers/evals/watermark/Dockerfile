@@ -17,6 +17,7 @@ RUN pip install --no-cache-dir \
     torchvision==0.16.0 \
     Pillow==10.0.0
 
-COPY evaluate.py .
+COPY common/model_loader.py ./model_loader.py
+COPY watermark/evaluate.py ./evaluate.py
 
 ENTRYPOINT ["python", "evaluate.py"]

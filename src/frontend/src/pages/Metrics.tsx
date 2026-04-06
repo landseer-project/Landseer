@@ -1,11 +1,11 @@
-import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { StatsCard } from '@/components/StatsCard';
-import { getPipelineMetrics, getPipelineDetail, PipelineMetricsResponse } from '@/lib/api';
+import { getPipelineMetrics, getPipelineDetail } from '@/lib/api';
+import { Loader2 } from 'lucide-react';
 
 // Simple sparkline component
 function Sparkline({ values, color = 'blue' }: { values: number[]; color?: string }) {
@@ -55,39 +55,26 @@ function HeatmapCell({ value, min, max }: { value: number | null; min: number; m
 }
 
 export function Metrics() {
-  const { id: pipelineId } = useParams<{ id: string }>();
-  const [metrics, setMetrics] = useState<PipelineMetricsResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { id: pipelineIdParam } = useParams<{ id: string }>();
 
-  useEffect(() => {
-    loadData();
-  }, [pipelineId]);
+  // When no pipeline ID in URL, resolve it from the pipeline detail
+  const { data: pipelineDetail } = useQuery({
+    queryKey: ['pipeline'],
+    queryFn: getPipelineDetail,
+    enabled: !pipelineIdParam,
+    refetchInterval: 15_000,
+  });
 
-  async function loadData() {
-    try {
-      setLoading(true);
-      
-      // If no pipelineId, get current pipeline first
-      if (!pipelineId) {
-        const pipelineRes = await getPipelineDetail();
-        const metricsData = await getPipelineMetrics(pipelineRes.id);
-        setMetrics(metricsData);
-      } else {
-        const metricsRes = await getPipelineMetrics(pipelineId);
-        setMetrics(metricsRes);
-      }
-      
-      setError(null);
-    } catch (err) {
-      setError('Failed to load metrics');
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  }
+  const resolvedPipelineId = pipelineIdParam || pipelineDetail?.id;
 
-  if (loading) {
+  const { data: metrics, isLoading, isError, isFetching } = useQuery({
+    queryKey: ['pipeline-metrics', resolvedPipelineId],
+    queryFn: () => getPipelineMetrics(resolvedPipelineId!),
+    enabled: !!resolvedPipelineId,
+    refetchInterval: 15_000,
+  });
+
+  if (isLoading || (!metrics && !isError)) {
     return (
       <div className="p-6">
         <div className="animate-pulse space-y-4">
@@ -103,13 +90,12 @@ export function Metrics() {
     );
   }
 
-  if (error || !metrics) {
+  if (isError || !metrics) {
     return (
       <div className="p-6">
         <Card>
           <CardContent className="pt-6">
-            <p className="text-red-500">{error || 'No metrics available'}</p>
-            <Button onClick={loadData} className="mt-4">Retry</Button>
+            <p className="text-red-500">Failed to load metrics</p>
           </CardContent>
         </Card>
       </div>
@@ -119,7 +105,9 @@ export function Metrics() {
   // Calculate summary statistics
   const avgCleanAccuracy = metrics.summary['clean_accuracy']?.avg;
   const bestPgdAccuracy = metrics.summary['pgd_accuracy']?.max;
-  const completedEvals = metrics.workflows.filter(w => w.evaluators_run.length > 0).length;
+  const completedEvals = metrics.workflows.filter(w =>
+    Object.values(w.metrics).some((v) => v !== null)
+  ).length;
   const hasNoData = completedEvals === 0 || metrics.metric_names.length === 0;
 
   // Get all unique metrics for the heatmap
@@ -144,13 +132,13 @@ export function Metrics() {
   return (
     <div className="p-6 space-y-6">
       <div className="flex justify-between items-center">
-        <div>
+        <div className="flex items-center gap-2">
           <h1 className="text-2xl font-bold">Metrics Dashboard</h1>
-          <p className="text-gray-600">
-            {metrics.pipeline_name} - {metrics.workflow_count} workflows
-          </p>
+          {isFetching && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
         </div>
-        <Button onClick={loadData} variant="outline">Refresh</Button>
+        <p className="text-gray-600">
+          {metrics.pipeline_name} · {metrics.workflow_count} workflows
+        </p>
       </div>
 
       {/* Empty state: no evaluations completed yet */}

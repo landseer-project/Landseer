@@ -184,6 +184,11 @@ export async function resetScheduler(): Promise<{ success: boolean; message: str
   return data;
 }
 
+export async function reclaimStaleTasks(): Promise<{ success: boolean; reclaimed_count: number; reclaimed_task_ids: string[] }> {
+  const { data } = await api.post('/scheduler/reclaim-stale');
+  return data;
+}
+
 // ==============================================================================
 // Workers
 // ==============================================================================
@@ -308,9 +313,57 @@ export interface PipelineMetricsResponse {
   summary: Record<string, { min: number | null; max: number | null; avg: number | null; count: number }>;
 }
 
+function toFiniteNumberOrNull(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  const num = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function normalizePipelineMetricsResponse(raw: PipelineMetricsResponse): PipelineMetricsResponse {
+  const workflows = raw.workflows.map((workflow) => {
+    const normalizedMetrics: Record<string, number | null> = {};
+    for (const [metricName, value] of Object.entries(workflow.metrics || {})) {
+      normalizedMetrics[metricName] = toFiniteNumberOrNull(value);
+    }
+    return {
+      ...workflow,
+      metrics: normalizedMetrics,
+    };
+  });
+
+  // Recompute summary from normalized workflow metrics so UI cards stay accurate
+  // even when backend sends numbers as strings or partial/null summaries.
+  const summary: PipelineMetricsResponse['summary'] = {};
+  for (const metricName of raw.metric_names) {
+    const values = workflows
+      .map((w) => w.metrics[metricName])
+      .filter((v): v is number => v !== null);
+    if (values.length === 0) {
+      summary[metricName] = { min: null, max: null, avg: null, count: 0 };
+    } else {
+      summary[metricName] = {
+        min: Math.min(...values),
+        max: Math.max(...values),
+        avg: values.reduce((acc, v) => acc + v, 0) / values.length,
+        count: values.length,
+      };
+    }
+  }
+
+  return {
+    ...raw,
+    workflows,
+    summary,
+  };
+}
+
 export async function getPipelineMetrics(pipelineId: string): Promise<PipelineMetricsResponse> {
   const { data } = await api.get<PipelineMetricsResponse>(`/pipelines/${pipelineId}/metrics`);
-  return data;
+  return normalizePipelineMetricsResponse(data);
+}
+
+export async function getRunningTasks(): Promise<TaskListResponse> {
+  return getAllTasks('running');
 }
 
 export async function getWorkflowMetrics(workflowId: string): Promise<{

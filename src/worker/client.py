@@ -39,6 +39,9 @@ class TaskInfo:
     pipeline_id: str
     dependency_ids: list
     run_id: Optional[str] = None  # ID of the pipeline run this task belongs to
+    cache_key: Optional[str] = None
+    output_path: Optional[str] = None
+    log_path: Optional[str] = None
 
     @classmethod
     def from_api_response(cls, data: Dict[str, Any]) -> "TaskInfo":
@@ -61,7 +64,10 @@ class TaskInfo:
             workflows=data.get("workflows", []),
             pipeline_id=data.get("pipeline_id", ""),
             dependency_ids=data.get("dependency_ids", []),
-            run_id=data.get("run_id")
+            run_id=data.get("run_id"),
+            cache_key=data.get("cache_key"),
+            output_path=data.get("output_path"),
+            log_path=data.get("log_path")
         )
 
 

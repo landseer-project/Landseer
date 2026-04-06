@@ -224,12 +224,12 @@ export function Tools() {
 
         <Card>
           <CardContent className="flex items-center gap-4 p-4">
-            <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-red-100 dark:bg-red-900/30">
-              <Code className="h-6 w-6 text-red-600 dark:text-red-400" />
+            <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-indigo-100 dark:bg-indigo-900/30">
+              <Code className="h-6 w-6 text-indigo-600 dark:text-indigo-400" />
             </div>
             <div>
               <p className="text-2xl font-bold">{attackTools.length}</p>
-              <p className="text-sm text-muted-foreground">Attack Tools</p>
+              <p className="text-sm text-muted-foreground">Pipeline Tools</p>
             </div>
           </CardContent>
         </Card>
@@ -265,12 +265,12 @@ export function Tools() {
         </div>
       )}
 
-      {/* Attack Tools */}
+      {/* Pipeline Tools */}
       {attackTools.length > 0 && (
         <div className="space-y-4">
           <h2 className="flex items-center gap-2 text-lg font-semibold">
-            <Code className="h-5 w-5 text-red-500" />
-            Attack Tools
+            <Code className="h-5 w-5 text-indigo-500" />
+            Pipeline Tools
           </h2>
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {attackTools.map((tool) => (

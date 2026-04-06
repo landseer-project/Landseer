@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, TensorDataset
+from model_loader import load_torch_model_for_eval
 
 
 def evaluate_fairness(model, test_X, test_y, sensitive_attrs, device, method="fairlearn"):
@@ -147,8 +148,7 @@ def main():
         return
     
     try:
-        model = torch.load(model_path, map_location=device)
-        model.eval()
+        model = load_torch_model_for_eval(model_path, input_dir, device)
     except Exception as e:
         results = {
             "evaluator": "fairness",

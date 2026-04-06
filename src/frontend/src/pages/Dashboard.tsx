@@ -13,9 +13,11 @@ import {
   getProgress,
   getWorkers,
   getAllTasks,
+  getRunningTasks,
   getSchedulerStatus,
   getReadyTasks,
   resetScheduler,
+  reclaimStaleTasks,
 } from '@/lib/api';
 import { formatDuration, formatRelativeTime, truncateId } from '@/lib/utils';
 import {
@@ -25,45 +27,67 @@ import {
   AlertCircle,
   Users,
   Layers,
-  GitBranch,
   PlayCircle,
   RotateCcw,
   Loader2,
   ArrowRight,
   Zap,
+  Cpu,
+  Circle,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
+
+const TASK_TYPE_LABELS: Record<string, string> = {
+  pre_training: 'Pre-training',
+  in_training: 'During-training',
+  during_training: 'During-training',
+  post_training: 'Post-training',
+  deployment: 'Deployment',
+  evaluation: 'Evaluation',
+};
 
 export function Dashboard() {
   const { data: pipeline, isLoading: pipelineLoading, isFetching: pipelineFetching } = useQuery({
     queryKey: ['pipeline'],
     queryFn: getPipelineDetail,
+    refetchInterval: 5_000,
   });
 
   const { data: progress, isFetching: progressFetching } = useQuery({
     queryKey: ['progress'],
     queryFn: getProgress,
+    refetchInterval: 3_000,
   });
 
   const { data: workers } = useQuery({
     queryKey: ['workers'],
     queryFn: getWorkers,
+    refetchInterval: 5_000,
   });
 
-  const { data: tasks } = useQuery({
-    queryKey: ['tasks'],
-    queryFn: () => getAllTasks(),
+  const { data: runningTasksData } = useQuery({
+    queryKey: ['running-tasks'],
+    queryFn: getRunningTasks,
+    refetchInterval: 3_000,
+  });
+
+  const { data: completedTasksData } = useQuery({
+    queryKey: ['completed-tasks'],
+    queryFn: () => getAllTasks('completed'),
+    refetchInterval: 5_000,
   });
 
   const { data: scheduler, isLoading: schedulerLoading } = useQuery({
     queryKey: ['scheduler-status'],
     queryFn: getSchedulerStatus,
+    refetchInterval: 15_000,
   });
 
   const { data: readyTasks } = useQuery({
     queryKey: ['ready-tasks'],
     queryFn: getReadyTasks,
+    refetchInterval: 5_000,
   });
 
   const handleReset = async () => {
@@ -72,9 +96,13 @@ export function Dashboard() {
     }
   };
 
+  const handleReclaim = async () => {
+    const result = await reclaimStaleTasks();
+    alert(`Reclaimed ${result.reclaimed_count} stale task(s) back to pending.`);
+  };
+
   const isRefreshing = pipelineFetching || progressFetching;
 
-  // Only show full loading screen on initial load (no data yet)
   if (pipelineLoading && !pipeline && schedulerLoading && !scheduler) {
     return (
       <div className="flex h-[60vh] items-center justify-center">
@@ -117,10 +145,20 @@ export function Dashboard() {
     { name: 'Failed', value: progress?.failed || 0, color: '#ef4444' },
   ].filter(d => d.value > 0);
 
-  // Recent tasks
-  const recentTasks = tasks?.tasks
-    .filter(t => t.status !== 'pending')
-    .slice(0, 5) || [];
+  // Live activity: running tasks first, then last 5 completed
+  const runningTasks = runningTasksData?.tasks || [];
+  const recentCompleted = (completedTasksData?.tasks || []).slice(-5).reverse();
+  const activityItems = [
+    ...runningTasks,
+    ...recentCompleted.slice(0, Math.max(0, 5 - runningTasks.length)),
+  ];
+
+  // Stage breakdown from running tasks
+  const stageRunningCounts: Record<string, number> = {};
+  for (const t of runningTasks) {
+    const label = TASK_TYPE_LABELS[t.task_type] ?? t.task_type;
+    stageRunningCounts[label] = (stageRunningCounts[label] || 0) + 1;
+  }
 
   return (
     <div className="space-y-6">
@@ -138,6 +176,10 @@ export function Dashboard() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={handleReclaim}>
+            <Zap className="mr-2 h-4 w-4" />
+            Reclaim Stale
+          </Button>
           <Button variant="outline" size="sm" onClick={handleReset}>
             <RotateCcw className="mr-2 h-4 w-4" />
             Reset
@@ -269,6 +311,18 @@ export function Dashboard() {
               </div>
             </div>
 
+            {/* Stage breakdown (only when tasks are running) */}
+            {Object.keys(stageRunningCounts).length > 0 && (
+              <div className="mt-4 flex flex-wrap gap-2">
+                {Object.entries(stageRunningCounts).map(([stage, count]) => (
+                  <Badge key={stage} variant="secondary" className="gap-1">
+                    <span className="h-2 w-2 rounded-full bg-blue-500 inline-block" />
+                    {count} {stage}
+                  </Badge>
+                ))}
+              </div>
+            )}
+
             {/* Time Stats */}
             {pipeline?.running_time_seconds && (
               <div className="mt-6 flex items-center justify-between rounded-lg bg-muted/50 p-4">
@@ -343,12 +397,16 @@ export function Dashboard() {
 
       {/* Bottom Grid */}
       <div className="grid gap-6 lg:grid-cols-2">
-        {/* Recent Activity */}
+        {/* Live Activity Feed */}
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
             <div>
-              <CardTitle className="text-base">Recent Activity</CardTitle>
-              <CardDescription>Latest task executions</CardDescription>
+              <CardTitle className="text-base">Live Activity</CardTitle>
+              <CardDescription>
+                {runningTasks.length > 0
+                  ? `${runningTasks.length} running now`
+                  : 'Latest task executions'}
+              </CardDescription>
             </div>
             <Button variant="ghost" size="sm" asChild>
               <Link to="/tasks">
@@ -359,9 +417,9 @@ export function Dashboard() {
           </CardHeader>
           <CardContent>
             <ScrollArea className="h-[280px]">
-              {recentTasks.length > 0 ? (
+              {activityItems.length > 0 ? (
                 <div className="space-y-3">
-                  {recentTasks.map((task) => (
+                  {activityItems.map((task) => (
                     <div
                       key={task.id}
                       className="flex items-center justify-between rounded-lg border p-3 transition-colors hover:bg-muted/50"
@@ -373,6 +431,8 @@ export function Dashboard() {
                         <div>
                           <p className="font-medium">{task.tool.name}</p>
                           <p className="text-xs text-muted-foreground">
+                            {TASK_TYPE_LABELS[task.task_type] ?? task.task_type}
+                            {' · '}
                             {truncateId(task.id)}
                           </p>
                         </div>
@@ -390,74 +450,85 @@ export function Dashboard() {
           </CardContent>
         </Card>
 
-        {/* Quick Links / Workflows */}
+        {/* Live Workers Panel */}
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
             <div>
-              <CardTitle className="text-base">Workflows</CardTitle>
-              <CardDescription>{pipeline?.workflow_count || 0} workflows in pipeline</CardDescription>
+              <CardTitle className="text-base">
+                Workers
+                {(workers?.active || 0) > 0 && (
+                  <span className="ml-2 text-sm font-normal text-muted-foreground">
+                    {workers?.active} active / {workers?.total} registered
+                  </span>
+                )}
+              </CardTitle>
+              <CardDescription>Live worker status &amp; GPU assignment</CardDescription>
             </div>
             <Button variant="ghost" size="sm" asChild>
-              <Link to="/workflows">
+              <Link to="/workers">
                 View all
                 <ArrowRight className="ml-1 h-4 w-4" />
               </Link>
             </Button>
           </CardHeader>
           <CardContent>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Link
-                to="/tasks"
-                className="flex items-center gap-3 rounded-lg border p-4 transition-all hover:border-primary hover:shadow-sm"
-              >
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400">
-                  <Layers className="h-5 w-5" />
+            <ScrollArea className="h-[280px]">
+              {(workers?.workers || []).length > 0 ? (
+                <div className="space-y-2">
+                  {(workers?.workers || []).map((worker) => {
+                    const gpuId = worker.capabilities
+                      ? (worker.capabilities['gpu_id'] ?? worker.capabilities['gpu'] ?? null)
+                      : null;
+                    const statusColor =
+                      worker.status === 'busy'
+                        ? 'bg-blue-500'
+                        : worker.status === 'idle'
+                        ? 'bg-green-500'
+                        : 'bg-gray-400';
+                    return (
+                      <div
+                        key={worker.worker_id}
+                        className="flex items-center gap-3 rounded-lg border p-3"
+                      >
+                        <Circle
+                          className={`h-3 w-3 shrink-0 fill-current ${statusColor} text-transparent`}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <p className="truncate text-sm font-medium">
+                              {truncateId(worker.worker_id)}
+                            </p>
+                            {gpuId !== null && (
+                              <Badge variant="outline" className="gap-1 shrink-0 py-0 text-xs">
+                                <Cpu className="h-3 w-3" />
+                                GPU {String(gpuId)}
+                              </Badge>
+                            )}
+                          </div>
+                          {worker.status === 'busy' && worker.current_task_id ? (
+                            <p className="truncate text-xs text-muted-foreground">
+                              Running: {truncateId(worker.current_task_id)}
+                            </p>
+                          ) : (
+                            <p className="text-xs text-muted-foreground capitalize">{worker.status}</p>
+                          )}
+                        </div>
+                        <div className="shrink-0 text-right">
+                          <p className="text-sm font-medium">{worker.tasks_completed}</p>
+                          <p className="text-xs text-muted-foreground">done</p>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-                <div>
-                  <p className="font-medium">Tasks</p>
-                  <p className="text-sm text-muted-foreground">{progress?.total || 0} total</p>
+              ) : (
+                <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
+                  <Users className="h-8 w-8 opacity-40" />
+                  <p className="text-sm">No workers registered</p>
+                  <p className="text-xs">Start workers to begin processing tasks</p>
                 </div>
-              </Link>
-
-              <Link
-                to="/workflows"
-                className="flex items-center gap-3 rounded-lg border p-4 transition-all hover:border-primary hover:shadow-sm"
-              >
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400">
-                  <GitBranch className="h-5 w-5" />
-                </div>
-                <div>
-                  <p className="font-medium">Workflows</p>
-                  <p className="text-sm text-muted-foreground">{pipeline?.workflow_count || 0} defined</p>
-                </div>
-              </Link>
-
-              <Link
-                to="/workers"
-                className="flex items-center gap-3 rounded-lg border p-4 transition-all hover:border-primary hover:shadow-sm"
-              >
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400">
-                  <Users className="h-5 w-5" />
-                </div>
-                <div>
-                  <p className="font-medium">Workers</p>
-                  <p className="text-sm text-muted-foreground">{workers?.active || 0} active</p>
-                </div>
-              </Link>
-
-              <Link
-                to="/tools"
-                className="flex items-center gap-3 rounded-lg border p-4 transition-all hover:border-primary hover:shadow-sm"
-              >
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400">
-                  <Zap className="h-5 w-5" />
-                </div>
-                <div>
-                  <p className="font-medium">Tools</p>
-                  <p className="text-sm text-muted-foreground">Manage tools</p>
-                </div>
-              </Link>
-            </div>
+              )}
+            </ScrollArea>
           </CardContent>
         </Card>
       </div>

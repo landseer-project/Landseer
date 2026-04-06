@@ -22,11 +22,13 @@ from ..pipeline.pipeline import Pipeline
 logger = get_logger(__name__)
 
 # Import data module for dataset preparation
+_DATA_IMPORT_ERROR: Optional[BaseException] = None
 try:
     from ..data import DatasetManager, DatasetInfo
     DATA_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     DATA_AVAILABLE = False
+    _DATA_IMPORT_ERROR = e
     DatasetManager = None
     DatasetInfo = None
 
@@ -235,7 +237,11 @@ def initialize_backend(
             import traceback
             traceback.print_exc()
     elif not DATA_AVAILABLE:
-        logger.info("Data module not available, skipping dataset preparation")
+        logger.warning(
+            "Data module not available, skipping dataset preparation "
+            "(install landseer with numpy/torch/torchvision): %s",
+            _DATA_IMPORT_ERROR,
+        )
     
     # Load pipeline configuration and create pipeline
     try:

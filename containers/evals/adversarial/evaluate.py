@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
+from model_loader import load_torch_model_for_eval
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 
@@ -122,13 +123,11 @@ class CarliniL2Attack:
         return best_adv
 
 
-def load_model(model_path: Path, device: str):
-    """Load PyTorch model from path."""
-    model = torch.load(model_path, map_location=device)
-    if isinstance(model, dict):
-        raise ValueError("Model is a state dict, need full model")
-    model.eval()
-    return model
+def load_model(model_path: Path, device: str, input_dir: Path = None):
+    """Load PyTorch model from path, handling both full models and state dicts."""
+    if input_dir is None:
+        input_dir = model_path.parent
+    return load_torch_model_for_eval(model_path, input_dir, device)
 
 
 def evaluate_clean_accuracy(model, loader, device):
@@ -339,7 +338,7 @@ def main():
         return
     
     try:
-        model = load_model(model_path, device)
+        model = load_model(model_path, device, input_dir)
     except Exception as e:
         results = {
             "evaluator": "adversarial",

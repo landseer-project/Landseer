@@ -99,6 +99,17 @@ class Worker:
         self._last_heartbeat = 0.0
         self._tasks_completed = 0
         self._tasks_failed = 0
+        # Maps task_id -> (cache_key, output_path, ancestor_paths) so that
+        # downstream tasks can:
+        #   (a) build correct parent_hashes for cache-key computation
+        #   (b) locate artifacts from cache-hit deps that skipped the workspace
+        #   (c) accumulate the full ordered ancestry chain (earliest stage first)
+        #       so every task in the pipeline sees ALL upstream artifacts, not
+        #       just its direct parent's output.
+        # ancestor_paths is a List[Path] containing the output dirs of every
+        # task in this task's upstream lineage (grandparents, parents, etc.)
+        # in pipeline order — later entries override on filename collision.
+        self._task_outputs: Dict[str, tuple] = {}  # task_id -> (cache_key, Path|None, List[Path])
         
         # Components (initialized on start)
         self._client: Optional[LandseerClient] = None
@@ -296,6 +307,61 @@ class Worker:
                 self._last_heartbeat = now
             except Exception as e:
                 logger.warning(f"Heartbeat failed: {e}")
+
+    def _resolve_task_output_path(self, task_info: TaskInfo) -> Optional[Path]:
+        """Resolve a dependency output directory from backend metadata."""
+        candidates: List[Path] = []
+        if task_info.output_path:
+            candidates.append(Path(task_info.output_path))
+        if task_info.cache_key:
+            candidates.append(self.cache_dir / task_info.cache_key / "output")
+        if task_info.log_path:
+            log_path = Path(task_info.log_path)
+            candidates.append(log_path.parent.parent / "output")
+
+        for path in candidates:
+            try:
+                if path.exists():
+                    return path
+            except Exception:
+                continue
+        return None
+
+    def _collect_remote_ancestry(self, task_id: str, visited: Optional[set[str]] = None) -> tuple[list[Path], Optional[TaskInfo]]:
+        """Collect full ancestor outputs for a task by querying backend task metadata."""
+        if visited is None:
+            visited = set()
+        if task_id in visited:
+            return [], None
+        visited.add(task_id)
+
+        task_info = self._client.get_task(task_id)
+        if not task_info:
+            return [], None
+
+        ancestry: List[Path] = []
+        for dep_id in task_info.dependency_ids:
+            dep_ancestry, dep_task = self._collect_remote_ancestry(dep_id, visited)
+            ancestry.extend(dep_ancestry)
+            if dep_task:
+                dep_output = self._resolve_task_output_path(dep_task)
+                if dep_output:
+                    ancestry.append(dep_output)
+                    # Track remote deps locally so future tasks don't need refetch.
+                    dep_cache_key = dep_task.cache_key or ""
+                    self._task_outputs[dep_id] = (dep_cache_key, dep_output, list(dep_ancestry))
+
+        return ancestry, task_info
+
+    @staticmethod
+    def _append_unique_paths(paths: List[Path], additions: List[Path]) -> None:
+        """Append paths while preserving order and removing duplicates."""
+        seen = {str(p.resolve()) if p.exists() else str(p) for p in paths}
+        for p in additions:
+            key = str(p.resolve()) if p.exists() else str(p)
+            if key not in seen:
+                paths.append(p)
+                seen.add(key)
     
     def _execute_task(self, task: TaskInfo) -> ExecutionResult:
         """
@@ -311,16 +377,51 @@ class Worker:
         logger.info(f"Executing task: {task.id} ({task.tool_name})")
         
         try:
-            # Compute cache key
-            parent_hashes = []  # TODO: Track parent hashes through the pipeline
+            # Build parent_hashes (for cache key) and ancestor_dirs (ordered
+            # output dirs from all upstream stages, earliest first) in one pass.
+            parent_hashes: List[str] = []
+            ancestor_dirs: List[Path] = []
+            for dep_id in task.dependency_ids:
+                if dep_id in self._task_outputs:
+                    dep_key, dep_out, dep_anc = self._task_outputs[dep_id]
+                    if dep_key:
+                        parent_hashes.append(dep_key)
+                    self._append_unique_paths(ancestor_dirs, dep_anc)
+                    if dep_out is not None:
+                        self._append_unique_paths(ancestor_dirs, [dep_out])
+                else:
+                    logger.warning(f"Dep {dep_id} not yet in _task_outputs; resolving remotely")
+                    dep_anc, dep_task = self._collect_remote_ancestry(dep_id)
+                    self._append_unique_paths(ancestor_dirs, dep_anc)
+                    if dep_task:
+                        if dep_task.cache_key:
+                            parent_hashes.append(dep_task.cache_key)
+                        dep_output = self._resolve_task_output_path(dep_task)
+                        if dep_output:
+                            self._append_unique_paths(ancestor_dirs, [dep_output])
+                            self._task_outputs[dep_id] = (
+                                dep_task.cache_key or "",
+                                dep_output,
+                                list(dep_anc),
+                            )
+                        else:
+                            logger.warning(f"Could not resolve output path for dependency {dep_id}")
+                    else:
+                        ws_out = self._runner.workspace_dir / dep_id / "output"
+                        if ws_out.exists():
+                            self._append_unique_paths(ancestor_dirs, [ws_out])
+
             cache_key = self._compute_cache_key(task, parent_hashes)
-            
-            # Check cache first - using two-level cache if available
+
             if self.use_cache:
                 cached_path = self._check_cache(cache_key, task, parent_hashes)
-                
                 if cached_path:
                     logger.info(f"Cache hit for task {task.id}")
+                    symlink_target = self._runner.workspace_dir / task.id / "output"
+                    if not symlink_target.exists():
+                        symlink_target.parent.mkdir(parents=True, exist_ok=True)
+                        symlink_target.symlink_to(cached_path.resolve())
+                    self._task_outputs[task.id] = (cache_key, cached_path, list(ancestor_dirs))
                     return ExecutionResult(
                         success=True,
                         exit_code=0,
@@ -328,44 +429,30 @@ class Worker:
                         output_path=cached_path,
                         artifacts={"cache_hit": True, "cache_key": cache_key}
                     )
-            
-            # Execute the task.
-            # Priority for providing initial data to the task:
-            # manual data_path > fetched dataset_path.
-            # The TaskRunner will copy any provided data_dir contents, plus
-            # dependency outputs, into the per-task input directory. The
-            # DockerRunner then mounts that input directory at both /input and
-            # /data so that tools always see the latest dataset/model/artifacts
-            # at a stable path.
+
             data_dir = self.data_path if (self.data_path and self.data_path.exists()) else self._dataset_path
-            # Collect outputs from dependent tasks for artifact chaining
-            dependency_outputs = {}
-            if task.dependency_ids:
-                logger.info(f"Task {task.id} has {len(task.dependency_ids)} dependencies: {task.dependency_ids}")
-                for dep_id in task.dependency_ids:
-                    # Find dependency output directory in workspace
-                    dep_output_dir = self._runner.workspace_dir / dep_id / "output"
-                    if dep_output_dir.exists():
-                        dependency_outputs[dep_id] = dep_output_dir
-                        logger.info(f"Found output directory for dependency {dep_id}: {dep_output_dir}")
-                    else:
-                        logger.warning(f"Output directory not found for dependency {dep_id} at {dep_output_dir}")
-                        # Also check cache if available
-                        if self.use_cache:
-                            # Try to find in cache (this would require tracking parent hashes)
-                            # For now, just log the warning
-                            pass
-            
             result = self._runner.run_task(
                 task,
                 input_path=data_dir,
                 extra_mounts=None,
                 model_script_path=self._model_script_path,
-                dependency_outputs=dependency_outputs if dependency_outputs else None
+                ancestor_dirs=ancestor_dirs or None,
             )
-            
-            # Store in cache if successful
-            if self.use_cache and result.success and result.output_path:
+
+            # Record always so downstream tasks can extend the ancestry chain.
+            self._task_outputs[task.id] = (cache_key, result.output_path, list(ancestor_dirs))
+
+            # Store in cache if successful.
+            # For evaluation tasks, only cache when the evaluation itself
+            # succeeded — failures (e.g. "model.pt not found") should not be
+            # persisted so the evaluator re-runs on the next attempt.
+            should_cache = (
+                self.use_cache
+                and result.success
+                and result.output_path
+                and not self._eval_failed(task, result.output_path)
+            )
+            if should_cache:
                 self._store_in_cache(
                     cache_key=cache_key,
                     task=task,
@@ -374,7 +461,7 @@ class Worker:
                     parent_hashes=parent_hashes
                 )
                 result.artifacts["cache_key"] = cache_key
-            
+
             return result
             
         finally:
@@ -444,6 +531,25 @@ class Worker:
                 run_id=run_id
             )
     
+    def _eval_failed(self, task: TaskInfo, output_path: Path) -> bool:
+        """Return True when an evaluation task's evaluation_results.json reports failure.
+
+        Prevents caching evaluation failures so the evaluator re-runs on the
+        next attempt once the underlying issue (e.g. missing model.pt) is fixed.
+        Non-evaluation tasks always return False.
+        """
+        if task.task_type != "evaluation":
+            return False
+        results_file = output_path / "evaluation_results.json"
+        if results_file.exists():
+            try:
+                payload = json.loads(results_file.read_text())
+                return not payload.get("success", True)
+            except Exception:
+                pass
+        # No results file means the container crashed — treat as failure
+        return True
+
     def _extract_evaluation_result(
         self,
         task: TaskInfo,
@@ -558,6 +664,7 @@ class Worker:
                 "artifacts": result.artifacts,
                 "logs": logs_snippet,
                 "log_path": str(log_path) if log_path.exists() else None,
+                "output_path": str(result.output_path) if result.output_path else None,
             }
 
             # For evaluator tasks, include structured evaluation_result so backend

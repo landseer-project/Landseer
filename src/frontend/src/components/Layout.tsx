@@ -15,7 +15,6 @@ import {
   Users,
   Wrench,
   Activity,
-  Settings,
   Moon,
   Sun,
   Menu,
@@ -126,7 +125,9 @@ export function Layout({ children }: LayoutProps) {
             <ScrollArea className="flex-1 py-4">
               <nav className="space-y-1 px-2">
                 {navItems.map((item) => {
-                  const isActive = location.pathname === item.href;
+                  const isActive = item.href === '/'
+                    ? location.pathname === '/'
+                    : location.pathname.startsWith(item.href);
                   return sidebarOpen ? (
                     <Link
                       key={item.href}
@@ -165,12 +166,7 @@ export function Layout({ children }: LayoutProps) {
 
             {/* Footer */}
             <div className="border-t p-4">
-              <div className={cn('flex', sidebarOpen ? 'justify-between' : 'justify-center')}>
-                {sidebarOpen && (
-                  <Button variant="ghost" size="icon">
-                    <Settings className="h-5 w-5" />
-                  </Button>
-                )}
+              <div className={cn('flex', sidebarOpen ? 'justify-end' : 'justify-center')}>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button variant="ghost" size="icon" onClick={toggleTheme}>
