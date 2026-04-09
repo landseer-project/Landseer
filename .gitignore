@@ -20,3 +20,4 @@ deviation_*
 .node/
 node_modules/
 dist/
+docs/_build/
