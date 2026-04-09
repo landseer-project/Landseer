@@ -27,6 +27,8 @@ export function StatusBadge({ status, showIcon = true, className }: StatusBadgeP
         return 'busy';
       case 'offline':
         return 'offline';
+      case 'blocked':
+        return 'blocked';
       default:
         return 'secondary';
     }

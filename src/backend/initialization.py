@@ -61,26 +61,14 @@ class BackendContext:
     
     def __init__(
         self,
-        pipeline: Pipeline,
+        pipeline: Optional[Pipeline],
         tools_config_path: str,
-        pipeline_config_path: str,
+        pipeline_config_path: Optional[str] = None,
         db_service: Optional["DatabaseService"] = None,
         store: Optional["MinioStore"] = None,
         dataset_info: Optional[Dict[str, Any]] = None,
         dataset_manager: Optional["DatasetManager"] = None
     ):
-        """
-        Initialize backend context.
-        
-        Args:
-            pipeline: Loaded pipeline instance
-            tools_config_path: Path to tools.yaml
-            pipeline_config_path: Path to pipeline config YAML
-            db_service: Database service instance
-            store: MinIO store instance
-            dataset_info: Information about prepared dataset
-            dataset_manager: DatasetManager instance
-        """
         self.pipeline = pipeline
         self.tools_config_path = tools_config_path
         self.pipeline_config_path = pipeline_config_path
@@ -88,7 +76,10 @@ class BackendContext:
         self.store = store
         self.dataset_info = dataset_info
         self.dataset_manager = dataset_manager
-        logger.info(f"Backend context initialized with pipeline: {pipeline.name}")
+        if pipeline is not None:
+            logger.info(f"Backend context initialized with pipeline: {pipeline.name}")
+        else:
+            logger.info("Backend context initialized (no pipeline — headless mode)")
     
     def reload_pipeline(self) -> None:
         """Reload the pipeline from configuration files."""
@@ -110,74 +101,46 @@ def initialize_backend(
     tools_config_path: Optional[str] = None,
     pipeline_config_path: Optional[str] = None,
     data_dir: Optional[str] = None,
-    default_pipeline: str = "trades",
     enable_db: bool = True,
     enable_store: bool = True,
     prepare_dataset: bool = True
 ) -> BackendContext:
     """
-    Initialize the backend by loading tools and pipeline configuration.
-    
-    This function is called when the backend starts up. It:
-    1. Loads the tool registry from tools.yaml
-    2. Prepares dataset on host (before any tasks are scheduled)
-    3. Loads the pipeline configuration
-    4. Creates a Pipeline instance with all workflows
-    5. Uploads dataset to MinIO for workers
-    6. Returns a BackendContext for use by the backend
-    
-    Dataset preparation is done on the host to ensure:
-    - Single copy of dataset (no race conditions between workers)
-    - Dataset is validated before scheduling any tasks
-    - Workers just mount from shared storage (read-only)
-    
-    Args:
-        tools_config_path: Path to tools.yaml (defaults to configs/tools.yaml)
-        pipeline_config_path: Path to pipeline config (defaults to configs/pipeline/{default_pipeline}.yaml)
-        data_dir: Base directory for datasets (defaults to ./data)
-        default_pipeline: Name of default pipeline to load if path not specified
-        enable_db: Enable database persistence
-        enable_store: Enable MinIO store
-        prepare_dataset: Prepare dataset before creating pipeline
-        
-    Returns:
-        BackendContext with loaded pipeline
-        
-    Raises:
-        FileNotFoundError: If configuration files are not found
-        ValueError: If configuration is invalid
+    Initialize the backend by loading tools and (optionally) a pipeline.
+
+    When ``pipeline_config_path`` is ``None`` the backend starts in
+    *headless* mode: registries, DB and store are initialised but no
+    pipeline is loaded.  Runs can then be triggered via the API.
     """
-    # Set default paths if not provided
     if tools_config_path is None:
         tools_config_path = "configs/tools.yaml"
-    
-    if pipeline_config_path is None:
-        pipeline_config_path = f"configs/pipeline/{default_pipeline}.yaml"
-    
+
     if data_dir is None:
         data_dir = "./data"
-    
-    # Convert to absolute paths
+
     tools_config_path = str(Path(tools_config_path).resolve())
-    pipeline_config_path = str(Path(pipeline_config_path).resolve())
     data_dir = str(Path(data_dir).resolve())
-    
-    logger.info("="*60)
+
+    headless = pipeline_config_path is None
+    if not headless:
+        pipeline_config_path = str(Path(pipeline_config_path).resolve())
+
+    logger.info("=" * 60)
     logger.info("Initializing Landseer Backend")
-    logger.info("="*60)
+    logger.info("=" * 60)
     logger.info(f"Tools config: {tools_config_path}")
-    logger.info(f"Pipeline config: {pipeline_config_path}")
+    logger.info(f"Pipeline config: {pipeline_config_path or '(none — headless mode)'}")
     logger.info(f"Data directory: {data_dir}")
-    
-    # Initialize tool registry
+
+    # ── Tool registry ────────────────────────────────────────────
     try:
         init_tool_registry(tools_config_path)
         logger.info("Tool registry initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize tool registry: {e}")
         raise
-    
-    # Initialize MinIO store early (needed for dataset upload)
+
+    # ── MinIO store ──────────────────────────────────────────────
     store = None
     if enable_store and STORE_AVAILABLE:
         try:
@@ -190,24 +153,19 @@ def initialize_backend(
             logger.warning(f"Failed to initialize MinIO store: {e}")
     elif not STORE_AVAILABLE:
         logger.info("Store module not available")
-    
-    # Prepare dataset on host (before scheduling any tasks)
+
+    # ── Dataset preparation (only when a config is supplied) ─────
     dataset_info = None
     dataset_manager = None
-    if prepare_dataset and DATA_AVAILABLE:
+    if not headless and prepare_dataset and DATA_AVAILABLE:
         try:
-            # Load pipeline config to get dataset info
             config = load_pipeline_config(pipeline_config_path)
-            
-            # Create dataset manager
             dataset_manager = DatasetManager(Path(data_dir))
-            
-            # Extract poisoning config if variant is poisoned
+
             poisoning = None
             if config.dataset.variant == "poisoned":
                 poisoning = config.dataset.params.get("poisoning")
-            
-            # Prepare dataset
+
             logger.info(f"Preparing dataset: {config.dataset.name}/{config.dataset.variant}")
             ds_info = dataset_manager.prepare_dataset(
                 name=config.dataset.name,
@@ -215,12 +173,11 @@ def initialize_backend(
                 poisoning=poisoning,
                 **config.dataset.params
             )
-            
+
             if ds_info:
                 dataset_info = ds_info.to_dict()
                 logger.info(f"Dataset prepared: {ds_info.train_samples} train, {ds_info.test_samples} test")
-                
-                # Upload to MinIO for workers
+
                 if store and store.is_available:
                     dataset_key = f"datasets/{config.dataset.name}/{config.dataset.variant}"
                     try:
@@ -231,7 +188,6 @@ def initialize_backend(
                         logger.warning(f"Failed to upload dataset to MinIO: {e}")
             else:
                 logger.warning("Dataset preparation returned no info")
-                
         except Exception as e:
             logger.warning(f"Failed to prepare dataset: {e}")
             import traceback
@@ -242,42 +198,41 @@ def initialize_backend(
             "(install landseer with numpy/torch/torchvision): %s",
             _DATA_IMPORT_ERROR,
         )
-    
-    # Load pipeline configuration and create pipeline
-    try:
-        pipeline = create_pipeline_from_config(
-            pipeline_config_path,
-            tools_config_path
-        )
-        
-        # Add dataset info to pipeline config
-        if dataset_info:
-            pipeline.config["dataset_info"] = dataset_info
-            pipeline.config["dataset_path"] = dataset_info.get("output_dir")
-            if "minio_key" in dataset_info:
-                pipeline.config["dataset_minio_key"] = dataset_info["minio_key"]
-        
-        logger.info(f"Pipeline '{pipeline.name}' loaded with {len(pipeline.workflows)} workflows")
-    except Exception as e:
-        logger.error(f"Failed to load pipeline configuration: {e}")
-        raise
-    
-    # Initialize database service
+
+    # ── Pipeline (skip in headless mode) ─────────────────────────
+    pipeline = None
+    if not headless:
+        try:
+            pipeline = create_pipeline_from_config(
+                pipeline_config_path,
+                tools_config_path
+            )
+            if dataset_info:
+                pipeline.config["dataset_info"] = dataset_info
+                pipeline.config["dataset_path"] = dataset_info.get("output_dir")
+                if "minio_key" in dataset_info:
+                    pipeline.config["dataset_minio_key"] = dataset_info["minio_key"]
+            logger.info(f"Pipeline '{pipeline.name}' loaded with {len(pipeline.workflows)} workflows")
+        except Exception as e:
+            logger.error(f"Failed to load pipeline configuration: {e}")
+            raise
+
+    # ── Database service ─────────────────────────────────────────
     db_service = None
     if enable_db and DB_AVAILABLE:
         try:
             db_service = init_db_service(enabled=True)
             if db_service.is_available():
                 logger.info("Database service initialized")
-                # Sync pipeline to database
-                db_service.sync_pipeline_to_db(pipeline)
-                logger.info("Pipeline synced to database")
+                if pipeline is not None:
+                    db_service.sync_pipeline_to_db(pipeline)
+                    logger.info("Pipeline synced to database")
         except Exception as e:
             logger.warning(f"Failed to initialize database service: {e}")
     elif not DB_AVAILABLE:
         logger.info("Database module not available, persistence disabled")
-    
-    # Create backend context
+
+    # ── Context ──────────────────────────────────────────────────
     context = BackendContext(
         pipeline=pipeline,
         tools_config_path=tools_config_path,
@@ -287,11 +242,11 @@ def initialize_backend(
         dataset_info=dataset_info,
         dataset_manager=dataset_manager
     )
-    
-    logger.info("="*60)
+
+    logger.info("=" * 60)
     logger.info("Backend initialization complete")
-    logger.info("="*60)
-    
+    logger.info("=" * 60)
+
     return context
 
 

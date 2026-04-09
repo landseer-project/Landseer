@@ -8,6 +8,7 @@ This module scans config files from the workspace and synchronizes them with
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -15,6 +16,33 @@ from ..common import get_logger
 from ..db import PipelineConfigRepository, PipelineConfigModel, session_scope
 
 logger = get_logger(__name__)
+
+
+def _resolve_dir(path_value: str) -> Path:
+    """
+    Resolve config directories robustly across different working directories.
+
+    Resolution order for relative paths:
+    1. Current working directory
+    2. LANDSEER_ROOT (if set)
+    3. Repository root inferred from this file location
+    """
+    path = Path(path_value)
+    if path.is_absolute():
+        return path
+
+    cwd_candidate = (Path.cwd() / path).resolve()
+    if cwd_candidate.exists():
+        return cwd_candidate
+
+    env_root = os.getenv("LANDSEER_ROOT")
+    if env_root:
+        env_candidate = (Path(env_root) / path).resolve()
+        if env_candidate.exists():
+            return env_candidate
+
+    repo_root = Path(__file__).resolve().parents[2]
+    return (repo_root / path).resolve()
 
 
 def _hash_file(path: Path) -> str:
@@ -52,11 +80,11 @@ def discover_configs(
     Discover pipeline configs from the filesystem.
     """
     configs: List[Dict[str, Optional[str]]] = []
-    pdir = Path(pipeline_dir)
-    _ = Path(attack_dir)  # reserved for future pairing logic
+    pdir = _resolve_dir(pipeline_dir)
+    _ = _resolve_dir(attack_dir)  # reserved for future pairing logic
 
     if not pdir.exists():
-        logger.warning("Pipeline config directory not found: %s", pipeline_dir)
+        logger.warning("Pipeline config directory not found: %s", pdir)
         return configs
 
     for file in sorted(pdir.glob("*.yaml")):

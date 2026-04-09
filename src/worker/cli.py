@@ -10,6 +10,7 @@ import json
 import os
 import signal
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -97,6 +98,8 @@ class Worker:
         self._running = False
         self._current_task: Optional[TaskInfo] = None
         self._last_heartbeat = 0.0
+        self._task_heartbeat_thread: Optional[threading.Thread] = None
+        self._task_heartbeat_stop = threading.Event()
         self._tasks_completed = 0
         self._tasks_failed = 0
         # Maps task_id -> (cache_key, output_path, ancestor_paths) so that
@@ -308,6 +311,38 @@ class Worker:
             except Exception as e:
                 logger.warning(f"Heartbeat failed: {e}")
 
+    def _start_task_heartbeat(self) -> None:
+        """Start a background heartbeat loop while a task is executing."""
+        if self._task_heartbeat_thread and self._task_heartbeat_thread.is_alive():
+            return
+
+        self._task_heartbeat_stop.clear()
+
+        def _loop() -> None:
+            interval = max(1.0, self.heartbeat_interval / 2.0)
+            while not self._task_heartbeat_stop.wait(interval):
+                if not self._running or self._current_task is None:
+                    continue
+                try:
+                    self._client.heartbeat(status="busy")
+                    self._last_heartbeat = time.time()
+                except Exception as e:
+                    logger.warning(f"Task heartbeat failed: {e}")
+
+        self._task_heartbeat_thread = threading.Thread(
+            target=_loop,
+            name=f"heartbeat-{self.worker_id}",
+            daemon=True,
+        )
+        self._task_heartbeat_thread.start()
+
+    def _stop_task_heartbeat(self) -> None:
+        """Stop the background task heartbeat loop."""
+        self._task_heartbeat_stop.set()
+        if self._task_heartbeat_thread and self._task_heartbeat_thread.is_alive():
+            self._task_heartbeat_thread.join(timeout=2.0)
+        self._task_heartbeat_thread = None
+
     def _resolve_task_output_path(self, task_info: TaskInfo) -> Optional[Path]:
         """Resolve a dependency output directory from backend metadata."""
         candidates: List[Path] = []
@@ -374,6 +409,7 @@ class Worker:
             Execution result
         """
         self._current_task = task
+        self._start_task_heartbeat()
         logger.info(f"Executing task: {task.id} ({task.tool_name})")
         
         try:
@@ -465,6 +501,7 @@ class Worker:
             return result
             
         finally:
+            self._stop_task_heartbeat()
             self._current_task = None
     
     def _compute_cache_key(self, task: TaskInfo, parent_hashes: List[str]) -> str:
@@ -708,10 +745,21 @@ class Worker:
                 if task:
                     idle_count = 0
                     
-                    # Execute the task
-                    result = self._execute_task(task)
+                    try:
+                        # Execute the task
+                        result = self._execute_task(task)
+                    except Exception as e:
+                        # Ensure scheduler visibility: unexpected worker-side
+                        # exceptions must still mark the claimed task failed.
+                        logger.exception(f"Unhandled task execution error for {task.id}: {e}")
+                        result = ExecutionResult(
+                            success=False,
+                            exit_code=-1,
+                            execution_time_ms=0,
+                            error_message=str(e),
+                        )
                     
-                    # Report result
+                    # Report result (success/failure)
                     self._report_result(task, result)
                     
                 else:

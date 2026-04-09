@@ -47,7 +47,9 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--config",
         type=str,
-        help="Path to pipeline configuration file (default: configs/pipeline/trades.yaml)",
+        default=None,
+        help="Path to pipeline configuration file. If omitted, the backend starts "
+             "without an active pipeline and waits for runs to be triggered via the API.",
     )
     
     parser.add_argument(
@@ -55,13 +57,6 @@ def create_parser() -> argparse.ArgumentParser:
         type=str,
         default="configs/tools.yaml",
         help="Path to tools configuration file (default: configs/tools.yaml)",
-    )
-    
-    parser.add_argument(
-        "--default-pipeline",
-        type=str,
-        default="trades",
-        help="Default pipeline to load if --config not specified (default: trades)",
     )
     
     return parser
@@ -91,13 +86,16 @@ def main(argv: Optional[list[str]] = None) -> int:
         context = initialize_backend(
             tools_config_path=args.tools_config,
             pipeline_config_path=args.config,
-            default_pipeline=args.default_pipeline
         )
         set_backend_context(context)
         
-        logger.info(f"\nLoaded pipeline: {context.pipeline.name}")
-        logger.info(f"Number of workflows: {len(context.pipeline.workflows)}")
-        logger.info(f"Workflows: {', '.join([w.name for w in context.pipeline.workflows[:5]])}...")
+        if context.pipeline is not None:
+            logger.info(f"\nLoaded pipeline: {context.pipeline.name}")
+            logger.info(f"Number of workflows: {len(context.pipeline.workflows)}")
+            logger.info(f"Workflows: {', '.join([w.name for w in context.pipeline.workflows[:5]])}...")
+        else:
+            logger.info("\nNo pipeline config specified — running in headless mode.")
+            logger.info("Trigger runs via POST /api/pipeline-configs/<config_id>/runs")
         
     except FileNotFoundError as e:
         logger.error(f"Configuration file not found: {e}")

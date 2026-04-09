@@ -21,6 +21,10 @@ import type {
   AddToolRequest,
   SchedulerStatus,
   SchedulerNextPreview,
+  PipelineConfig,
+  PipelineConfigListResponse,
+  PipelineRun,
+  PipelineRunListResponse,
 } from '@/types/api';
 
 // Re-export types for convenience (EvaluatorInfo and AddEvaluatorRequest are already exported as interfaces above)
@@ -375,6 +379,46 @@ export async function getWorkflowMetrics(workflowId: string): Promise<{
   evaluators_skipped: { evaluator: string; reason: string }[];
 }> {
   const { data } = await api.get(`/workflows/${workflowId}/metrics`);
+  return data;
+}
+
+// ==============================================================================
+// Pipeline Configs & Runs
+// ==============================================================================
+
+export async function getPipelineConfigs(): Promise<PipelineConfigListResponse> {
+  const { data } = await api.get<PipelineConfigListResponse>('/pipeline-configs');
+  return data;
+}
+
+export async function getPipelineConfig(configId: string): Promise<PipelineConfig> {
+  const { data } = await api.get<PipelineConfig>(`/pipeline-configs/${configId}`);
+  return data;
+}
+
+export async function getPipelineRuns(configId?: string): Promise<PipelineRunListResponse> {
+  const params = configId ? { config_id: configId } : {};
+  const { data } = await api.get<PipelineRunListResponse>('/pipeline-runs', { params });
+  return data;
+}
+
+export async function getPipelineRunsForConfig(configId: string): Promise<PipelineRunListResponse> {
+  const { data } = await api.get<PipelineRunListResponse>(`/pipeline-configs/${configId}/runs`);
+  return data;
+}
+
+export async function startPipelineRun(
+  configId: string,
+  options: { use_cache?: boolean } = {}
+): Promise<PipelineRun> {
+  const { data } = await api.post<PipelineRun>(`/pipeline-configs/${configId}/runs`, {
+    use_cache: options.use_cache ?? true,
+  });
+  return data;
+}
+
+export async function stopPipelineRun(runId: string): Promise<PipelineRun> {
+  const { data } = await api.post<PipelineRun>(`/pipeline-runs/${runId}/stop`);
   return data;
 }
 

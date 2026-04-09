@@ -1,6 +1,7 @@
 import { Routes, Route } from 'react-router-dom';
 import { Layout } from '@/components/Layout';
 import { Dashboard } from '@/pages/Dashboard';
+import { Pipelines } from '@/pages/Pipelines';
 import { Tasks } from '@/pages/Tasks';
 import { Workflows } from '@/pages/Workflows';
 import { WorkflowDetail } from '@/pages/WorkflowDetail';
@@ -14,6 +15,7 @@ function App() {
     <Layout>
       <Routes>
         <Route path="/" element={<Dashboard />} />
+        <Route path="/pipelines" element={<Pipelines />} />
         <Route path="/tasks" element={<Tasks />} />
         <Route path="/workflows" element={<Workflows />} />
         <Route path="/workflows/:id" element={<WorkflowDetail />} />

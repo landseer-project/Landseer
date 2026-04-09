@@ -207,6 +207,40 @@ export type TaskType = 'pre' | 'in' | 'post' | 'deploy';
 export type WorkerStatus = 'idle' | 'busy' | 'offline';
 export type WorkflowStatus = 'pending' | 'running' | 'completed' | 'failed';
 
+// Pipeline Config & Run types
+export interface PipelineConfig {
+  id: string;
+  name: string;
+  description: string | null;
+  config_path: string;
+  attack_config_path: string | null;
+  config_hash: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface PipelineConfigListResponse {
+  configs: PipelineConfig[];
+  total: number;
+}
+
+export interface PipelineRun {
+  id: string;
+  pipeline_config_id: string;
+  run_number: number;
+  use_cache: boolean;
+  status: string;
+  error_message: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface PipelineRunListResponse {
+  runs: PipelineRun[];
+  total: number;
+}
+
 // Utility type for API errors
 export interface ApiError {
   detail: string;

@@ -32,6 +32,46 @@ import {
   Zap,
 } from 'lucide-react';
 
+const BLOCKED_HEARTBEAT_SECONDS = 90;
+
+type WorkerBlockState = {
+  blocked: boolean;
+  reason: string | null;
+};
+
+function getWorkerBlockState(worker: WorkerInfo): WorkerBlockState {
+  const lastHeartbeatMs = Date.parse(worker.last_heartbeat);
+  const heartbeatAgeSeconds = Number.isNaN(lastHeartbeatMs)
+    ? Number.POSITIVE_INFINITY
+    : Math.floor((Date.now() - lastHeartbeatMs) / 1000);
+
+  // Worker has a task assignment but reports idle: likely stuck before reporting failure.
+  if (worker.status === 'idle' && worker.current_task_id) {
+    return {
+      blocked: true,
+      reason: `Idle with assigned task (${worker.current_task_id})`,
+    };
+  }
+
+  // Worker is busy but has no task assigned: inconsistent scheduler state.
+  if (worker.status === 'busy' && !worker.current_task_id) {
+    return {
+      blocked: true,
+      reason: 'Busy without assigned task',
+    };
+  }
+
+  // Heartbeat stale while worker is expected to be alive.
+  if (worker.status !== 'offline' && heartbeatAgeSeconds > BLOCKED_HEARTBEAT_SECONDS) {
+    return {
+      blocked: true,
+      reason: `Stale heartbeat (${heartbeatAgeSeconds}s ago)`,
+    };
+  }
+
+  return { blocked: false, reason: null };
+}
+
 export function Workers() {
   const [registerDialogOpen, setRegisterDialogOpen] = useState(false);
   const [hostname, setHostname] = useState('');
@@ -214,6 +254,8 @@ export function Workers() {
 }
 
 function WorkerCard({ worker }: { worker: WorkerInfo }) {
+  const blockState = getWorkerBlockState(worker);
+
   return (
     <Card className="transition-shadow hover:shadow-md">
       <CardHeader className="pb-2">
@@ -229,11 +271,17 @@ function WorkerCard({ worker }: { worker: WorkerInfo }) {
               </CardDescription>
             </div>
           </div>
-          <StatusBadge status={worker.status} />
+          <StatusBadge status={blockState.blocked ? 'blocked' : worker.status} />
         </div>
       </CardHeader>
       <CardContent>
         <div className="space-y-3">
+          {blockState.blocked && blockState.reason && (
+            <div className="rounded-md border border-orange-200 bg-orange-50 px-2 py-1 text-xs text-orange-700 dark:border-orange-800/50 dark:bg-orange-950/20 dark:text-orange-300">
+              {blockState.reason}
+            </div>
+          )}
+
           <div className="flex items-center justify-between text-sm">
             <span className="flex items-center gap-2 text-muted-foreground">
               <Clock className="h-3 w-3" />

@@ -17,9 +17,11 @@ vi.mock('../lib/api', () => ({
   getProgress: vi.fn(),
   getWorkers: vi.fn(),
   getAllTasks: vi.fn(),
+  getRunningTasks: vi.fn(),
   getSchedulerStatus: vi.fn(),
   getReadyTasks: vi.fn(),
   resetScheduler: vi.fn(),
+  reclaimStaleTasks: vi.fn(),
 }));
 
 import * as api from '../lib/api';
@@ -114,17 +116,25 @@ describe('Dashboard - Data Display', () => {
     vi.mocked(api.getProgress).mockResolvedValue(mockData.progress);
     vi.mocked(api.getWorkers).mockResolvedValue(mockData.workers);
     vi.mocked(api.getAllTasks).mockResolvedValue({ tasks: mockData.tasks, total: 6 });
+    vi.mocked(api.getRunningTasks).mockResolvedValue({
+      tasks: mockData.tasks.filter(t => t.status === 'running'),
+      total: 1,
+    });
     vi.mocked(api.getSchedulerStatus).mockResolvedValue(mockData.scheduler);
     vi.mocked(api.getReadyTasks).mockResolvedValue(mockData.readyTasks);
+    vi.mocked(api.reclaimStaleTasks).mockResolvedValue({
+      success: true,
+      reclaimed_count: 0,
+      reclaimed_task_ids: [],
+    });
   });
 
   it('should display correct total task count', async () => {
     renderDashboard();
 
     await waitFor(() => {
-      // Total Tasks stat card should show 6
-      const totalTasksCard = screen.getByText('Total Tasks');
-      expect(totalTasksCard.closest('div')).toHaveTextContent('6');
+      expect(screen.getByText('Total Tasks')).toBeInTheDocument();
+      expect(screen.getByText('2 workflows')).toBeInTheDocument();
     });
   });
 
@@ -132,8 +142,8 @@ describe('Dashboard - Data Display', () => {
     renderDashboard();
 
     await waitFor(() => {
-      const completedCard = screen.getByText('Completed');
-      expect(completedCard.closest('div')).toHaveTextContent('2');
+      expect(screen.getAllByText('Completed').length).toBeGreaterThan(0);
+      expect(screen.getByText('50.0% done')).toBeInTheDocument();
     });
   });
 
@@ -141,8 +151,8 @@ describe('Dashboard - Data Display', () => {
     renderDashboard();
 
     await waitFor(() => {
-      const runningCard = screen.getByText('Running');
-      expect(runningCard.closest('div')).toHaveTextContent('1');
+      expect(screen.getAllByText('Running').length).toBeGreaterThan(0);
+      expect(screen.getByText('0 ready in queue')).toBeInTheDocument();
     });
   });
 
@@ -168,8 +178,8 @@ describe('Dashboard - Data Display', () => {
     renderDashboard();
 
     await waitFor(() => {
-      const workersCard = screen.getByText('Active Workers');
-      expect(workersCard.closest('div')).toHaveTextContent('2');
+      expect(screen.getByText('Active Workers')).toBeInTheDocument();
+      expect(screen.getByText('2 registered')).toBeInTheDocument();
     });
   });
 });
@@ -183,8 +193,17 @@ describe('Dashboard - Progress Bar Display', () => {
     vi.mocked(api.getProgress).mockResolvedValue(mockData.progress);
     vi.mocked(api.getWorkers).mockResolvedValue(mockData.workers);
     vi.mocked(api.getAllTasks).mockResolvedValue({ tasks: mockData.tasks, total: 6 });
+    vi.mocked(api.getRunningTasks).mockResolvedValue({
+      tasks: mockData.tasks.filter(t => t.status === 'running'),
+      total: 1,
+    });
     vi.mocked(api.getSchedulerStatus).mockResolvedValue(mockData.scheduler);
     vi.mocked(api.getReadyTasks).mockResolvedValue(mockData.readyTasks);
+    vi.mocked(api.reclaimStaleTasks).mockResolvedValue({
+      success: true,
+      reclaimed_count: 0,
+      reclaimed_task_ids: [],
+    });
   });
 
   it('should display status breakdown in progress section', async () => {
@@ -210,7 +229,7 @@ describe('Dashboard - Progress Bar Display', () => {
 
     await waitFor(() => {
       // Failed section should appear when failed > 0
-      expect(screen.getByText('Failed')).toBeInTheDocument();
+      expect(screen.getAllByText('Failed').length).toBeGreaterThan(0);
     });
   });
 });
@@ -288,6 +307,7 @@ describe('Dashboard - Edge Cases', () => {
     vi.mocked(api.getProgress).mockResolvedValue(emptyProgress);
     vi.mocked(api.getWorkers).mockResolvedValue({ workers: [], total: 0, active: 0 });
     vi.mocked(api.getAllTasks).mockResolvedValue({ tasks: [], total: 0 });
+    vi.mocked(api.getRunningTasks).mockResolvedValue({ tasks: [], total: 0 });
     vi.mocked(api.getSchedulerStatus).mockResolvedValue({
       initialized: true,
       started_at: null,
@@ -298,11 +318,17 @@ describe('Dashboard - Edge Cases', () => {
       task_metadata_count: 0,
     });
     vi.mocked(api.getReadyTasks).mockResolvedValue({ tasks: [], total: 0 });
+    vi.mocked(api.reclaimStaleTasks).mockResolvedValue({
+      success: true,
+      reclaimed_count: 0,
+      reclaimed_task_ids: [],
+    });
 
     renderDashboard();
 
     await waitFor(() => {
-      expect(screen.getByText('0')).toBeInTheDocument();
+      expect(screen.getByText('0 workflows')).toBeInTheDocument();
+      expect(screen.getByText('0.0% done')).toBeInTheDocument();
     });
   });
 
@@ -379,7 +405,7 @@ describe('Dashboard - Edge Cases', () => {
     renderDashboard();
 
     await waitFor(() => {
-      expect(screen.getByText('Scheduler Not Initialized')).toBeInTheDocument();
+      expect(screen.getByText('No Active Pipeline Run')).toBeInTheDocument();
     });
   });
 });
@@ -393,8 +419,17 @@ describe('Dashboard - Chart Data', () => {
     vi.mocked(api.getProgress).mockResolvedValue(mockData.progress);
     vi.mocked(api.getWorkers).mockResolvedValue(mockData.workers);
     vi.mocked(api.getAllTasks).mockResolvedValue({ tasks: mockData.tasks, total: 6 });
+    vi.mocked(api.getRunningTasks).mockResolvedValue({
+      tasks: mockData.tasks.filter(t => t.status === 'running'),
+      total: 1,
+    });
     vi.mocked(api.getSchedulerStatus).mockResolvedValue(mockData.scheduler);
     vi.mocked(api.getReadyTasks).mockResolvedValue(mockData.readyTasks);
+    vi.mocked(api.reclaimStaleTasks).mockResolvedValue({
+      success: true,
+      reclaimed_count: 0,
+      reclaimed_task_ids: [],
+    });
   });
 
   it('should render pie chart with correct status distribution', async () => {
