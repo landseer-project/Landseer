@@ -34,6 +34,7 @@ import {
   Zap,
   Cpu,
   Circle,
+  Rocket,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
@@ -122,15 +123,18 @@ export function Dashboard() {
             <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-yellow-100 dark:bg-yellow-900/30">
               <AlertCircle className="h-8 w-8 text-yellow-600 dark:text-yellow-400" />
             </div>
-            <CardTitle>Scheduler Not Initialized</CardTitle>
+            <CardTitle>No Active Pipeline Run</CardTitle>
             <CardDescription>
-              The scheduler needs to be initialized with a pipeline before you can use the dashboard.
+              Start a pipeline run from the Pipelines page to see progress here.
             </CardDescription>
           </CardHeader>
           <CardContent className="text-center">
-            <p className="text-sm text-muted-foreground">
-              Start the backend with a pipeline configuration to begin.
-            </p>
+            <Button asChild>
+              <Link to="/pipelines">
+                <PlayCircle className="mr-2 h-4 w-4" />
+                Go to Pipelines
+              </Link>
+            </Button>
           </CardContent>
         </Card>
       </div>
@@ -171,8 +175,12 @@ export function Dashboard() {
               <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
             )}
           </div>
-          <p className="text-muted-foreground">
-            Pipeline: <span className="font-medium text-foreground">{pipeline?.name || 'Unknown'}</span>
+          <p className="text-muted-foreground flex items-center gap-2">
+            Pipeline:{' '}
+            <Link to="/pipelines" className="inline-flex items-center gap-1 font-medium text-foreground hover:underline">
+              <Rocket className="h-3.5 w-3.5" />
+              {pipeline?.name || 'Unknown'}
+            </Link>
           </p>
         </div>
         <div className="flex items-center gap-2">

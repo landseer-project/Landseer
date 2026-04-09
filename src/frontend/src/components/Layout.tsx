@@ -20,6 +20,7 @@ import {
   Menu,
   Database,
   BarChart3,
+  Rocket,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 
@@ -34,6 +35,11 @@ const navItems: NavItem[] = [
     title: 'Dashboard',
     href: '/',
     icon: <LayoutDashboard className="h-5 w-5" />,
+  },
+  {
+    title: 'Pipelines',
+    href: '/pipelines',
+    icon: <Rocket className="h-5 w-5" />,
   },
   {
     title: 'Tasks',

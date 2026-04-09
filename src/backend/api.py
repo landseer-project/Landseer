@@ -399,6 +399,13 @@ class SchedulerState:
             # Persist to database
             if self.db_service:
                 self.db_service.assign_task_to_worker(worker_id, task_id)
+
+    def find_worker_assigned_to_task(self, task_id: str) -> Optional[str]:
+        """Return the worker currently assigned to task_id, if any."""
+        for worker_id, worker in self.workers.items():
+            if worker.get("current_task_id") == task_id:
+                return worker_id
+        return None
     
     def complete_worker_task(self, worker_id: str, success: bool, task_id: Optional[str] = None, execution_time_ms: int = 0) -> None:
         """Mark worker task as complete."""
@@ -638,11 +645,12 @@ async def lifespan(app: FastAPI):
 
     # Try to initialize from backend context if available
     context = get_backend_context()
-    if context is not None:
+    if context is not None and context.pipeline is not None:
         _scheduler_state.initialize(context.pipeline)
         logger.info(f"Scheduler auto-initialized with pipeline: {context.pipeline.name}")
     else:
-        logger.warning("No backend context found. Scheduler must be initialized via API.")
+        logger.info("No pipeline loaded at startup — running in headless mode. "
+                     "Trigger runs via POST /api/pipeline-configs/<config_id>/runs")
 
     # Start the background stale-worker reclaim loop
     reclaim_task = asyncio.create_task(
@@ -833,6 +841,15 @@ async def update_task_status(
         result=request.result,
         status=new_status
     )
+
+    # If this task came from a worker claim, close out worker state/counters.
+    assigned_worker_id = state.find_worker_assigned_to_task(request.task_id)
+    if assigned_worker_id:
+        state.complete_worker_task(
+            worker_id=assigned_worker_id,
+            success=(new_status == TaskStatus.COMPLETED),
+            execution_time_ms=request.execution_time_ms or 0,
+        )
     
     # Persist evaluation metrics so the Metrics dashboard can show them
     if (
@@ -1374,6 +1391,7 @@ async def worker_claim_task(
     
     # Associate task with worker
     state.assign_task_to_worker(worker_id, task.id)
+    state.store_task_metadata(task_id=task.id, worker_id=worker_id)
     logger.info(f"Task {task.id} claimed by worker {worker_id}")
     
     return NextTaskResponse(
@@ -2520,6 +2538,38 @@ async def get_pipeline_runs(config_id: str):
     except Exception as e:
         logger.error(f"Failed to get pipeline runs for {config_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get pipeline runs: {str(e)}")
+
+
+@app.get("/api/pipeline-runs", response_model=PipelineRunListResponse, tags=["Pipeline Runs"])
+async def list_all_pipeline_runs(config_id: Optional[str] = Query(default=None)):
+    """List all pipeline runs across all configs, optionally filtered by config_id."""
+    try:
+        from ..db import session_scope, PipelineRunRepository
+
+        with session_scope() as session:
+            run_repo = PipelineRunRepository(session)
+            runs = run_repo.get_all(config_id=config_id)
+
+            return PipelineRunListResponse(
+                runs=[
+                    PipelineRunResponse(
+                        id=run.id,
+                        pipeline_config_id=run.pipeline_config_id,
+                        run_number=run.run_number,
+                        use_cache=run.use_cache,
+                        status=run.status.value,
+                        error_message=run.error_message,
+                        created_at=run.created_at.isoformat(),
+                        started_at=run.started_at.isoformat() if run.started_at else None,
+                        completed_at=run.completed_at.isoformat() if run.completed_at else None,
+                    )
+                    for run in runs
+                ],
+                total=len(runs)
+            )
+    except Exception as e:
+        logger.error(f"Failed to list pipeline runs: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to list pipeline runs: {str(e)}")
 
 
 @app.post("/api/pipeline-runs/{run_id}/stop", response_model=PipelineRunResponse, tags=["Pipeline Runs"])

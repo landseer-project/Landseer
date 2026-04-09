@@ -6,7 +6,7 @@ evaluators:
   clean:
     name: clean
     container:
-      image: ghcr.io/landseer-project/evals/clean:c528241
+      image: ghcr.io/landseer-project/evals/clean:v2
       command: ""
     required_artifacts: []
     metrics:
@@ -16,7 +16,7 @@ evaluators:
   backdoor:
     name: backdoor
     container:
-      image: ghcr.io/landseer-project/evals/backdoor:c528241
+      image: ghcr.io/landseer-project/evals/backdoor:v2
       command: ""
     required_artifacts:
       - poisoning_metadata.json
@@ -30,7 +30,7 @@ evaluators:
   adversarial:
     name: adversarial
     container:
-      image: ghcr.io/landseer-project/evals/adversarial:c528241
+      image: ghcr.io/landseer-project/evals/adversarial:v2
       command: ""
     required_artifacts: []
     metrics:
@@ -44,7 +44,7 @@ evaluators:
   fairness:
     name: fairness
     container:
-      image: ghcr.io/landseer-project/evals/fairness:c528241
+      image: ghcr.io/landseer-project/evals/fairness:v2
       command: ""
     required_artifacts:
       - sensitive_attributes.npy
@@ -57,7 +57,7 @@ evaluators:
   fingerprinting:
     name: fingerprinting
     container:
-      image: ghcr.io/landseer-project/evals/fingerprinting:c528241
+      image: ghcr.io/landseer-project/evals/fingerprinting:v2
       command: ""
     required_artifacts: []
     metrics:
@@ -69,7 +69,7 @@ evaluators:
   ood:
     name: ood
     container:
-      image: ghcr.io/landseer-project/evals/ood:c528241
+      image: ghcr.io/landseer-project/evals/ood:v2
       command: ""
     required_artifacts: []
     metrics:
@@ -81,7 +81,7 @@ evaluators:
   watermark:
     name: watermark
     container:
-      image: ghcr.io/landseer-project/evals/watermark:c528241
+      image: ghcr.io/landseer-project/evals/watermark:v2
       command: ""
     required_artifacts:
       - watermark_key.json

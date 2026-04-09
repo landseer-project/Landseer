@@ -18,6 +18,7 @@ const badgeVariants = cva(
         idle: "border-transparent bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300",
         busy: "border-transparent bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400",
         offline: "border-transparent bg-gray-100 text-gray-500 dark:bg-gray-900/30 dark:text-gray-500",
+        blocked: "border-transparent bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400",
       },
     },
     defaultVariants: {

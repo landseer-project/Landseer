@@ -20,6 +20,7 @@ on:
         type: choice
         options:
           - all
+          - clean
           - adversarial
           - fairness
           - fingerprinting
@@ -55,7 +56,7 @@ jobs:
 
           # For manual trigger with 'all' or other events
           if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ inputs.evaluator }}" == "all" ]; then
-            EVALUATORS='["adversarial","fairness","fingerprinting","backdoor","watermark","ood"]'
+            EVALUATORS='["clean","adversarial","fairness","fingerprinting","backdoor","watermark","ood"]'
             echo "matrix=$EVALUATORS" >> $GITHUB_OUTPUT
             echo "has_changes=true" >> $GITHUB_OUTPUT
             exit 0
@@ -112,12 +113,13 @@ jobs:
             type=sha,prefix=
             type=ref,event=branch
             type=raw,value=latest,enable={{is_default_branch}}
-            type=raw,value=v1
+            type=raw,value=v2
 
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
-          context: containers/evals/${{ matrix.evaluator }}
+          context: containers/evals
+          file: containers/evals/${{ matrix.evaluator }}/Dockerfile
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
