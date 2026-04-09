@@ -126,7 +126,7 @@ landseer-pipeline/
 
 ### Quick Start
 
-For complete step-by-step instructions on running a pipeline, see **[Pipeline Run Guide](docs/PIPELINE_RUN_GUIDE.md)**, which covers:
+For complete step-by-step instructions on running a pipeline, see **[Sphinx docs: Run a Pipeline](docs/how-to/run-a-pipeline.md)**, which covers:
 - System setup (backend, workers, frontend)
 - Starting pipeline runs via REST API or web UI
 - Monitoring progress in real-time
