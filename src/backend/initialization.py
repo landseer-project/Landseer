@@ -132,7 +132,7 @@ def initialize_backend(
     logger.info(f"Pipeline config: {pipeline_config_path or '(none — headless mode)'}")
     logger.info(f"Data directory: {data_dir}")
 
-    # ── Tool registry ────────────────────────────────────────────
+    # -- Tool registry ---------------------------------------------------------
     try:
         init_tool_registry(tools_config_path)
         logger.info("Tool registry initialized successfully")
@@ -140,7 +140,7 @@ def initialize_backend(
         logger.error(f"Failed to initialize tool registry: {e}")
         raise
 
-    # ── MinIO store ──────────────────────────────────────────────
+    # -- MinIO store -----------------------------------------------------------
     store = None
     if enable_store and STORE_AVAILABLE:
         try:
@@ -154,7 +154,7 @@ def initialize_backend(
     elif not STORE_AVAILABLE:
         logger.info("Store module not available")
 
-    # ── Dataset preparation (only when a config is supplied) ─────
+    # -- Dataset preparation (only when a config is supplied) ------------------
     dataset_info = None
     dataset_manager = None
     if not headless and prepare_dataset and DATA_AVAILABLE:
@@ -199,7 +199,7 @@ def initialize_backend(
             _DATA_IMPORT_ERROR,
         )
 
-    # ── Pipeline (skip in headless mode) ─────────────────────────
+    # -- Pipeline (skip in headless mode) -------------------------------------
     pipeline = None
     if not headless:
         try:
@@ -217,7 +217,7 @@ def initialize_backend(
             logger.error(f"Failed to load pipeline configuration: {e}")
             raise
 
-    # ── Database service ─────────────────────────────────────────
+    # -- Database service ------------------------------------------------------
     db_service = None
     if enable_db and DB_AVAILABLE:
         try:
@@ -232,7 +232,7 @@ def initialize_backend(
     elif not DB_AVAILABLE:
         logger.info("Database module not available, persistence disabled")
 
-    # ── Context ──────────────────────────────────────────────────
+    # -- Context ---------------------------------------------------------------
     context = BackendContext(
         pipeline=pipeline,
         tools_config_path=tools_config_path,

@@ -14,6 +14,7 @@ Usage:
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Depends, Query
@@ -24,7 +25,7 @@ from ..common import get_logger
 from ..pipeline.tasks import TaskStatus, TaskType
 from ..pipeline.pipeline import Pipeline
 from .scheduler import Scheduler, PriorityScheduler
-from .initialization import get_backend_context, BackendContext
+from .initialization import get_backend_context, set_backend_context, BackendContext
 
 # Import database service if available
 try:
@@ -2395,7 +2396,8 @@ async def start_pipeline_run(
     try:
         from .config_discovery import get_config_by_id
         from ..db import get_session, session_scope, PipelineRunRepository, PipelineRunStatus
-        from ..pipeline.config_loader import create_pipeline_from_config
+        from ..pipeline.config_loader import create_pipeline_from_config, load_pipeline_config
+        from ..data import DatasetManager
         from ..pipeline.tasks import generate_pipeline_id
         import uuid
         from datetime import datetime
@@ -2448,6 +2450,45 @@ async def start_pipeline_run(
                 for task in workflow.tasks:
                     task.pipeline_id = run_id
                     task.run_id = run_id
+
+            # Keep backend context aligned with API-triggered runs in headless mode.
+            # Workers rely on /dataset to fetch prepared dataset paths.
+            ctx = get_backend_context()
+            if ctx:
+                ctx.pipeline = pipeline
+                try:
+                    cfg = load_pipeline_config(config.config_path)
+                    current_ds = ctx.dataset_info or {}
+                    needs_prepare = (
+                        not current_ds
+                        or current_ds.get("name") != cfg.dataset.name
+                        or current_ds.get("variant") != cfg.dataset.variant
+                    )
+                    if needs_prepare:
+                        base_dir = Path("./data").resolve()
+                        manager = ctx.dataset_manager or DatasetManager(base_dir)
+                        poisoning = None
+                        if cfg.dataset.variant == "poisoned":
+                            poisoning = cfg.dataset.params.get("poisoning")
+                        ds_info = manager.prepare_dataset(
+                            name=cfg.dataset.name,
+                            variant=cfg.dataset.variant,
+                            poisoning=poisoning,
+                            **cfg.dataset.params,
+                        )
+                        if ds_info:
+                            ctx.dataset_info = ds_info.to_dict()
+                            ctx.dataset_manager = manager
+                            if ctx.store and ctx.store.is_available:
+                                dataset_key = f"datasets/{cfg.dataset.name}/{cfg.dataset.variant}"
+                                try:
+                                    ctx.store.upload_directory(ds_info.output_dir, dataset_key)
+                                    ctx.dataset_info["minio_key"] = dataset_key
+                                except Exception as e:
+                                    logger.warning(f"Failed to upload dataset to MinIO: {e}")
+                except Exception as e:
+                    logger.warning(f"Dataset context setup failed for run {run_id}: {e}")
+                set_backend_context(ctx)
             
             # Initialize scheduler with this pipeline
             state.initialize(pipeline, scheduler_type="priority")

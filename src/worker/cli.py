@@ -467,6 +467,13 @@ class Worker:
                     )
 
             data_dir = self.data_path if (self.data_path and self.data_path.exists()) else self._dataset_path
+            if data_dir is None:
+                # Headless backend may expose dataset only after a run is started.
+                # Retry dataset fetch at task execution time instead of only worker startup.
+                refreshed = self._fetch_dataset()
+                if refreshed:
+                    self._dataset_path = refreshed
+                    data_dir = refreshed
             result = self._runner.run_task(
                 task,
                 input_path=data_dir,
