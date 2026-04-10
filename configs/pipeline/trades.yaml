@@ -2,15 +2,18 @@ dataset:
   name: cifar10
   variant: clean
 model:
-  script: configs/model/config_model_orig.py
+  script: configs/model/config_model_resnet20.py
 pipeline:
   pre_training:
     tools:
-    - container:
+    - name: pre-xgbod
+      container:
         command: python3 main.py
-        config_script: configs/model/config_model.py
         image: ghcr.io/landseer-project/pre_xgbod:v2
-      name: pre-xgbod
+    - name: watermarkbn
+      container: 
+        command: python3 main.py
+        image: ghcr.io/landseer-project/pre_watermarkbn:v1
     noop:
       name: noop
       container:
@@ -29,9 +32,9 @@ pipeline:
         command: python main.py
   post_training:
     tools:
-    - name: fine pruning
+    - name: neuroprune
       container:
-        image: ghcr.io/landseer-project/post_fineprune:v1
+        image: ghcr.io/landseer-project/post_neuronprune:v1
         command: python3 main.py --prune-percentage 0.1
     noop:
       name: post_noop
@@ -44,11 +47,15 @@ pipeline:
     - name: deploy_dp
       container:
         command: python3 main.py
-        config_script: configs/model/config_model.py
+        config_script: configs/model/config_model_resnet20_dp.py
         image: ghcr.io/landseer-project/deploy_dp:v1
     - name: post_magnet
       container:
         image: ghcr.io/landseer-project/post_magnet:v2
+        command: python3 main.py
+    - name: deploy_explainshap
+      container:
+        image: ghcr.io/landseer-project/deploy_explainshap:v1
         command: python3 main.py
     noop:
       name: deploy_noop

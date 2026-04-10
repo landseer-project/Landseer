@@ -43,8 +43,10 @@ def get_available_runtimes() -> List[str]:
             docker_runner = DockerRunner(type('Settings', (), {'device': device})())
             if docker_runner.is_available():
                 available.append('docker')
-        except Exception:
-            pass
+            else:
+                logger.debug("Docker SDK is installed but daemon is not available (see debug logs above)")
+        except Exception as e:
+            logger.debug("Docker runtime check failed: %s", e)
     
     # Check Apptainer/Singularity
     if APPTAINER_IMPL_AVAILABLE:
@@ -78,7 +80,12 @@ def get_preferred_runtime(preference_order: Optional[List[str]] = None) -> str:
     available = get_available_runtimes()
     
     if not available:
-        raise RuntimeError("No container runtime available on this system. Please install Docker or Apptainer/Singularity.")
+        raise RuntimeError(
+            "No container runtime available on this system. Please install Docker or Apptainer/Singularity. "
+            "If Docker is already installed and 'docker' CLI works, ensure this process can access the Docker socket "
+            "(e.g. add your user to the 'docker' group: sudo usermod -aG docker $USER, then log out and back in). "
+            "Run with --log-level DEBUG to see why the runtime check failed."
+        )
     
     # Return the first preference that's available
     for preferred in preference_order:

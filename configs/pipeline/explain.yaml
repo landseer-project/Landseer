@@ -1,0 +1,36 @@
+dataset:
+  name: cifar10
+  variant: clean
+model:
+  script: configs/model/config_model_resnet20.py
+pipeline:
+  pre_training:
+    noop:
+      name: noop
+      container:
+        image: ghcr.io/landseer-project/pre_noop:v1
+        command: python main.py
+  during_training:
+    noop:
+      name: in_noop
+      container:
+        image: ghcr.io/landseer-project/in_noop:v7
+        command: python main.py
+  post_training:
+    noop:
+      name: post_noop
+      container:
+        image: ghcr.io/landseer-project/post_noop_new:v1
+        command: python main.py
+
+  deployment:
+    tools:
+      name: deploy_explainshap
+      container:
+        image: ghcr.io/landseer-project/deploy_explainshap:v1
+        command: python3 main.py
+    noop:
+      name: deploy_noop
+      container:
+        image: ghcr.io/landseer-project/deploy_noop:v1
+        command: python main.py

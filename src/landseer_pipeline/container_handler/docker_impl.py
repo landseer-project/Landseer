@@ -108,6 +108,10 @@ class DockerRunner(ContainerRunner):
             current_uid = os.getuid()
             current_gid = os.getgid()
             
+            # Get memory limit and shared memory size from settings if available
+            mem_limit = getattr(self.settings, 'docker_mem_limit', None)
+            shm_size = getattr(self.settings, 'docker_shm_size', '2g')
+            
             run_kwargs = {
                 'command': command,
                 'environment': environment,
@@ -117,9 +121,14 @@ class DockerRunner(ContainerRunner):
                 'stdout': True,
                 'stderr': True,
                 'working_dir': "/app",  # Set working directory to /app where main.py is located
-                'shm_size': '2g',  # Increase shared memory for PyTorch DataLoader workers
+                'shm_size': shm_size,  # Shared memory for PyTorch DataLoader workers
                 #'user': f"{current_uid}:{current_gid}",  # Run as current user to fix file ownership
             }
+            
+            # Add memory limit if specified (prevents OOM kills)
+            if mem_limit:
+                run_kwargs['mem_limit'] = mem_limit
+                logger.debug(f"{combo_prefix}Setting Docker memory limit: {mem_limit}")
             
             if runtime:
                 run_kwargs['runtime'] = runtime
@@ -162,7 +171,12 @@ class DockerRunner(ContainerRunner):
             client = docker.from_env()
             client.ping()
             return True
-        except Exception:
+        except Exception as e:
+            logger.debug(
+                "Docker daemon not available: %s. "
+                "If 'docker' CLI works, ensure this process can access the Docker socket (e.g. add user to 'docker' group or set DOCKER_HOST).",
+                e,
+            )
             return False
     
     def get_runtime_name(self) -> str:

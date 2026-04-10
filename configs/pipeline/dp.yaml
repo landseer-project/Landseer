@@ -2,15 +2,18 @@ dataset:
   name: cifar10
   variant: clean
 model:
-  script: configs/model/config_model_resnet20.py
+  script: configs/model/config_model_resnet20_dp.py
 pipeline:
   pre_training:
     tools:
     - name: pre-xgbod
       container:
         command: python3 main.py
-        config_script: configs/model/config_model.py
         image: ghcr.io/landseer-project/pre_xgbod:v2
+    - name: watermarkbn
+      container: 
+        command: python3 main.py
+        image: ghcr.io/landseer-project/pre_watermarkbn:v1
     noop:
       name: noop
       container:
@@ -18,38 +21,39 @@ pipeline:
         command: python main.py
   during_training:
     tools:
-    - name: in-teaching
+    - name: in-dp
       container:
-        image: ghcr.io/landseer-project/in_teaching:v8
+        image: ghcr.io/landseer-project/in_dp:v10
         command: python3 main.py
+        config_script: configs/model/config_model_resnet20_dp.py
     noop:
       name: in_noop
       container:
-        image: ghcr.io/landseer-project/in_noop:v5
+        image: ghcr.io/landseer-project/in_noop:v7
         command: python main.py
   post_training:
-    tools:
-    - name: fine pruning
-      container:
-        image: ghcr.io/landseer-project/post_fineprune:v1
-        command: python3 main.py --prune-percentage 0.1
     noop:
       name: post_noop
       container:
         image: ghcr.io/landseer-project/post_noop_new:v1
         command: python main.py
+    tools:
+    - name: post_neuroprune
+      container:
+        image: ghcr.io/landseer-project/post_neuronprune:v1
+        command: python main.py
 
   deployment:
     tools:
+    - name: dataset_inference
+      container:
+        image: ghcr.io/landseer-project/deploy_dataset_inference:v2
+        command: python3 main.py
     - name: deploy_dp
-      container:
-        command: python3 main.py
-        config_script: configs/model/config_model.py
+      container: 
         image: ghcr.io/landseer-project/deploy_dp:v1
-    - name: post_magnet
-      container:
-        image: ghcr.io/landseer-project/post_magnet:v2
-        command: python3 main.py
+        config_script: configs/model/config_model_resnet20_dp.py
+        command: python main.py
     noop:
       name: deploy_noop
       container:

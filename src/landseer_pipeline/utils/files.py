@@ -1,4 +1,5 @@
 import os
+import sys
 import shutil
 import hashlib
 import importlib.util
@@ -75,8 +76,17 @@ def copy_directory(src: str, dest: str):
     return dest
 
 def load_config_from_script(script_path: str):
+    """Load a config callable from a Python script. Registers the module in sys.modules
+    under a unique name so that pickle (e.g. used by Opacus ModuleValidator) can resolve
+    the model class. Reuses the same module if already loaded so the class is always the
+    same object (required for pickle)."""
     abs_path = os.path.abspath(script_path)
-    spec = importlib.util.spec_from_file_location("config_module", abs_path)
+    # Unique name per path so multiple configs can be loaded and pickle can resolve the module
+    module_name = "config_module_" + hashlib.md5(abs_path.encode()).hexdigest()[:12]
+    if module_name in sys.modules:
+        return sys.modules[module_name].config
+    spec = importlib.util.spec_from_file_location(module_name, abs_path)
     config_module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = config_module
     spec.loader.exec_module(config_module)
     return config_module.config  

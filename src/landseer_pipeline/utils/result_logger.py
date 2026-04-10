@@ -15,7 +15,8 @@ class ResultLogger:
                 f.write("pipeline_id,combination,stage,tool_name,cache_key,duration_sec,status,output_path\n")
         if not self.combinations_csv.exists():
             with open(self.combinations_csv, "w") as f:
-                f.write("combination,pre_training,in_training,post_training,deployment,dataset_name,dataset_type,acc_train_clean,acc_test_clean,pgd_acc,carlini_acc,ood_auc,fingerprinting,asr,privacy_epsilon,dp_accuracy,watermark_accuracy,mia_auc,eps_estimate,total_duration,combination_status\n")
+                #Removing privacy epsilon, esp_estimate and dp accuracy for now because they are not being logged in the model evaluator. Can add back later if we decide to log them.
+                f.write("combination,pre_training,in_training,post_training,deployment,dataset_name,dataset_type,acc_train_clean,acc_test_clean,pgd_acc,carlini_acc,ood_auc,fingerprinting,asr,watermark_accuracy,wmacc_badnets,mia_auc,drop10_score,total_duration,combination_status\n")
 
     def log_tool(self, combination, stage, tool_name, cache_key, output_path, duration, status):
         with open(self.tools_csv, "a") as f:
@@ -39,24 +40,25 @@ class ResultLogger:
         ood_auc = acc.get("ood_auc", -1)
         fingerprinting_acc = acc.get("fingerprinting", -1)
         asr = acc.get("backdoor_asr", -1)
-        privacy_epsilon = acc.get("privacy_epsilon", -1)
-        dp_acc = acc.get("dp_accuracy", -1)
+        # privacy_epsilon = acc.get("privacy_epsilon", -1)
+        # dp_acc = acc.get("dp_accuracy", -1)
+        wmacc_badnets = acc.get("wmacc_badnets", -1)
         watermark_acc = acc.get("watermark_accuracy", -1)
         mia_auc = acc.get("mia_auc", -1)
-        eps_estimate = acc.get("eps_estimate", -1)
+        drop10_score = acc.get("drop10_score", -1)
 
         file_exists = self.combinations_csv.exists()
         with open(self.combinations_csv, "a", newline='') as f:
             writer = csv.writer(f, quoting=csv.QUOTE_MINIMAL)
             if not file_exists:
                 writer.writerow([
-                "combination", "pre_training", "in_training", "post_training", "deployment",
-                "dataset_name", "dataset_type", "acc_train_clean", "acc_test_clean", "pgd_acc", "carlini_acc",
-                "ood_auc", "fingerprinting", "asr", "privacy_epsilon", "dp_accuracy", "watermark_accuracy", "mia_auc", "eps_estimate", "total_duration", "combination_status"
-                ])
+                    "combination", "pre_training", "in_training", "post_training", "deployment",
+                    "dataset_name", "dataset_type", "acc_train_clean", "acc_test_clean", "pgd_acc", "carlini_acc",
+                    "ood_auc", "fingerprinting", "asr", "watermark_accuracy", "wmacc_badnets", "mia_auc", "drop10_score", "total_duration", "combination_status"
+                    ])
             writer.writerow([
             combination, str(pre_training), str(in_training), str(post_training), str(deployment),
             dataset_name, dataset_type, round(acc_train_clean, 4), round(acc_clean, 4),
             round(pgd_acc, 4), round(carlini_acc, 4), round(ood_auc, 4), round(fingerprinting_acc, 4),
-            round(asr, 4), str(privacy_epsilon), str(dp_acc), round(watermark_acc, 4), round(mia_auc, 4), round(eps_estimate, 4), round(duration, 2), status
+            round(asr, 4), round(watermark_acc, 4), round(wmacc_badnets, 4), round(mia_auc, 4), round(drop10_score, 4), round(duration, 2), status
             ])

@@ -17,7 +17,9 @@ from landseer_pipeline.evaluator.fingerprinting import evaluate_fingerprinting_m
 from landseer_pipeline.evaluator.fairness import evaluate_fairness
 from landseer_pipeline.config import Stage
 from landseer_pipeline.utils import load_config_from_script
-
+from landseer_pipeline.evaluator.faithfullness_eval import evaluate_faithfulness_drop10
+from landseer_pipeline.evaluator.mia import mia_loss_auc
+from landseer_pipeline.evaluator.badnets import evaluate_wmacc_from_paths
 import torch.nn.functional as F
 
 import json
@@ -144,31 +146,67 @@ class ModelEvaluator:
 
     @property
     def input_wm_matrix(self) -> str:
+        """Get watermark matrix path from JSON or fallback to data/ directory."""
+        return self._get_path_from_json_or_data("wm_matrix.npy")
+
+    @property
+    def input_wm_bits(self) -> str:
+        """Get watermark bits path from JSON or fallback to data/ directory."""
+        return self._get_path_from_json_or_data("wm_bits.npy")
+    
+    @property
+    def input_wm_test_dataset(self) -> str:
+        """Get watermark test dataset path from JSON or fallback to data/ directory."""
+        return self._get_path_from_json_or_data("wm_test_data.npy")
+    
+    @property
+    def input_wm_test_labels(self) -> str:
+        """Get watermark test labels path from JSON or fallback to data/ directory."""
+        return self._get_path_from_json_or_data("wm_test_labels.npy")
+
+    def _get_path_from_json(self, filename: str) -> str:
+        """Get file path from fin_output_paths.json by filename.
+        
+        Args:
+            filename: The filename to search for (e.g., "faith_drop10.npy")
+            
+        Returns:
+            The source path if found, empty string otherwise
+        """
         json_path = Path(self.combination_output) / "fin_output_paths.json"
         if json_path.exists():
             with open(json_path, 'r') as f:
                 paths = json.load(f)
-            wm_matrix_entry = paths.get("wm_matrix.npy", "")
-            if isinstance(wm_matrix_entry, dict):
-                return wm_matrix_entry.get("source_path", "")
-            return wm_matrix_entry
+            entry = paths.get(filename, "")
+            if isinstance(entry, dict):
+                return entry.get("source_path", "")
+            return entry
         else:
             logger.warning(f"{self.combination_id}: Combination output paths file {json_path} does not exist.")
             return ""
 
-    @property
-    def input_wm_bits(self) -> str:
-        json_path = Path(self.combination_output) / "fin_output_paths.json"
-        if json_path.exists():
-            with open(json_path, 'r') as f:
-                paths = json.load(f)
-            wm_bits_entry = paths.get("wm_bits.npy", "")
-            if isinstance(wm_bits_entry, dict):
-                return wm_bits_entry.get("source_path", "")
-            return wm_bits_entry
-        else:
-            logger.warning(f"{self.combination_id}: Combination output paths file {json_path} does not exist.")
-            return ""
+    def _get_path_from_json_or_data(self, filename: str) -> str:
+        """Get file path from fin_output_paths.json by filename, with fallback to data/ directory.
+        
+        Args:
+            filename: The filename to search for (e.g., "wm_test_data.npy")
+            
+        Returns:
+            The source path if found in JSON, or path in data/ directory if found there, empty string otherwise
+        """
+        # First try to get from JSON
+        json_path_str = self._get_path_from_json(filename)
+        if json_path_str:
+            return json_path_str
+        
+        # Fallback to data/ directory
+        data_dir_path = Path("data") / filename
+        if data_dir_path.exists():
+            logger.info(f"{self.combination_id}: {filename} not found in fin_output_paths.json, using fallback path: {data_dir_path}")
+            return str(data_dir_path.resolve())
+        
+        logger.warning(f"{self.combination_id}: {filename} not found in fin_output_paths.json or data/ directory")
+        return ""
 
     def extract_defense_types_from_tools(self, tools_by_stage) -> List[str]:
         """Extract defense types from tool configurations based on Docker image labels"""
@@ -314,6 +352,18 @@ class ModelEvaluator:
         try:
             config = load_config_from_script(self.model_script_path)
             model = config().to(self.device)
+            # For DP-trained models (Opacus), the architecture must be fixed before loading the checkpoint
+            defense_types = self.extract_defense_types_from_tools(self.tools_by_stage)
+            if any(dt.lower() == "differential_privacy" for dt in defense_types):
+                try:
+                    from opacus.validators import ModuleValidator
+                    model = ModuleValidator.fix(model)
+                    logger.info(f"{self.combination_id}: Applied Opacus ModuleValidator.fix() for DP-trained model")
+                except ImportError:
+                    logger.warning(
+                        f"{self.combination_id}: differential_privacy detected but opacus not installed; "
+                        "install opacus for correct DP model evaluation"
+                    )
         except Exception as e:
             logger.error(f"{self.combination_id}: Failed to construct model from script {self.model_script_path}: {e}")
             return {"clean_test_accuracy": 0.0}
@@ -359,10 +409,22 @@ class ModelEvaluator:
             ood_loader = self.generate_ood_samples("cifar100")
             ood_auc = self.evaluate_outlier(model, clean_test_loader, ood_loader)
             metrics["ood_auc"] = ood_auc
-            metrics["mia_auc"], metrics["eps_estimate"] = self.margin_auc_from_loaders(model, clean_train_loader, clean_test_loader, delta_dp=1e-5, device=self.device)
+            #metrics["mia_auc"], metrics["eps_estimate"] = self.margin_auc_from_loaders(model, clean_train_loader, clean_test_loader, delta_dp=1e-5, device=self.device)
             fingerprint_score = evaluate_fingerprinting_mingd(model, clean_test_loader, device=self.device)
             metrics["fingerprinting"] = fingerprint_score
             logger.info(f"{self.combination_id}: Fingerprinting evaluation completed: {fingerprint_score}")
+            mia_auc = mia_loss_auc(model, clean_train_loader, clean_test_loader, device=self.device)
+            metrics["mia_auc"] = mia_auc
+            logger.info(f"{self.combination_id}: Membership inference evaluation completed: {mia_auc}")
+            
+            # Evaluate faithfulness drop10 by loading from faith_drop10.npy file
+            faithfulness_score = self.evaluate_faithfulness_drop10_from_paths()
+            metrics["drop10_score"] = faithfulness_score
+            config = load_config_from_script(self.model_script_path)
+        
+            wmacc_badnets = evaluate_wmacc_from_paths(model_ctor=config, model_ckpt=model_path, wm_test_data= self.input_wm_test_dataset, wm_test_labels= self.input_wm_test_labels, device=self.device)
+            metrics["wmacc_badnets"] = wmacc_badnets
+            logger.info(f"{self.combination_id}: Watermark accuracy evaluation completed: {wmacc_badnets}")
 
             if hasattr(self, 'dataset_manager') and self.dataset_manager.poisoned_dataset_dir:
                 poisoned_loader = None
@@ -384,7 +446,7 @@ class ModelEvaluator:
             metrics["fingerprinting"] = -1.0
         # Run fingerprinting if fingerprinting defense detected
         
-        # Run watermarking evaluation if watermarkigdefense detected
+        # Run watermarking evaluation if watermarking defense detected
         if "watermark" in applicable_attacks:
             try:
                 watermark_accuracy = self.evaluate_watermark(model)
@@ -502,9 +564,11 @@ class ModelEvaluator:
                 y_test = np.load(os.path.join(dataset_path, 'test_labels.npy'))
                 # Use NormalizedDataset to apply (x - 0.5) / 0.5 normalization
                 # This matches the preprocessing done during training
-                clean_train_dataset = NormalizedDataset(X_train, y_train, normalize=True)
+                #clean_train_dataset = NormalizedDataset(X_train, y_train, normalize=False)
+                clean_train_dataset = TensorDataset(torch.tensor(X_train).float(), torch.tensor(y_train).long())
                 clean_train_loader = DataLoader(clean_train_dataset, batch_size=512, shuffle=False)
-                clean_test_dataset = NormalizedDataset(X_test, y_test, normalize=True)
+                #clean_test_dataset = NormalizedDataset(X_test, y_test, normalize=False)
+                clean_test_dataset = TensorDataset(torch.tensor(X_test).float(), torch.tensor(y_test).long())
                 clean_test_loader = DataLoader(clean_test_dataset, batch_size=512, shuffle=False)
         else:
             logger.warning(f"{self.combination_id}: Unsupported dataset format: {dataset_path}")
@@ -520,6 +584,64 @@ class ModelEvaluator:
                 correct += (pred == y).sum().item()
                 total += y.size(0)
         return correct / total if total > 0 else 0.0
+
+    def evaluate_faithfulness_drop10_from_paths(self) -> float:
+        """Evaluate faithfulness drop10 by loading faith_drop10.npy from paths in fin_output_paths.json.
+        
+        Returns:
+            Mean drop10 score, or -1.0 if file not found or evaluation fails
+        """
+        try:
+            # Get path from JSON file
+            faith_drop10_path_str = self._get_path_from_json("faith_drop10.npy")
+            
+            if not faith_drop10_path_str:
+                logger.warning(f"{self.combination_id}: faith_drop10.npy not found in fin_output_paths.json. Skipping faithfulness evaluation.")
+                return -1.0
+            
+            faith_drop10_path = Path(faith_drop10_path_str)
+            
+            if not faith_drop10_path.exists():
+                logger.warning(f"{self.combination_id}: faith_drop10.npy path does not exist: {faith_drop10_path}. Skipping faithfulness evaluation.")
+                return -1.0
+            
+            logger.info(f"{self.combination_id}: Loading faith_drop10.npy from {faith_drop10_path}")
+            drop10_data = np.load(str(faith_drop10_path))
+            logger.info(f"{self.combination_id}: Loaded faith_drop10.npy with shape: {drop10_data.shape}, ndim: {drop10_data.ndim}")
+            
+            # Handle different array shapes
+            if drop10_data.ndim == 0:
+                # Scalar - convert to 1D array
+                drop10_scores = np.array([drop10_data.item()])
+            elif drop10_data.ndim == 1:
+                # Already 1D - use as is
+                drop10_scores = drop10_data
+            elif drop10_data.ndim == 2:
+                # 2D array - take first row (index 0) as the "particular line"
+                # To use a different line, change the index: drop10_data[1], drop10_data[2], etc.
+                drop10_scores = drop10_data[0]
+                logger.info(f"{self.combination_id}: Using first row (index 0) from 2D array. Shape: {drop10_scores.shape}")
+            else:
+                # Higher dimensional - flatten
+                drop10_scores = drop10_data.flatten()
+                logger.info(f"{self.combination_id}: Flattened multi-dimensional array to 1D. Shape: {drop10_scores.shape}")
+            
+            # Ensure it's 1D as required by the function
+            if drop10_scores.ndim != 1:
+                drop10_scores = drop10_scores.flatten()
+            
+            # Evaluate faithfulness with the loaded scores
+            faithfulness_score = evaluate_faithfulness_drop10(
+                drop10=drop10_scores,
+                save_dir=str(self.combination_output),
+                save_json=True
+            )
+            logger.info(f"{self.combination_id}: Faithfulness evaluation completed: {faithfulness_score}")
+            return faithfulness_score
+            
+        except Exception as e:
+            logger.warning(f"{self.combination_id}: Could not evaluate faithfulness drop10: {e}")
+            return -1.0
 
     def _has_sensitive_attributes(self) -> bool:
         """Check if sensitive attributes file exists in the dataset directory"""
