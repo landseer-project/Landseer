@@ -1,21 +1,20 @@
-cache/
-data/
-results/
-logs/
-tools/
+/cache
+/data
+/results
+/logs
+/tools
 
-.venv/
-venv/
+/.venv
+/venv
 __pycache__/
 *.pyc
-*.csv
 *.lock
 .env*
 *.log
 *.csv
+*.sif
 
 deviation_*
-
 # Node.js (local installation)
 .node/
 node_modules/
