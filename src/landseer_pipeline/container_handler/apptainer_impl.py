@@ -190,7 +190,7 @@ class ApptainerRunner(ContainerRunner):
         try:
             combo_prefix = f"{combination_id}: " if combination_id else ""
             logger.debug(f"{combo_prefix}Running Apptainer command: {' '.join(run_cmd)}")
-            result = subprocess.run(run_cmd, capture_output=True, text=True, timeout=3600)
+            result = subprocess.run(run_cmd, capture_output=True, text=True, timeout=14400)
             
             exit_code = result.returncode
             logs = result.stdout + result.stderr
