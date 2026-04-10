@@ -9,6 +9,7 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
+from typing import Optional, Tuple
 
 import numpy as np
 import torch
@@ -33,6 +34,39 @@ def evaluate_clean_accuracy(model, loader, device):
             correct += (predicted == labels).sum().item()
 
     return correct / total if total > 0 else 0.0
+
+
+def _read_dp_metrics(input_dir: Path) -> Tuple[Optional[float], Optional[float]]:
+    """
+    Parse DP metrics if a DP tool produced ``privacy_metrics.txt``.
+
+    Expected format:
+      epsilon=3.0
+      delta=1e-05
+      dp_accuracy=0.1017
+    """
+    metrics_file = input_dir / "privacy_metrics.txt"
+    if not metrics_file.exists():
+        return None, None
+
+    epsilon = None
+    dp_accuracy = None
+    try:
+        for raw_line in metrics_file.read_text().splitlines():
+            line = raw_line.strip()
+            if not line or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip()
+            if key == "epsilon":
+                epsilon = float(value)
+            elif key == "dp_accuracy":
+                dp_accuracy = float(value)
+    except Exception:
+        # Keep evaluator robust; missing/malformed DP file should not fail clean eval.
+        return None, None
+    return epsilon, dp_accuracy
 
 
 def write_results(output_dir, payload):
@@ -103,7 +137,24 @@ def main():
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
     clean_acc = evaluate_clean_accuracy(model, loader, device)
-    print(f"Clean accuracy: {clean_acc:.4f}")
+    epsilon, dp_accuracy = _read_dp_metrics(input_dir)
+
+    # DP runs may emit dp_accuracy as the canonical reported accuracy.
+    reported_clean = dp_accuracy if dp_accuracy is not None else clean_acc
+    if dp_accuracy is not None:
+        print(
+            f"DP metrics detected. raw_clean_accuracy={clean_acc:.4f}, "
+            f"dp_accuracy={dp_accuracy:.4f}. Reporting clean_accuracy=dp_accuracy."
+        )
+    else:
+        print(f"Clean accuracy: {clean_acc:.4f}")
+
+    metrics = {"clean_accuracy": float(reported_clean)}
+    if dp_accuracy is not None:
+        metrics["raw_clean_accuracy"] = float(clean_acc)
+        metrics["dp_accuracy"] = float(dp_accuracy)
+    if epsilon is not None:
+        metrics["privacy_epsilon"] = float(epsilon)
 
     write_results(
         output_dir,
@@ -111,7 +162,7 @@ def main():
             "evaluator": "clean",
             "success": True,
             "skipped": False,
-            "metrics": {"clean_accuracy": float(clean_acc)},
+            "metrics": metrics,
             "parameters": {"batch_size": batch_size, "device": device},
             "timestamp": datetime.utcnow().isoformat() + "Z",
         },

@@ -217,7 +217,11 @@ class DockerRunner:
         
         # Build docker command
         docker_cmd = ["docker", "run", "--rm"]
-        
+        # PyTorch DataLoader workers use POSIX shared memory under /dev/shm. Docker's default
+        # (~64MB) is often exhausted by multi-worker loaders (bus error / killed workers).
+        shm_size = (os.environ.get("LANDSEER_DOCKER_SHM_SIZE") or "1g").strip() or "1g"
+        docker_cmd.extend(["--shm-size", shm_size])
+
         # Add GPU support if available
         # Use --runtime=nvidia with NVIDIA_VISIBLE_DEVICES env var (compatible with CDI mode)
         # This approach avoids conflicts with CDI mode configuration
@@ -679,6 +683,29 @@ class TaskRunner:
         input_dir = task_dir / "input"
         output_dir = task_dir / "output"
         logs_dir = task_dir / "logs"
+        # #region agent log
+        try:
+            import json as _json
+            import time as _time
+            with open("/share/landseer/workspace-ayushi/Landseer/.cursor/debug-dc31d4.log", "a") as _df:
+                _df.write(_json.dumps({
+                    "sessionId": "dc31d4",
+                    "runId": getattr(task, "run_id", "unknown"),
+                    "hypothesisId": "H1_H2",
+                    "location": "worker/runner.py:_setup_task_workspace",
+                    "message": "workspace_pre_cleanup_state",
+                    "data": {
+                        "task_id": task.id,
+                        "input_exists": input_dir.exists(),
+                        "output_exists": output_dir.exists(),
+                        "output_is_symlink": output_dir.is_symlink(),
+                        "output_is_dir": output_dir.is_dir(),
+                    },
+                    "timestamp": int(_time.time() * 1000),
+                }) + "\n")
+        except Exception:
+            pass
+        # #endregion
         
         # Clean up old input/output directories on re-runs (but keep logs)
         for d in [input_dir, output_dir]:
@@ -687,7 +714,34 @@ class TaskRunner:
         
         # Create directories
         for d in [task_dir, input_dir, output_dir, logs_dir]:
-            d.mkdir(parents=True, exist_ok=True)
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                # #region agent log
+                try:
+                    import json as _json
+                    import time as _time
+                    with open("/share/landseer/workspace-ayushi/Landseer/.cursor/debug-dc31d4.log", "a") as _df:
+                        _df.write(_json.dumps({
+                            "sessionId": "dc31d4",
+                            "runId": getattr(task, "run_id", "unknown"),
+                            "hypothesisId": "H1_H2_H3",
+                            "location": "worker/runner.py:_setup_task_workspace",
+                            "message": "mkdir_failed",
+                            "data": {
+                                "task_id": task.id,
+                                "path": str(d),
+                                "error": str(e),
+                                "path_exists": d.exists(),
+                                "path_is_symlink": d.is_symlink(),
+                                "path_is_dir": d.is_dir(),
+                            },
+                            "timestamp": int(_time.time() * 1000),
+                        }) + "\n")
+                except Exception:
+                    pass
+                # #endregion
+                raise
         
         return task_dir, input_dir, output_dir
     
@@ -873,6 +927,40 @@ class TaskRunner:
                 dest_path = input_dir / "config_model.py"
                 shutil.copy2(model_script_path, dest_path)
                 logger.debug(f"Copied model script to: {dest_path}")
+            # #region agent log
+            try:
+                import hashlib as _hashlib
+                import json as _json
+                import time as _time
+                _in_model = input_dir / "model.pt"
+                _model_hash = None
+                if _in_model.exists():
+                    _h = _hashlib.sha256()
+                    with open(_in_model, "rb") as _mf:
+                        for _chunk in iter(lambda: _mf.read(1024 * 1024), b""):
+                            _h.update(_chunk)
+                    _model_hash = _h.hexdigest()
+                with open("/share/landseer/workspace-ayushi/Landseer/.cursor/debug-62ed23.log", "a") as _df:
+                    _df.write(_json.dumps({
+                        "sessionId": "62ed23",
+                        "runId": getattr(task, "run_id", None),
+                        "hypothesisId": "H3_H4_H5",
+                        "location": "worker/runner.py:run_task",
+                        "message": "pre_container_input_state",
+                        "data": {
+                            "task_id": task.id,
+                            "task_tool": task.tool_name,
+                            "input_dir": str(input_dir),
+                            "ancestor_count": len(dirs_to_merge),
+                            "ancestor_dirs": [str(p) for p in dirs_to_merge],
+                            "input_has_model": _in_model.exists(),
+                            "input_model_sha256": _model_hash,
+                        },
+                        "timestamp": int(_time.time() * 1000),
+                    }) + "\n")
+            except Exception:
+                pass
+            # #endregion
             
             # Build environment
             task_env = env or {}
