@@ -32,7 +32,7 @@ export type { ToolInfo, AddToolRequest };
 
 // Create axios instance with base configuration
 const api: AxiosInstance = axios.create({
-  baseURL: '/api',
+  baseURL: '',
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
@@ -387,23 +387,23 @@ export async function getWorkflowMetrics(workflowId: string): Promise<{
 // ==============================================================================
 
 export async function getPipelineConfigs(): Promise<PipelineConfigListResponse> {
-  const { data } = await api.get<PipelineConfigListResponse>('/pipeline-configs');
+  const { data } = await api.get<PipelineConfigListResponse>('/api/pipeline-configs');
   return data;
 }
 
 export async function getPipelineConfig(configId: string): Promise<PipelineConfig> {
-  const { data } = await api.get<PipelineConfig>(`/pipeline-configs/${configId}`);
+  const { data } = await api.get<PipelineConfig>(`/api/pipeline-configs/${configId}`);
   return data;
 }
 
 export async function getPipelineRuns(configId?: string): Promise<PipelineRunListResponse> {
   const params = configId ? { config_id: configId } : {};
-  const { data } = await api.get<PipelineRunListResponse>('/pipeline-runs', { params });
+  const { data } = await api.get<PipelineRunListResponse>('/api/pipeline-runs', { params });
   return data;
 }
 
 export async function getPipelineRunsForConfig(configId: string): Promise<PipelineRunListResponse> {
-  const { data } = await api.get<PipelineRunListResponse>(`/pipeline-configs/${configId}/runs`);
+  const { data } = await api.get<PipelineRunListResponse>(`/api/pipeline-configs/${configId}/runs`);
   return data;
 }
 
@@ -411,14 +411,14 @@ export async function startPipelineRun(
   configId: string,
   options: { use_cache?: boolean } = {}
 ): Promise<PipelineRun> {
-  const { data } = await api.post<PipelineRun>(`/pipeline-configs/${configId}/runs`, {
+  const { data } = await api.post<PipelineRun>(`/api/pipeline-configs/${configId}/runs`, {
     use_cache: options.use_cache ?? true,
   });
   return data;
 }
 
 export async function stopPipelineRun(runId: string): Promise<PipelineRun> {
-  const { data } = await api.post<PipelineRun>(`/pipeline-runs/${runId}/stop`);
+  const { data } = await api.post<PipelineRun>(`/api/pipeline-runs/${runId}/stop`);
   return data;
 }
 
