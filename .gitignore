@@ -15,3 +15,7 @@ __pycache__/
 *.csv
 
 deviation_*
+cache/
+logs/
+results/
+*.sif
