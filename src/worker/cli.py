@@ -427,12 +427,53 @@ class Worker:
                         self._append_unique_paths(ancestor_dirs, [dep_out])
                 else:
                     logger.warning(f"Dep {dep_id} not yet in _task_outputs; resolving remotely")
+                    # #region agent log
+                    try:
+                        import json as _json
+                        import time as _time
+                        with open("/share/landseer/workspace-ayushi/Landseer/.cursor/debug-62ed23.log", "a") as _df:
+                            _df.write(_json.dumps({
+                                "sessionId": "62ed23",
+                                "runId": getattr(task, "run_id", None),
+                                "hypothesisId": "H1_H2",
+                                "location": "worker/cli.py:_execute_task",
+                                "message": "remote_dep_resolution_start",
+                                "data": {"task_id": task.id, "task_tool": task.tool_name, "dep_id": dep_id},
+                                "timestamp": int(_time.time() * 1000),
+                            }) + "\n")
+                    except Exception:
+                        pass
+                    # #endregion
                     dep_anc, dep_task = self._collect_remote_ancestry(dep_id)
                     self._append_unique_paths(ancestor_dirs, dep_anc)
                     if dep_task:
                         if dep_task.cache_key:
                             parent_hashes.append(dep_task.cache_key)
                         dep_output = self._resolve_task_output_path(dep_task)
+                        # #region agent log
+                        try:
+                            import json as _json
+                            import time as _time
+                            with open("/share/landseer/workspace-ayushi/Landseer/.cursor/debug-62ed23.log", "a") as _df:
+                                _df.write(_json.dumps({
+                                    "sessionId": "62ed23",
+                                    "runId": getattr(task, "run_id", None),
+                                    "hypothesisId": "H1_H2_H3",
+                                    "location": "worker/cli.py:_execute_task",
+                                    "message": "remote_dep_resolution_result",
+                                    "data": {
+                                        "task_id": task.id,
+                                        "dep_id": dep_id,
+                                        "dep_status": getattr(dep_task, "status", None),
+                                        "dep_run_id": getattr(dep_task, "run_id", None),
+                                        "dep_output_path": str(getattr(dep_task, "output_path", "")),
+                                        "resolved_dep_output": str(dep_output) if dep_output else None,
+                                    },
+                                    "timestamp": int(_time.time() * 1000),
+                                }) + "\n")
+                        except Exception:
+                            pass
+                        # #endregion
                         if dep_output:
                             self._append_unique_paths(ancestor_dirs, [dep_output])
                             self._task_outputs[dep_id] = (
@@ -454,6 +495,29 @@ class Worker:
                 if cached_path:
                     logger.info(f"Cache hit for task {task.id}")
                     symlink_target = self._runner.workspace_dir / task.id / "output"
+                    # #region agent log
+                    try:
+                        import json as _json
+                        import time as _time
+                        with open("/share/landseer/workspace-ayushi/Landseer/.cursor/debug-dc31d4.log", "a") as _df:
+                            _df.write(_json.dumps({
+                                "sessionId": "dc31d4",
+                                "runId": getattr(task, "run_id", "unknown"),
+                                "hypothesisId": "H1_H4",
+                                "location": "worker/cli.py:_execute_task",
+                                "message": "cache_hit_symlink_pre_state",
+                                "data": {
+                                    "task_id": task.id,
+                                    "symlink_target": str(symlink_target),
+                                    "target_exists": symlink_target.exists(),
+                                    "target_is_symlink": symlink_target.is_symlink(),
+                                    "cached_path": str(cached_path),
+                                },
+                                "timestamp": int(_time.time() * 1000),
+                            }) + "\n")
+                    except Exception:
+                        pass
+                    # #endregion
                     if not symlink_target.exists():
                         symlink_target.parent.mkdir(parents=True, exist_ok=True)
                         symlink_target.symlink_to(cached_path.resolve())
@@ -481,6 +545,40 @@ class Worker:
                 model_script_path=self._model_script_path,
                 ancestor_dirs=ancestor_dirs or None,
             )
+            # #region agent log
+            try:
+                import hashlib as _hashlib
+                import json as _json
+                import time as _time
+                _model_hash = None
+                if result.output_path:
+                    _model = result.output_path / "model.pt"
+                    if _model.exists():
+                        _h = _hashlib.sha256()
+                        with open(_model, "rb") as _mf:
+                            for _chunk in iter(lambda: _mf.read(1024 * 1024), b""):
+                                _h.update(_chunk)
+                        _model_hash = _h.hexdigest()
+                with open("/share/landseer/workspace-ayushi/Landseer/.cursor/debug-62ed23.log", "a") as _df:
+                    _df.write(_json.dumps({
+                        "sessionId": "62ed23",
+                        "runId": getattr(task, "run_id", None),
+                        "hypothesisId": "H3_H4_H5",
+                        "location": "worker/cli.py:_execute_task",
+                        "message": "task_output_model_state",
+                        "data": {
+                            "task_id": task.id,
+                            "task_tool": task.tool_name,
+                            "success": bool(result.success),
+                            "output_path": str(result.output_path) if result.output_path else None,
+                            "output_has_model": bool(result.output_path and (result.output_path / "model.pt").exists()),
+                            "output_model_sha256": _model_hash,
+                        },
+                        "timestamp": int(_time.time() * 1000),
+                    }) + "\n")
+            except Exception:
+                pass
+            # #endregion
 
             # Record always so downstream tasks can extend the ancestry chain.
             self._task_outputs[task.id] = (cache_key, result.output_path, list(ancestor_dirs))

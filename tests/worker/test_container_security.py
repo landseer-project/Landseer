@@ -85,6 +85,56 @@ def apptainer_runner(temp_workspace):
 
 
 # ============================================================================
+# Test: Docker /dev/shm (PyTorch DataLoader)
+# ============================================================================
+
+
+class TestDockerShmSize:
+    """DockerRunner should raise /dev/shm above Docker's default for DataLoader workers."""
+
+    def test_default_shm_size_1g(self, docker_runner, temp_workspace, monkeypatch):
+        monkeypatch.delenv("LANDSEER_DOCKER_SHM_SIZE", raising=False)
+        input_dir = temp_workspace / "input"
+        output_dir = temp_workspace / "output"
+        input_dir.mkdir(parents=True)
+        output_dir.mkdir(parents=True)
+
+        with patch("subprocess.run") as mock_run, patch("subprocess.Popen") as mock_popen:
+            mock_run.return_value = MagicMock(returncode=0, stdout="{}", stderr="")
+            _mock_successful_popen(mock_popen)
+            docker_runner.run(
+                image="test/image:latest",
+                command="python main.py",
+                input_dir=input_dir,
+                output_dir=output_dir,
+            )
+            call_args = mock_popen.call_args[0][0]
+            idx = call_args.index("--shm-size")
+            assert call_args[idx + 1] == "1g"
+
+    def test_shm_size_env_override(self, temp_workspace, monkeypatch):
+        monkeypatch.setenv("LANDSEER_DOCKER_SHM_SIZE", "2g")
+        runner = DockerRunner(workspace_dir=temp_workspace, gpu_id=0)
+        input_dir = temp_workspace / "input"
+        output_dir = temp_workspace / "output"
+        input_dir.mkdir(parents=True)
+        output_dir.mkdir(parents=True)
+
+        with patch("subprocess.run") as mock_run, patch("subprocess.Popen") as mock_popen:
+            mock_run.return_value = MagicMock(returncode=0, stdout="{}", stderr="")
+            _mock_successful_popen(mock_popen)
+            runner.run(
+                image="test/image:latest",
+                command="python main.py",
+                input_dir=input_dir,
+                output_dir=output_dir,
+            )
+            call_args = mock_popen.call_args[0][0]
+            idx = call_args.index("--shm-size")
+            assert call_args[idx + 1] == "2g"
+
+
+# ============================================================================
 # Test: Volume Mount Security
 # ============================================================================
 
