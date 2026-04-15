@@ -179,7 +179,11 @@ def initialize_backend(
                 logger.info(f"Dataset prepared: {ds_info.train_samples} train, {ds_info.test_samples} test")
 
                 if store and store.is_available:
-                    dataset_key = f"datasets/{config.dataset.name}/{config.dataset.variant}"
+                    # Use the actual output directory name (e.g. "poisoned_a3f9c2b1" for
+                    # poisoned datasets) so different poisoning configs get distinct keys
+                    # and never overwrite each other on MinIO.
+                    dir_suffix = Path(ds_info.output_dir).name  # "clean" or "poisoned_<hash>"
+                    dataset_key = f"datasets/{config.dataset.name}/{dir_suffix}"
                     try:
                         store.upload_directory(ds_info.output_dir, dataset_key)
                         dataset_info["minio_key"] = dataset_key

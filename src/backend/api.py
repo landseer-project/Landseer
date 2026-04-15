@@ -58,9 +58,11 @@ class ContainerInfo(BaseModel):
 
 class ToolInfo(BaseModel):
     """Tool information for a task."""
-    name: str = Field(description="Tool name")
+    name: str = Field(description="Tool display name")
+    key: Optional[str] = Field(default=None, description="Registry key (YAML key) used in tools_override")
     container: ContainerInfo = Field(description="Container configuration")
     is_baseline: bool = Field(default=False, description="Whether this is a baseline tool")
+    defense_stage: Optional[str] = Field(default=None, description="Pipeline stage this tool belongs to")
 
 
 class TaskResponse(BaseModel):
@@ -383,11 +385,25 @@ class SchedulerState:
         self.workers[worker_id]["last_heartbeat"] = datetime.now().isoformat()
         if status:
             self.workers[worker_id]["status"] = status
+            if (
+                status == "idle"
+                and self.workers[worker_id].get("current_task_id")
+                and self.scheduler is not None
+            ):
+                # Worker claims to be idle while still owning a running task.
+                # This most commonly happens after claim/report timeouts and can deadlock progress.
+                stale_task_id = self.workers[worker_id]["current_task_id"]
+                stale_task = self.scheduler._find_task_by_id(stale_task_id)
+                if stale_task and stale_task.status == TaskStatus.RUNNING:
+                    stale_task.status = TaskStatus.PENDING
+                    self.workers[worker_id]["current_task_id"] = None
+                    logger.warning(
+                        f"Reclaimed stale running task {stale_task_id} from idle heartbeat worker {worker_id}"
+                    )
         
         # Persist to database
         if self.db_service:
             self.db_service.update_worker_heartbeat(worker_id, status)
-        
         return True
     
     def assign_task_to_worker(self, worker_id: str, task_id: str) -> None:
@@ -505,7 +521,8 @@ class SchedulerState:
                     "command": tool.container.command,
                     "runtime": tool.container.runtime
                 },
-                "is_baseline": tool.is_baseline
+                "is_baseline": tool.is_baseline,
+                "defense_stage": tool.defense_stage,
             }
         result.update(self._custom_tools)
         return result
@@ -653,6 +670,45 @@ async def lifespan(app: FastAPI):
         logger.info("No pipeline loaded at startup — running in headless mode. "
                      "Trigger runs via POST /api/pipeline-configs/<config_id>/runs")
 
+    # Mark any pipeline runs that were RUNNING/STOPPING/PENDING as CANCELLED.
+    # These are runs that were interrupted by a previous backend crash or Ctrl+C and
+    # will never complete; leaving them as RUNNING would show a stale badge in the UI.
+    try:
+        from ..db.models import PipelineRunModel, PipelineRunStatus
+        from ..db import session_scope
+        from datetime import datetime
+
+        with session_scope() as session:
+            stale_statuses = [
+                PipelineRunStatus.RUNNING,
+                PipelineRunStatus.STOPPING,
+                PipelineRunStatus.PENDING,
+            ]
+            stale_runs = session.query(PipelineRunModel).filter(
+                PipelineRunModel.status.in_(stale_statuses)
+            ).all()
+            if stale_runs:
+                for run in stale_runs:
+                    run.status = PipelineRunStatus.CANCELLED
+                    run.error_message = "Backend restarted — run was interrupted"
+                    if not run.completed_at:
+                        run.completed_at = datetime.utcnow()
+                logger.info(
+                    f"Startup cleanup: marked {len(stale_runs)} stale run(s) as CANCELLED "
+                    f"(ids: {[r.id for r in stale_runs]})"
+                )
+    except Exception as e:
+        logger.warning(f"Startup cleanup of stale pipeline runs failed: {e}", exc_info=True)
+
+    # Pre-load the tool registry so /tools is populated before any pipeline runs.
+    # This means Custom Run can show the tool list even with no active run.
+    try:
+        from ..pipeline.config_loader import init_tool_registry
+        init_tool_registry("configs/tools.yaml")
+        logger.info("Tool registry pre-loaded from configs/tools.yaml")
+    except Exception as e:
+        logger.warning(f"Could not pre-load tool registry: {e}")
+
     # Start the background stale-worker reclaim loop
     reclaim_task = asyncio.create_task(
         _stale_worker_reclaim_loop(_scheduler_state, check_interval=60.0, stale_timeout=90.0)
@@ -793,7 +849,6 @@ async def get_next_task(
         )
     
     logger.info(f"Dispatching task {task.id} ({task.tool.name}) to worker")
-    
     return NextTaskResponse(
         has_task=True,
         task=task_to_response(task, state),
@@ -913,7 +968,6 @@ async def get_all_tasks(
         tasks = scheduler.get_all_tasks()
     
     task_responses = [task_to_response(t, state) for t in tasks]
-    
     return TaskListResponse(
         tasks=task_responses,
         total=len(task_responses)
@@ -1181,12 +1235,13 @@ async def reclaim_stale_tasks(state: SchedulerState = Depends(get_scheduler_stat
         for w in state.workers.values()
         if w.get("current_task_id")
     }
+    unclaimed_running: List[str] = []
     for task in state.scheduler.get_all_tasks():
         if task.status == TaskStatus.RUNNING and task.id not in claimed_task_ids and task.id not in reclaimed:
             task.status = TaskStatus.PENDING
             reclaimed.append(task.id)
+            unclaimed_running.append(task.id)
             logger.info(f"Reclaimed unclaimed task {task.id} (no worker assigned)")
-
     logger.info(f"Manual reclaim: {len(reclaimed)} task(s) reset to pending")
     return {
         "success": True,
@@ -1366,8 +1421,7 @@ async def get_worker_current_task(
 @app.post("/workers/{worker_id}/claim", response_model=NextTaskResponse, tags=["Workers"])
 async def worker_claim_task(
     worker_id: str,
-    state: SchedulerState = Depends(get_scheduler_state),
-    scheduler: Scheduler = Depends(get_scheduler)
+    state: SchedulerState = Depends(get_scheduler_state)
 ):
     """
     Claim the next available task for a specific worker.
@@ -1376,7 +1430,14 @@ async def worker_claim_task(
     """
     if worker_id not in state.workers:
         raise HTTPException(status_code=404, detail=f"Worker '{worker_id}' not found")
+    if not state.is_initialized() or state.scheduler is None:
+        return NextTaskResponse(
+            has_task=False,
+            task=None,
+            message="Scheduler not initialized yet. Start or resume a pipeline run.",
+        )
     
+    scheduler = state.scheduler
     task = scheduler.get_next_task()
     
     if task is None:
@@ -1387,14 +1448,12 @@ async def worker_claim_task(
             message = "All tasks completed."
         else:
             message = "No tasks available."
-        
         return NextTaskResponse(has_task=False, task=None, message=message)
     
     # Associate task with worker
     state.assign_task_to_worker(worker_id, task.id)
     state.store_task_metadata(task_id=task.id, worker_id=worker_id)
     logger.info(f"Task {task.id} claimed by worker {worker_id}")
-    
     return NextTaskResponse(
         has_task=True,
         task=task_to_response(task, state),
@@ -1510,7 +1569,7 @@ async def get_workflow_results(
 async def list_tools(state: SchedulerState = Depends(get_scheduler_state)):
     """Get all available tools."""
     tools_dict = state.get_all_tools()
-    
+
     tools = []
     for name, data in tools_dict.items():
         container = data.get("container", {})
@@ -1521,9 +1580,10 @@ async def list_tools(state: SchedulerState = Depends(get_scheduler_state)):
                 command=container.get("command", ""),
                 runtime=container.get("runtime")
             ),
-            is_baseline=data.get("is_baseline", False)
+            is_baseline=data.get("is_baseline", False),
+            defense_stage=data.get("defense_stage"),
         ))
-    
+
     return ToolListResponse(tools=tools, total=len(tools))
 
 
@@ -1932,20 +1992,22 @@ class AddEvaluatorRequest(BaseModel):
 async def registry_list_tools(state: SchedulerState = Depends(get_scheduler_state)):
     """Get all registered tools from the registry."""
     tools_dict = state.get_all_tools()
-    
+
     tools = []
     for name, data in tools_dict.items():
         container = data.get("container", {})
         tools.append(ToolInfo(
             name=data.get("name", name),
+            key=name,  # YAML registry key, used for tools_override
             container=ContainerInfo(
                 image=container.get("image", ""),
                 command=container.get("command", ""),
                 runtime=container.get("runtime")
             ),
-            is_baseline=data.get("is_baseline", False)
+            is_baseline=data.get("is_baseline", False),
+            defense_stage=data.get("defense_stage"),
         ))
-    
+
     return ToolListResponse(tools=tools, total=len(tools))
 
 
@@ -2047,6 +2109,7 @@ class WorkflowMetrics(BaseModel):
     metrics: Dict[str, Optional[float]] = Field(description="Metric name to value mapping")
     evaluators_run: List[str] = Field(description="Evaluators that ran")
     evaluators_skipped: List[str] = Field(description="Evaluators that skipped")
+    is_baseline: bool = Field(default=False, description="Whether this workflow uses only baseline (noop) tools")
 
 
 class PipelineMetricsResponse(BaseModel):
@@ -2121,12 +2184,14 @@ async def get_pipeline_metrics(
 
                     for wf in pipeline.workflows:
                         wf_data = by_workflow.get(wf.id, {"metrics": {}, "run": [], "skipped": []})
+                        non_eval = [t for t in wf.tasks if t.task_type != TaskType.EVALUATION]
                         all_metrics.append(WorkflowMetrics(
                             workflow_id=wf.id,
                             workflow_name=wf.name,
                             metrics=wf_data["metrics"],
                             evaluators_run=wf_data["run"],
-                            evaluators_skipped=wf_data["skipped"]
+                            evaluators_skipped=wf_data["skipped"],
+                            is_baseline=bool(non_eval) and all(t.tool.is_baseline for t in non_eval),
                         ))
 
         except Exception as e:
@@ -2171,23 +2236,27 @@ async def get_pipeline_metrics(
         
         for wf in pipeline.workflows:
             wf_data = by_workflow.get(wf.id, {"metrics": {}, "run": [], "skipped": []})
+            non_eval = [t for t in wf.tasks if t.task_type != TaskType.EVALUATION]
             all_metrics.append(WorkflowMetrics(
                 workflow_id=wf.id,
                 workflow_name=wf.name,
                 metrics=wf_data["metrics"],
                 evaluators_run=wf_data["run"],
-                evaluators_skipped=wf_data["skipped"]
+                evaluators_skipped=wf_data["skipped"],
+                is_baseline=bool(non_eval) and all(t.tool.is_baseline for t in non_eval),
             ))
-    
+
     # If still no results, return empty metrics
     if not all_metrics:
         for wf in pipeline.workflows:
+            non_eval = [t for t in wf.tasks if t.task_type != TaskType.EVALUATION]
             all_metrics.append(WorkflowMetrics(
                 workflow_id=wf.id,
                 workflow_name=wf.name,
                 metrics={},
                 evaluators_run=[],
-                evaluators_skipped=[]
+                evaluators_skipped=[],
+                is_baseline=bool(non_eval) and all(t.tool.is_baseline for t in non_eval),
             ))
     
     # Calculate summary statistics
@@ -2300,6 +2369,17 @@ class StartPipelineRunRequest(BaseModel):
     combo_id: Optional[str] = Field(default=None, description="Specific combination ID to run (optional)")
     dry_run: bool = Field(default=False, description="Dry run mode (validate only)")
     attack_config_path: Optional[str] = Field(default=None, description="Override attack config path")
+    dataset_name: Optional[str] = Field(default=None, description="Override dataset name (e.g. cifar10, celeba)")
+    dataset_variant: Optional[str] = Field(default=None, description="Override dataset variant (clean or poisoned)")
+    tools_override: Optional[Dict[str, List[str]]] = Field(
+        default=None,
+        description="Override tool lists per stage. Keys are stage names; values are ordered tool name lists. "
+                    "Stored as-is and locked for the duration of the run."
+    )
+    model_script: Optional[str] = Field(
+        default=None,
+        description="Override model script path (e.g. configs/model/config_model_resnet.py)"
+    )
 
 
 class PipelineRunResponse(BaseModel):
@@ -2308,6 +2388,11 @@ class PipelineRunResponse(BaseModel):
     pipeline_config_id: str = Field(description="Config ID")
     run_number: int = Field(description="Run number for this config")
     use_cache: bool = Field(description="Whether cache was used")
+    tools_config: Optional[Dict[str, List[str]]] = Field(
+        default=None,
+        description="Locked tool configuration snapshot (stage → tool names). "
+                    "Set at run start and immutable for the lifetime of the run."
+    )
     status: str = Field(description="Run status")
     error_message: Optional[str] = Field(default=None, description="Error message if failed")
     created_at: str = Field(description="Creation timestamp")
@@ -2386,6 +2471,23 @@ async def get_pipeline_config(config_id: str):
         raise HTTPException(status_code=500, detail=f"Failed to get pipeline config: {str(e)}")
 
 
+@app.get("/api/model-configs", tags=["Pipeline Configs"])
+async def list_model_configs():
+    """List available model configuration scripts."""
+    import glob as glob_mod
+    scripts = sorted(glob_mod.glob("configs/model/*.py"))
+    return {
+        "models": [
+            {
+                "path": s,
+                "name": Path(s).stem,
+            }
+            for s in scripts
+        ],
+        "total": len(scripts),
+    }
+
+
 @app.post("/api/pipeline-configs/{config_id}/runs", response_model=PipelineRunResponse, tags=["Pipeline Runs"])
 async def start_pipeline_run(
     config_id: str,
@@ -2398,16 +2500,15 @@ async def start_pipeline_run(
         from ..db import get_session, session_scope, PipelineRunRepository, PipelineRunStatus
         from ..pipeline.config_loader import create_pipeline_from_config, load_pipeline_config
         from ..data import DatasetManager
-        from ..pipeline.tasks import generate_pipeline_id
         import uuid
         from datetime import datetime
-        
+
         # Get config
         config = get_config_by_id(config_id)
         if not config:
             raise HTTPException(status_code=404, detail=f"Pipeline config '{config_id}' not found")
-        
-        # Check for active runs
+
+        # ── Step 1: DB check + create run record (short-lived session) ──────────
         with session_scope() as session:
             run_repo = PipelineRunRepository(session)
             active_runs = run_repo.get_active_runs_for_config(config_id)
@@ -2416,101 +2517,118 @@ async def start_pipeline_run(
                     status_code=409,
                     detail=f"Cannot start new run: {len(active_runs)} active run(s) already exist for this config"
                 )
-            
-            # Create new run
             run_number = run_repo.get_next_run_number(config_id)
             run_id = f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
-            
-            run = run_repo.create({
+            run_obj = run_repo.create({
                 "id": run_id,
                 "pipeline_config_id": config_id,
                 "run_number": run_number,
                 "use_cache": request.use_cache,
+                "tools_config": request.tools_override,
                 "status": PipelineRunStatus.PENDING,
             })
-            
-            # Load pipeline from config
-            attack_config_path = request.attack_config_path or config.attack_config_path
-            pipeline = create_pipeline_from_config(
-                config_path=config.config_path,
-                tools_yaml_path="configs/tools.yaml",
-                evaluators_yaml_path="configs/evaluators.yaml",
-                pipeline_name=f"{config.name} (Run {run_number})",
-                clear_registry=True,
-                include_evaluation=True
-            )
-            
-            # Set pipeline ID to run_id
-            pipeline.id = run_id
-            
-            # Set run_id on all tasks and workflows
-            for workflow in pipeline.workflows:
-                workflow.pipeline_id = run_id
-                workflow.run_id = run_id
-                for task in workflow.tasks:
-                    task.pipeline_id = run_id
-                    task.run_id = run_id
+            # Capture fields before session closes
+            run_id_val = run_obj.id
+            run_number_val = run_obj.run_number
+            run_use_cache = run_obj.use_cache
+            run_tools_config = run_obj.tools_config
+            run_status = run_obj.status.value
+            run_error = run_obj.error_message
+            run_created_at = run_obj.created_at.isoformat()
+            run_started_at = run_obj.started_at.isoformat() if run_obj.started_at else None
+        # ── session closed here; SQLite lock released ──────────────────────────
 
-            # Keep backend context aligned with API-triggered runs in headless mode.
-            # Workers rely on /dataset to fetch prepared dataset paths.
-            ctx = get_backend_context()
-            if ctx:
-                ctx.pipeline = pipeline
-                try:
-                    cfg = load_pipeline_config(config.config_path)
-                    current_ds = ctx.dataset_info or {}
-                    needs_prepare = (
-                        not current_ds
-                        or current_ds.get("name") != cfg.dataset.name
-                        or current_ds.get("variant") != cfg.dataset.variant
+        # ── Step 2: Create pipeline (CPU-bound, no DB session held) ────────────
+        pipeline = create_pipeline_from_config(
+            config_path=config.config_path,
+            tools_yaml_path="configs/tools.yaml",
+            evaluators_yaml_path="configs/evaluators.yaml",
+            pipeline_name=f"{config.name} (Run {run_number_val})",
+            clear_registry=True,
+            include_evaluation=True,
+            dataset_name=request.dataset_name or None,
+            dataset_variant=request.dataset_variant or None,
+            tools_override=request.tools_override or None,
+            model_script=request.model_script or None,
+        )
+
+        # Bind pipeline and all tasks/workflows to this run's ID
+        pipeline.id = run_id
+        for workflow in pipeline.workflows:
+            workflow.pipeline_id = run_id
+            workflow.run_id = run_id
+            for task in workflow.tasks:
+                task.pipeline_id = run_id
+                task.run_id = run_id
+
+        # ── Step 3: Dataset context (best-effort, no session held) ─────────────
+        ctx = get_backend_context()
+        if ctx:
+            ctx.pipeline = pipeline
+            try:
+                cfg = load_pipeline_config(config.config_path)
+                effective_ds_name = request.dataset_name or cfg.dataset.name
+                effective_ds_variant = request.dataset_variant or cfg.dataset.variant
+                current_ds = ctx.dataset_info or {}
+                needs_prepare = (
+                    not current_ds
+                    or current_ds.get("name") != effective_ds_name
+                    or current_ds.get("variant") != effective_ds_variant
+                )
+                if needs_prepare:
+                    base_dir = Path("./data").resolve()
+                    manager = ctx.dataset_manager or DatasetManager(base_dir)
+                    poisoning = None
+                    if effective_ds_variant == "poisoned":
+                        poisoning = cfg.dataset.params.get("poisoning")
+                    cfg.dataset.name = effective_ds_name
+                    cfg.dataset.variant = effective_ds_variant
+                    ds_info = manager.prepare_dataset(
+                        name=cfg.dataset.name,
+                        variant=cfg.dataset.variant,
+                        poisoning=poisoning,
+                        **cfg.dataset.params,
                     )
-                    if needs_prepare:
-                        base_dir = Path("./data").resolve()
-                        manager = ctx.dataset_manager or DatasetManager(base_dir)
-                        poisoning = None
-                        if cfg.dataset.variant == "poisoned":
-                            poisoning = cfg.dataset.params.get("poisoning")
-                        ds_info = manager.prepare_dataset(
-                            name=cfg.dataset.name,
-                            variant=cfg.dataset.variant,
-                            poisoning=poisoning,
-                            **cfg.dataset.params,
-                        )
-                        if ds_info:
-                            ctx.dataset_info = ds_info.to_dict()
-                            ctx.dataset_manager = manager
-                            if ctx.store and ctx.store.is_available:
-                                dataset_key = f"datasets/{cfg.dataset.name}/{cfg.dataset.variant}"
-                                try:
-                                    ctx.store.upload_directory(ds_info.output_dir, dataset_key)
-                                    ctx.dataset_info["minio_key"] = dataset_key
-                                except Exception as e:
-                                    logger.warning(f"Failed to upload dataset to MinIO: {e}")
-                except Exception as e:
-                    logger.warning(f"Dataset context setup failed for run {run_id}: {e}")
-                set_backend_context(ctx)
-            
-            # Initialize scheduler with this pipeline
-            state.initialize(pipeline, scheduler_type="priority")
-            
-            # Update run status to running
+                    if ds_info:
+                        ctx.dataset_info = ds_info.to_dict()
+                        ctx.dataset_manager = manager
+                        if ctx.store and ctx.store.is_available:
+                            dir_suffix = Path(ds_info.output_dir).name
+                            dataset_key = f"datasets/{cfg.dataset.name}/{dir_suffix}"
+                            try:
+                                ctx.store.upload_directory(ds_info.output_dir, dataset_key)
+                                ctx.dataset_info["minio_key"] = dataset_key
+                            except Exception as e:
+                                logger.warning(f"Failed to upload dataset to MinIO: {e}")
+            except Exception as e:
+                logger.warning(f"Dataset context setup failed for run {run_id}: {e}")
+            set_backend_context(ctx)
+
+        # ── Step 4: Initialize scheduler ────────────────────────────────────────
+        state.initialize(pipeline, scheduler_type="priority")
+
+        # ── Step 5: Update run status + sync pipeline (separate session) ────────
+        with session_scope() as session:
+            run_repo = PipelineRunRepository(session)
             run_repo.update_status(run_id, PipelineRunStatus.RUNNING)
-            
-            # Sync pipeline to DB
-            if state.db_service and state.db_service.is_available():
-                state.db_service.sync_pipeline_to_db(pipeline)
-            
-            return PipelineRunResponse(
-                id=run.id,
-                pipeline_config_id=run.pipeline_config_id,
-                run_number=run.run_number,
-                use_cache=run.use_cache,
-                status=run.status.value,
-                error_message=run.error_message,
-                created_at=run.created_at.isoformat(),
-                started_at=run.started_at.isoformat() if run.started_at else None,
-                completed_at=run.completed_at.isoformat() if run.completed_at else None,
-            )
+            run_status = PipelineRunStatus.RUNNING.value
+
+        # sync_pipeline_to_db opens its own session; safe now that Step 5 is done
+        if state.db_service and state.db_service.is_available():
+            state.db_service.sync_pipeline_to_db(pipeline)
+
+        return PipelineRunResponse(
+            id=run_id_val,
+            pipeline_config_id=config_id,
+            run_number=run_number_val,
+            use_cache=run_use_cache,
+            tools_config=run_tools_config,
+            status=run_status,
+            error_message=run_error,
+            created_at=run_created_at,
+            started_at=run_started_at,
+            completed_at=None,
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -2536,6 +2654,7 @@ async def get_pipeline_run(run_id: str):
                 pipeline_config_id=run.pipeline_config_id,
                 run_number=run.run_number,
                 use_cache=run.use_cache,
+                tools_config=run.tools_config,
                 status=run.status.value,
                 error_message=run.error_message,
                 created_at=run.created_at.isoformat(),
@@ -2547,6 +2666,98 @@ async def get_pipeline_run(run_id: str):
     except Exception as e:
         logger.error(f"Failed to get pipeline run {run_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get pipeline run: {str(e)}")
+
+
+@app.get("/api/pipeline-runs/{run_id}/metrics", response_model=PipelineMetricsResponse, tags=["Metrics"])
+async def get_pipeline_run_metrics(run_id: str):
+    """
+    Get evaluation metrics for all workflows in a historical pipeline run.
+
+    Unlike /pipelines/{pipeline_id}/metrics this endpoint is purely DB-backed
+    and does NOT require the scheduler to have this run's pipeline in memory.
+    It works for any completed (or partially-completed) run.
+    """
+    try:
+        from ..db import session_scope
+        from ..db.models import EvaluationResultModel, WorkflowModel
+
+        with session_scope() as session:
+            workflows = session.query(WorkflowModel).filter(
+                WorkflowModel.run_id == run_id
+            ).all()
+
+            if not workflows:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No workflows found for run '{run_id}'"
+                )
+
+            results = session.query(EvaluationResultModel).filter(
+                EvaluationResultModel.run_id == run_id
+            ).all()
+
+            # Group evaluation results by workflow
+            by_workflow: dict = {}
+            metric_names: set = set()
+            for r in results:
+                if r.workflow_id not in by_workflow:
+                    by_workflow[r.workflow_id] = {"metrics": {}, "run": [], "skipped": []}
+                if r.skipped:
+                    by_workflow[r.workflow_id]["skipped"].append(r.evaluator_name)
+                else:
+                    by_workflow[r.workflow_id]["run"].append(r.evaluator_name)
+                for metric_name, value in (r.metrics or {}).items():
+                    by_workflow[r.workflow_id]["metrics"][metric_name] = value
+                    metric_names.add(metric_name)
+
+            # Build per-workflow metrics; determine is_baseline from DB task records
+            all_metrics = []
+            for wf in workflows:
+                non_eval_tasks = [t for t in wf.tasks if t.task_type != "evaluation"]
+                is_baseline = bool(non_eval_tasks) and all(
+                    t.tool_is_baseline for t in non_eval_tasks
+                )
+                wf_data = by_workflow.get(wf.id, {"metrics": {}, "run": [], "skipped": []})
+                all_metrics.append(WorkflowMetrics(
+                    workflow_id=wf.id,
+                    workflow_name=wf.name,
+                    metrics=wf_data["metrics"],
+                    evaluators_run=wf_data["run"],
+                    evaluators_skipped=wf_data["skipped"],
+                    is_baseline=is_baseline,
+                ))
+
+            # Compute summary statistics
+            summary: dict = {}
+            for metric_name in metric_names:
+                values = [
+                    wf.metrics.get(metric_name)
+                    for wf in all_metrics
+                    if wf.metrics.get(metric_name) is not None
+                ]
+                if values:
+                    summary[metric_name] = {
+                        "min": min(values),
+                        "max": max(values),
+                        "avg": sum(values) / len(values),
+                        "count": len(values),
+                    }
+                else:
+                    summary[metric_name] = {"min": None, "max": None, "avg": None, "count": 0}
+
+            return PipelineMetricsResponse(
+                pipeline_id=run_id,
+                pipeline_name=run_id,
+                workflow_count=len(workflows),
+                metric_names=sorted(metric_names),
+                workflows=all_metrics,
+                summary=summary,
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get metrics for run {run_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get run metrics: {str(e)}")
 
 
 @app.get("/api/pipeline-configs/{config_id}/runs", response_model=PipelineRunListResponse, tags=["Pipeline Runs"])
@@ -2566,6 +2777,7 @@ async def get_pipeline_runs(config_id: str):
                         pipeline_config_id=run.pipeline_config_id,
                         run_number=run.run_number,
                         use_cache=run.use_cache,
+                        tools_config=run.tools_config,
                         status=run.status.value,
                         error_message=run.error_message,
                         created_at=run.created_at.isoformat(),
@@ -2598,6 +2810,7 @@ async def list_all_pipeline_runs(config_id: Optional[str] = Query(default=None))
                         pipeline_config_id=run.pipeline_config_id,
                         run_number=run.run_number,
                         use_cache=run.use_cache,
+                        tools_config=run.tools_config,
                         status=run.status.value,
                         error_message=run.error_message,
                         created_at=run.created_at.isoformat(),
@@ -2664,6 +2877,7 @@ async def stop_pipeline_run(
                 pipeline_config_id=run.pipeline_config_id,
                 run_number=run.run_number,
                 use_cache=run.use_cache,
+                tools_config=run.tools_config,
                 status=run.status.value,
                 error_message=run.error_message,
                 created_at=run.created_at.isoformat(),
@@ -2763,6 +2977,7 @@ async def restart_pipeline_run(
                 pipeline_config_id=new_run.pipeline_config_id,
                 run_number=new_run.run_number,
                 use_cache=new_run.use_cache,
+                tools_config=new_run.tools_config,
                 status=new_run.status.value,
                 error_message=new_run.error_message,
                 created_at=new_run.created_at.isoformat(),

@@ -40,6 +40,25 @@ def _link_or_copy(src: Path, dst: Path) -> None:
             raise
 
 
+def _mirror_tree_link_or_copy(src_dir: Path, dst_dir: Path) -> None:
+    """Replicate *src_dir* under *dst_dir* using hard links for regular files where possible."""
+    if not src_dir.is_dir():
+        raise ValueError(f"expected directory: {src_dir}")
+    for dirpath, _dirnames, filenames in os.walk(src_dir, followlinks=False):
+        rel = Path(dirpath).relative_to(src_dir)
+        target_dir = dst_dir / rel
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for name in filenames:
+            s = Path(dirpath) / name
+            d = target_dir / name
+            if d.exists() or d.is_symlink():
+                d.unlink()
+            if s.is_symlink():
+                shutil.copy2(s, d, follow_symlinks=False)
+            elif s.is_file():
+                _link_or_copy(s, d)
+
+
 @dataclass
 class ExecutionResult:
     """Result of a task execution."""
@@ -683,30 +702,7 @@ class TaskRunner:
         input_dir = task_dir / "input"
         output_dir = task_dir / "output"
         logs_dir = task_dir / "logs"
-        # #region agent log
-        try:
-            import json as _json
-            import time as _time
-            with open("/share/landseer/workspace-ayushi/Landseer/.cursor/debug-dc31d4.log", "a") as _df:
-                _df.write(_json.dumps({
-                    "sessionId": "dc31d4",
-                    "runId": getattr(task, "run_id", "unknown"),
-                    "hypothesisId": "H1_H2",
-                    "location": "worker/runner.py:_setup_task_workspace",
-                    "message": "workspace_pre_cleanup_state",
-                    "data": {
-                        "task_id": task.id,
-                        "input_exists": input_dir.exists(),
-                        "output_exists": output_dir.exists(),
-                        "output_is_symlink": output_dir.is_symlink(),
-                        "output_is_dir": output_dir.is_dir(),
-                    },
-                    "timestamp": int(_time.time() * 1000),
-                }) + "\n")
-        except Exception:
-            pass
-        # #endregion
-        
+
         # Clean up old input/output directories on re-runs (but keep logs)
         for d in [input_dir, output_dir]:
             if d.exists():
@@ -714,35 +710,8 @@ class TaskRunner:
         
         # Create directories
         for d in [task_dir, input_dir, output_dir, logs_dir]:
-            try:
-                d.mkdir(parents=True, exist_ok=True)
-            except Exception as e:
-                # #region agent log
-                try:
-                    import json as _json
-                    import time as _time
-                    with open("/share/landseer/workspace-ayushi/Landseer/.cursor/debug-dc31d4.log", "a") as _df:
-                        _df.write(_json.dumps({
-                            "sessionId": "dc31d4",
-                            "runId": getattr(task, "run_id", "unknown"),
-                            "hypothesisId": "H1_H2_H3",
-                            "location": "worker/runner.py:_setup_task_workspace",
-                            "message": "mkdir_failed",
-                            "data": {
-                                "task_id": task.id,
-                                "path": str(d),
-                                "error": str(e),
-                                "path_exists": d.exists(),
-                                "path_is_symlink": d.is_symlink(),
-                                "path_is_dir": d.is_dir(),
-                            },
-                            "timestamp": int(_time.time() * 1000),
-                        }) + "\n")
-                except Exception:
-                    pass
-                # #endregion
-                raise
-        
+            d.mkdir(parents=True, exist_ok=True)
+
         return task_dir, input_dir, output_dir
     
     def _cleanup_task_workspace(self, task_dir: Path, keep_logs: bool = True) -> None:
@@ -874,19 +843,30 @@ class TaskRunner:
         task_dir, input_dir, output_dir = self._setup_task_workspace(task)
         
         try:
-            # Copy/link input data if provided
+            # Copy/link input data if provided (hard-link when same FS to save space)
             if input_path and input_path.exists():
                 if input_path.is_dir():
-                    # Copy or symlink input directory contents
                     for item in input_path.iterdir():
                         dest = input_dir / item.name
-                        if item.is_file():
-                            shutil.copy2(item, dest)
+                        if item.is_file() or item.is_symlink():
+                            if dest.exists() or dest.is_symlink():
+                                dest.unlink()
+                            if item.is_symlink():
+                                shutil.copy2(item, dest, follow_symlinks=False)
+                            else:
+                                _link_or_copy(item, dest)
                         elif item.is_dir():
-                            # Use dirs_exist_ok=True to handle re-runs
-                            shutil.copytree(item, dest, dirs_exist_ok=True)
+                            if dest.exists():
+                                shutil.rmtree(dest)
+                            _mirror_tree_link_or_copy(item, dest)
                 else:
-                    shutil.copy2(input_path, input_dir / input_path.name)
+                    dest = input_dir / input_path.name
+                    if dest.exists() or dest.is_symlink():
+                        dest.unlink()
+                    if input_path.is_symlink():
+                        shutil.copy2(input_path, dest, follow_symlinks=False)
+                    else:
+                        _link_or_copy(input_path, dest)
             
             # Merge ancestor outputs into input_dir earliest-first; later entries
             # override earlier ones on filename collision (e.g. post_dp's model.pt
@@ -923,45 +903,24 @@ class TaskRunner:
             # Copy model script to input directory if provided.
             # Always named config_model.py so containers can do
             # "from config_model import config" regardless of the source filename.
+            # Unlink first so a root-owned file merged from an ancestor cannot block writes.
             if model_script_path and model_script_path.exists():
                 dest_path = input_dir / "config_model.py"
-                shutil.copy2(model_script_path, dest_path)
-                logger.debug(f"Copied model script to: {dest_path}")
-            # #region agent log
-            try:
-                import hashlib as _hashlib
-                import json as _json
-                import time as _time
-                _in_model = input_dir / "model.pt"
-                _model_hash = None
-                if _in_model.exists():
-                    _h = _hashlib.sha256()
-                    with open(_in_model, "rb") as _mf:
-                        for _chunk in iter(lambda: _mf.read(1024 * 1024), b""):
-                            _h.update(_chunk)
-                    _model_hash = _h.hexdigest()
-                with open("/share/landseer/workspace-ayushi/Landseer/.cursor/debug-62ed23.log", "a") as _df:
-                    _df.write(_json.dumps({
-                        "sessionId": "62ed23",
-                        "runId": getattr(task, "run_id", None),
-                        "hypothesisId": "H3_H4_H5",
-                        "location": "worker/runner.py:run_task",
-                        "message": "pre_container_input_state",
-                        "data": {
-                            "task_id": task.id,
-                            "task_tool": task.tool_name,
-                            "input_dir": str(input_dir),
-                            "ancestor_count": len(dirs_to_merge),
-                            "ancestor_dirs": [str(p) for p in dirs_to_merge],
-                            "input_has_model": _in_model.exists(),
-                            "input_model_sha256": _model_hash,
-                        },
-                        "timestamp": int(_time.time() * 1000),
-                    }) + "\n")
-            except Exception:
-                pass
-            # #endregion
-            
+                dest_path.unlink(missing_ok=True)
+                use_symlink = os.environ.get(
+                    "LANDSEER_CONFIG_MODEL_SYMLINK", ""
+                ).lower() in ("1", "true", "yes")
+                if use_symlink:
+                    try:
+                        dest_path.symlink_to(model_script_path.resolve())
+                        logger.debug(f"Symlinked model script to: {dest_path}")
+                    except OSError:
+                        shutil.copy2(model_script_path, dest_path)
+                        logger.debug(f"Copied model script to: {dest_path} (symlink failed)")
+                else:
+                    shutil.copy2(model_script_path, dest_path)
+                    logger.debug(f"Copied model script to: {dest_path}")
+
             # Build environment
             task_env = env or {}
             task_env.update(task.config)  # Add task config to environment

@@ -351,11 +351,7 @@ class LandseerClient:
         """
         if not self.is_registered:
             raise RuntimeError("Worker not registered. Call register() first.")
-        
-        response = self._make_request(
-            "POST",
-            f"/workers/{self._worker_id}/claim"
-        )
+        response = self._make_request("POST", f"/workers/{self._worker_id}/claim")
         result = response.json()
         
         if result.get("has_task"):

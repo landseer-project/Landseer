@@ -1,20 +1,22 @@
 dataset:
   name: cifar10
-  variant: clean
+  variant: poisoned
 model:
-  script: configs/model/config_model_resnet20.py
+  script: configs/model/config_model.py
   framework: pytorch
 pipeline:
   pre_training:
     tools:
+      - pre_xgbod
       - pre_noop
   during_training:
     tools:
-      - in_dp
+      - in_trades
       - in_noop
   post_training:
     tools:
+      - post_fineprune
       - post_noop
   deployment:
     tools:
-      - deploy_noop 
+      - deploy_noop

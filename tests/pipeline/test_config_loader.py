@@ -52,42 +52,49 @@ def tools_yaml_content():
 tools:
   tool_a:
     name: tool_a
+    defense_stage: pre_training
     container:
       image: test/a:v1
       command: python run.py
     is_baseline: true
   tool_b:
     name: tool_b
+    defense_stage: pre_training
     container:
       image: test/b:v1
       command: python run.py
     is_baseline: false
   tool_b2:
     name: tool_b2
+    defense_stage: pre_training
     container:
       image: test/b2:v1
       command: python run.py
     is_baseline: false
   tool_c:
     name: tool_c
+    defense_stage: during_training
     container:
       image: test/c:v1
       command: python run.py
     is_baseline: true
   tool_d:
     name: tool_d
+    defense_stage: during_training
     container:
       image: test/d:v1
       command: python run.py
     is_baseline: false
   tool_e:
     name: tool_e
+    defense_stage: post_training
     container:
       image: test/e:v1
       command: python run.py
     is_baseline: true
   tool_g:
     name: tool_g
+    defense_stage: deployment
     container:
       image: test/g:v1
       command: python run.py
@@ -193,7 +200,11 @@ class TestMakeCombinations:
         Total: 2 * 2 * 1 * 1 = 4 combinations
         """
         init_tool_registry(temp_configs["tools_path"])
-        config = load_pipeline_config(temp_configs["pipeline_path"])
+        config = load_pipeline_config(
+            temp_configs["pipeline_path"],
+            tools_yaml_path=temp_configs["tools_path"],
+            fetch_remote_labels_for_stage_validation=False,
+        )
         combinations = make_combinations(config)
         
         # With the permutation logic:
@@ -207,7 +218,11 @@ class TestMakeCombinations:
     def test_combinations_contain_all_stages(self, temp_configs):
         """Each combination should have all 4 stages."""
         init_tool_registry(temp_configs["tools_path"])
-        config = load_pipeline_config(temp_configs["pipeline_path"])
+        config = load_pipeline_config(
+            temp_configs["pipeline_path"],
+            tools_yaml_path=temp_configs["tools_path"],
+            fetch_remote_labels_for_stage_validation=False,
+        )
         combinations = make_combinations(config)
         
         expected_stages = {"pre_training", "during_training", "post_training", "deployment"}
@@ -218,7 +233,11 @@ class TestMakeCombinations:
     def test_combinations_use_tool_definitions(self, temp_configs):
         """Combinations should contain ToolDefinition objects, not strings."""
         init_tool_registry(temp_configs["tools_path"])
-        config = load_pipeline_config(temp_configs["pipeline_path"])
+        config = load_pipeline_config(
+            temp_configs["pipeline_path"],
+            tools_yaml_path=temp_configs["tools_path"],
+            fetch_remote_labels_for_stage_validation=False,
+        )
         combinations = make_combinations(config)
         
         for combo in combinations:
@@ -229,7 +248,11 @@ class TestMakeCombinations:
     def test_during_training_single_tool_only(self, temp_configs):
         """during_training stage should only have single tool options."""
         init_tool_registry(temp_configs["tools_path"])
-        config = load_pipeline_config(temp_configs["pipeline_path"])
+        config = load_pipeline_config(
+            temp_configs["pipeline_path"],
+            tools_yaml_path=temp_configs["tools_path"],
+            fetch_remote_labels_for_stage_validation=False,
+        )
         combinations = make_combinations(config)
         
         # All during_training entries should have exactly 1 tool
@@ -294,7 +317,11 @@ pipeline:
                 f.write(pipeline_yaml)
             
             init_tool_registry(str(tools_path))
-            config = load_pipeline_config(str(pipeline_path))
+            config = load_pipeline_config(
+                str(pipeline_path),
+                tools_yaml_path=str(tools_path),
+                fetch_remote_labels_for_stage_validation=False,
+            )
             combinations = make_combinations(config)
             
             # pre_training: P(2,2) + P(2,1) + baseline = 2 + 2 + 1 = 5
@@ -331,7 +358,11 @@ class TestCreateWorkflowFromCombination:
     def test_workflow_has_correct_tasks(self, temp_configs):
         """Workflow should have tasks for each tool in the combination."""
         init_tool_registry(temp_configs["tools_path"])
-        config = load_pipeline_config(temp_configs["pipeline_path"])
+        config = load_pipeline_config(
+            temp_configs["pipeline_path"],
+            tools_yaml_path=temp_configs["tools_path"],
+            fetch_remote_labels_for_stage_validation=False,
+        )
         
         # Get tool definitions from registry
         from src.pipeline.tools import get_tool
@@ -359,7 +390,11 @@ class TestCreateWorkflowFromCombination:
     def test_workflow_dependencies_chain_correctly(self, temp_configs):
         """Tasks should have proper stage-to-stage dependencies."""
         init_tool_registry(temp_configs["tools_path"])
-        config = load_pipeline_config(temp_configs["pipeline_path"])
+        config = load_pipeline_config(
+            temp_configs["pipeline_path"],
+            tools_yaml_path=temp_configs["tools_path"],
+            fetch_remote_labels_for_stage_validation=False,
+        )
         
         # Get tool definitions from registry
         from src.pipeline.tools import get_tool
@@ -398,7 +433,11 @@ class TestCreateWorkflowFromCombination:
     def test_task_types_match_stages(self, temp_configs):
         """Tasks should have the correct TaskType for their stage."""
         init_tool_registry(temp_configs["tools_path"])
-        config = load_pipeline_config(temp_configs["pipeline_path"])
+        config = load_pipeline_config(
+            temp_configs["pipeline_path"],
+            tools_yaml_path=temp_configs["tools_path"],
+            fetch_remote_labels_for_stage_validation=False,
+        )
         
         # Get tool definitions from registry
         from src.pipeline.tools import get_tool
@@ -581,7 +620,11 @@ class TestConfigLoaderEdgeCases:
     def test_empty_stage_creates_no_tasks(self, temp_configs):
         """Empty tool list for a stage should create no tasks for that stage."""
         init_tool_registry(temp_configs["tools_path"])
-        config = load_pipeline_config(temp_configs["pipeline_path"])
+        config = load_pipeline_config(
+            temp_configs["pipeline_path"],
+            tools_yaml_path=temp_configs["tools_path"],
+            fetch_remote_labels_for_stage_validation=False,
+        )
         
         # Get tool definitions from registry
         from src.pipeline.tools import get_tool

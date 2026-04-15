@@ -14,8 +14,10 @@ export interface ContainerInfo {
 
 export interface ToolInfo {
   name: string;
+  key?: string | null;  // YAML registry key, use this for tools_override (falls back to name)
   container: ContainerInfo;
   is_baseline: boolean;
+  defense_stage?: string | null;
 }
 
 export interface TaskResponse {
@@ -229,6 +231,8 @@ export interface PipelineRun {
   pipeline_config_id: string;
   run_number: number;
   use_cache: boolean;
+  /** Locked tool configuration snapshot set at run start. Stage → tool name list. */
+  tools_config: Record<string, string[]> | null;
   status: string;
   error_message: string | null;
   created_at: string;

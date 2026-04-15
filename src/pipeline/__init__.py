@@ -61,6 +61,13 @@ from .config_loader import (
     make_combinations,
     get_workflow_generation_summary,
 )
+from .stage_validation import (
+    validate_pipeline_tool_stages,
+    load_tools_and_validate_pipeline_stages,
+    resolve_tools_yaml_path,
+    STAGE_SYNONYMS,
+)
+from .container_labels import get_container_labels_for_image
 
 from .workflow_generator import (
     WorkflowGenerator,
@@ -118,4 +125,10 @@ __all__ = [
     "create_pipeline_from_config",
     "make_combinations",
     "get_workflow_generation_summary",
+    # Stage validation
+    "validate_pipeline_tool_stages",
+    "load_tools_and_validate_pipeline_stages",
+    "resolve_tools_yaml_path",
+    "STAGE_SYNONYMS",
+    "get_container_labels_for_image",
 ]
