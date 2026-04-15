@@ -28,6 +28,7 @@ from .workflow_generator import (
     generate_stage_permutations,
     generate_during_training_options,
 )
+from .stage_validation import load_tools_and_validate_pipeline_stages, resolve_tools_yaml_path
 
 logger = logging.getLogger(__name__)
 
@@ -334,33 +335,58 @@ class PipelineConfig(BaseModel):
         return v
 
 
-def load_pipeline_config(config_path: str) -> PipelineConfig:
+def load_pipeline_config(
+    config_path: str,
+    *,
+    tools_yaml_path: str = "configs/tools.yaml",
+    validate_tool_stages: bool = True,
+    fetch_remote_labels_for_stage_validation: bool = True,
+) -> PipelineConfig:
     """
     Load and validate a pipeline configuration from YAML.
-    
+
+    When ``validate_tool_stages`` is True, each tool id must exist in ``tools_yaml_path``,
+    and any ``defense_stage`` / ``stage`` entry or OCI image stage label must match the
+    pipeline stage the tool is listed under (legacy landseer policy; no id-prefix inference).
+
     Args:
         config_path: Path to the pipeline YAML file
-        
+        tools_yaml_path: Catalog used for stage validation (same file as worker registry)
+        validate_tool_stages: If False, skip tool catalog / stage checks
+        fetch_remote_labels_for_stage_validation: If False, only YAML ``defense_stage`` /
+            ``stage`` is used (no docker/registry label fetch; useful for tests)
+
     Returns:
         Validated PipelineConfig instance
-        
+
     Raises:
         FileNotFoundError: If config file doesn't exist
         ValueError: If config is invalid
     """
     config_file = Path(config_path)
-    
+
     if not config_file.exists():
         raise FileNotFoundError(f"Pipeline configuration file not found: {config_path}")
-    
+
     try:
         with open(config_file, 'r') as f:
             data = yaml.safe_load(f)
-        
+
         config = PipelineConfig.model_validate(data)
+        if validate_tool_stages and resolve_tools_yaml_path(tools_yaml_path).exists():
+            load_tools_and_validate_pipeline_stages(
+                config.pipeline,
+                tools_yaml_path=tools_yaml_path,
+                fetch_remote_labels=fetch_remote_labels_for_stage_validation,
+            )
+        elif validate_tool_stages:
+            logger.warning(
+                "Tools file not found at %s — skipping pipeline stage validation",
+                tools_yaml_path,
+            )
         logger.info(f"Pipeline configuration loaded successfully from {config_path}")
         return config
-        
+
     except yaml.YAMLError as e:
         raise ValueError(f"Failed to parse YAML configuration: {e}")
     except Exception as e:
@@ -382,12 +408,20 @@ def get_stage_tool_definitions(
     actual_tools = []
     baseline_tool = None
     
+    # Build a reverse map (display name → ToolDefinition) for fallback lookup.
+    # This lets tools_override send either the registry key OR the display name.
+    all_tools_dict = get_all_tools()
+    name_to_tool: Dict[str, ToolDefinition] = {t.name: t for t in all_tools_dict.values()}
+
     for tool_name in stage_config.tools:
         tool_def = get_tool(tool_name)
         if tool_def is None:
-            logger.warning(f"Tool '{tool_name}' not found in registry, skipping")
+            # Fallback: try matching by display name (frontend sends this)
+            tool_def = name_to_tool.get(tool_name)
+        if tool_def is None:
+            logger.warning(f"Tool '{tool_name}' not found in registry (tried key and display name), skipping")
             continue
-        
+
         if tool_def.is_baseline:
             baseline_tool = tool_def
         else:
@@ -569,7 +603,11 @@ def create_pipeline_from_config(
     evaluators_yaml_path: str = "configs/evaluators.yaml",
     pipeline_name: Optional[str] = None,
     clear_registry: bool = True,
-    include_evaluation: bool = True
+    include_evaluation: bool = True,
+    dataset_name: Optional[str] = None,
+    dataset_variant: Optional[str] = None,
+    tools_override: Optional[Dict[str, List[str]]] = None,
+    model_script: Optional[str] = None,
 ) -> Pipeline:
     """
     Create a complete Pipeline instance from a configuration file.
@@ -622,14 +660,38 @@ def create_pipeline_from_config(
     # Clear task registry for a fresh start if requested
     if clear_registry:
         clear_task_registry()
-    
-    # Load pipeline configuration
-    config = load_pipeline_config(config_path)
-    
+
+    # Load pipeline configuration (stage validation uses same tools catalog as the worker)
+    config = load_pipeline_config(
+        config_path,
+        tools_yaml_path=tools_yaml_path,
+        validate_tool_stages=True,
+        fetch_remote_labels_for_stage_validation=True,
+    )
+
+    # Apply dataset overrides (e.g. from the UI "Start Run" dialog)
+    if dataset_name is not None:
+        config.dataset.name = dataset_name
+    if dataset_variant is not None:
+        config.dataset.variant = dataset_variant
+
+    # Apply model script override
+    if model_script is not None:
+        config.model.script = model_script
+
+    # Apply tool overrides: replace the tool list for any specified stage.
+    # Unknown stage names are ignored to keep this forward-compatible.
+    if tools_override:
+        for stage_name, tool_names in tools_override.items():
+            if stage_name in config.pipeline:
+                config.pipeline[stage_name] = StageConfig(tools=tool_names)
+            else:
+                logger.warning(f"tools_override: unknown stage '{stage_name}', skipping")
+
     # Determine pipeline name
     if pipeline_name is None:
         pipeline_name = Path(config_path).stem
-    
+
     # Create an empty pipeline first to get its ID
     from .pipeline import DefenseEvaluationPipeline
     pipeline = DefenseEvaluationPipeline(
@@ -697,8 +759,13 @@ def get_workflow_generation_summary(config_path: str, tools_yaml_path: str = "co
         return {"error": "Tools config not found"}
     
     # Load pipeline configuration
-    config = load_pipeline_config(config_path)
-    
+    config = load_pipeline_config(
+        config_path,
+        tools_yaml_path=tools_yaml_path,
+        validate_tool_stages=True,
+        fetch_remote_labels_for_stage_validation=True,
+    )
+
     # Get stage options without creating actual tasks
     stages = ["pre_training", "during_training", "post_training", "deployment"]
     stage_stats = {}

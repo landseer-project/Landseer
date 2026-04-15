@@ -306,6 +306,7 @@ export interface WorkflowMetrics {
   metrics: Record<string, number | null>;
   evaluators_run: string[];
   evaluators_skipped: string[];
+  is_baseline: boolean;
 }
 
 export interface PipelineMetricsResponse {
@@ -409,17 +410,47 @@ export async function getPipelineRunsForConfig(configId: string): Promise<Pipeli
 
 export async function startPipelineRun(
   configId: string,
-  options: { use_cache?: boolean } = {}
+  options: {
+    use_cache?: boolean;
+    dataset_name?: string;
+    dataset_variant?: string;
+    tools_override?: Record<string, string[]> | null;
+    model_script?: string | null;
+  } = {}
 ): Promise<PipelineRun> {
   const { data } = await api.post<PipelineRun>(`/api/pipeline-configs/${configId}/runs`, {
     use_cache: options.use_cache ?? true,
+    dataset_name: options.dataset_name ?? null,
+    dataset_variant: options.dataset_variant ?? null,
+    tools_override: options.tools_override ?? null,
+    model_script: options.model_script ?? null,
   });
+  return data;
+}
+
+export interface ModelConfigInfo {
+  path: string;
+  name: string;
+}
+
+export interface ModelConfigListResponse {
+  models: ModelConfigInfo[];
+  total: number;
+}
+
+export async function getModelConfigs(): Promise<ModelConfigListResponse> {
+  const { data } = await api.get<ModelConfigListResponse>('/api/model-configs');
   return data;
 }
 
 export async function stopPipelineRun(runId: string): Promise<PipelineRun> {
   const { data } = await api.post<PipelineRun>(`/api/pipeline-runs/${runId}/stop`);
   return data;
+}
+
+export async function getRunMetrics(runId: string): Promise<PipelineMetricsResponse> {
+  const { data } = await api.get<PipelineMetricsResponse>(`/api/pipeline-runs/${runId}/metrics`);
+  return normalizePipelineMetricsResponse(data);
 }
 
 export default api;

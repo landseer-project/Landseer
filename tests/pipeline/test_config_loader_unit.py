@@ -106,42 +106,49 @@ def minimal_tools_yaml(tmp_path: Path) -> Path:
 tools:
   pre_noop:
     name: noop
+    defense_stage: pre_training
     is_baseline: true
     container:
       image: img/pre_noop:v1
       command: python main.py
   in_noop:
     name: in_noop
+    defense_stage: during_training
     is_baseline: true
     container:
       image: img/in_noop:v1
       command: python main.py
   post_noop:
     name: post_noop
+    defense_stage: post_training
     is_baseline: true
     container:
       image: img/post_noop:v1
       command: python main.py
   deploy_noop:
     name: deploy_noop
+    defense_stage: deployment
     is_baseline: true
     container:
       image: img/deploy_noop:v1
       command: python main.py
   tool_b:
     name: tool-b
+    defense_stage: pre_training
     is_baseline: false
     container:
       image: img/tool_b:v1
       command: python3 run.py
   tool_b2:
     name: tool-b2
+    defense_stage: pre_training
     is_baseline: false
     container:
       image: img/tool_b2:v1
       command: python3 run.py
   in_tool:
     name: in-tool
+    defense_stage: during_training
     is_baseline: false
     container:
       image: img/in_tool:v1
@@ -152,11 +159,16 @@ tools:
     return f
 
 
-def make_tool(name: str, is_baseline: bool = False) -> ToolDefinition:
+def make_tool(
+    name: str,
+    is_baseline: bool = False,
+    defense_stage: str | None = None,
+) -> ToolDefinition:
     return ToolDefinition(
         name=name,
         container=ContainerConfig(image=f"img/{name}:v1", command="run"),
         is_baseline=is_baseline,
+        defense_stage=defense_stage,
     )
 
 
@@ -302,7 +314,10 @@ class TestLoadPipelineConfig:
     """Tests for load_pipeline_config."""
 
     def test_loads_valid_config(self, minimal_pipeline_yaml):
-        cfg = load_pipeline_config(str(minimal_pipeline_yaml))
+        cfg = load_pipeline_config(
+            str(minimal_pipeline_yaml),
+            fetch_remote_labels_for_stage_validation=False,
+        )
         assert isinstance(cfg, PipelineConfig)
         assert cfg.dataset.name == "cifar10"
 
@@ -332,7 +347,10 @@ pipeline:
             load_pipeline_config(str(f))
 
     def test_stages_loaded_correctly(self, minimal_pipeline_yaml):
-        cfg = load_pipeline_config(str(minimal_pipeline_yaml))
+        cfg = load_pipeline_config(
+            str(minimal_pipeline_yaml),
+            fetch_remote_labels_for_stage_validation=False,
+        )
         assert "pre_training" in cfg.pipeline
         assert "during_training" in cfg.pipeline
         assert "post_training" in cfg.pipeline

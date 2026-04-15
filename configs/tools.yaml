@@ -2,23 +2,35 @@ tools:
   # Pre-training tools
   pre_noop:
     name: noop
+    defense_stage: pre_training
     is_baseline: true
     container:
-      image: ghcr.io/landseer-project/pre_noop:v1
+      image: ghcr.io/landseer-project/pre_noop:v2
       command: python main.py
       runtime: null
 
   pre_xgbod:
     name: pre-xgbod
+    defense_stage: pre_training
     is_baseline: false
     container:
       image: ghcr.io/landseer-project/pre_xgbod:v2
+      command: python3 main.py
+      runtime: null
+  
+  pre_watermarkbn:
+    name: pre-watermarkbn
+    defense_stage: pre_training
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/pre_watermarkbn:v1
       command: python3 main.py
       runtime: null
 
   # In-training (during training) tools
   in_dp:
     name: in-dp
+    defense_stage: during_training
     is_baseline: false
     container:
       image: ghcr.io/landseer-project/in_dp:v10
@@ -27,22 +39,43 @@ tools:
 
   in_noop:
     name: in_noop
+    defense_stage: during_training
     is_baseline: true
     container:
-      image: ghcr.io/landseer-project/in_noop:v5
+      image: ghcr.io/landseer-project/in_noop:v7
       command: python main.py
       runtime: null
 
   in_trades:
     name: in-trades
+    defense_stage: during_training
     is_baseline: false
     container:
-      image: ghcr.io/landseer-project/in_trades:v1
+      image: ghcr.io/landseer-project/in_trades:v3
+      command: python3 main.py
+      runtime: null
+
+  in_fair:
+    name: in-fair
+    defense_stage: during_training
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/in_fair:v6
+      command: python3 main.py
+      runtime: null
+
+  in_teaching:
+    name: in-teaching
+    defense_stage: during_training
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/in_teaching:v9
       command: python3 main.py
       runtime: null
 
   watermarknn:
     name: watermarknn
+    defense_stage: during_training
     is_baseline: false
     container:
       image: ghcr.io/landseer-project/pre_watermarknn_cpu:v1
@@ -52,6 +85,7 @@ tools:
   # Post-training tools
   post_noop:
     name: post_noop
+    defense_stage: post_training
     is_baseline: true
     container:
       image: ghcr.io/landseer-project/post_noop_new:v1
@@ -60,31 +94,16 @@ tools:
 
   post_fineprune:
     name: fine pruning
+    defense_stage: post_training
     is_baseline: false
     container:
-      image: ghcr.io/landseer-project/post_fineprune:v1
+      image: ghcr.io/landseer-project/post_fineprune:v2
       command: python3 main.py --prune-percentage 0.1
       runtime: null
-
-  # Deployment tools
-  deploy_noop:
-    name: deploy_noop
-    is_baseline: true
-    container:
-      image: ghcr.io/landseer-project/deploy_noop_docker:v1
-      command: python main.py
-      runtime: null
-
-  deploy_dp:
-    name: deploy_dp
-    is_baseline: false
-    container:
-      image: ghcr.io/landseer-project/deploy_dp:v1
-      command: python3 main.py
-      runtime: null
-
+  
   post_dp:
     name: post_dp
+    defense_stage: post_training
     is_baseline: false
     container:
       image: ghcr.io/landseer-project/post_dp:v4
@@ -93,8 +112,64 @@ tools:
 
   post_magnet:
     name: post_magnet
+    defense_stage: post_training
     is_baseline: false
     container:
-      image: ghcr.io/landseer-project/post_magnet:v2
+      image: ghcr.io/landseer-project/post_magnet:v4
+      command: python3 main.py
+      runtime: null
+
+  post_inference:
+    name: post_inference
+    defense_stage: post_training
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/post_inference:v1
+      command: python3 main.py
+      runtime: null
+
+  post_neuronprune:
+    name: post_neuronprune
+    defense_stage: post_training
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/post_neuronprune:v1
+      command: python3 main.py --prune-percentage 0.1
+      runtime: null
+
+  # Deployment tools
+  deploy_noop:
+    name: deploy_noop
+    defense_stage: deployment
+    is_baseline: true
+    container:
+      image: ghcr.io/landseer-project/deploy_noop_docker:v1
+      command: python main.py
+      runtime: null
+
+  deploy_dp:
+    name: deploy_dp
+    defense_stage: deployment
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/deploy_dp:v1
+      command: python3 main.py
+      runtime: null
+
+  deploy_explainshap:
+    name: deploy_explainshap
+    defense_stage: deployment
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/deploy_explainshap:v2
+      command: python3 main.py
+      runtime: null
+
+  deploy_dataset_inference:
+    name: deploy_dataset_inference
+    defense_stage: deployment
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/deploy_dataset_inference:v2
       command: python3 main.py
       runtime: null

@@ -474,6 +474,11 @@ class PipelineRunModel(Base):
     
     # Run settings
     use_cache: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # Tool configuration snapshot — persisted at run start so it cannot change mid-run.
+    # Keys are stage names; values are ordered tool name lists.
+    # e.g. {"pre_training": ["pre_noop"], "during_training": ["in_trades", "in_noop"], ...}
+    tools_config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     
     # Status
     status: Mapped[PipelineRunStatus] = mapped_column(
@@ -513,6 +518,7 @@ class PipelineRunModel(Base):
             "pipeline_config_id": self.pipeline_config_id,
             "run_number": self.run_number,
             "use_cache": self.use_cache,
+            "tools_config": self.tools_config,
             "status": self.status.value if self.status else None,
             "error_message": self.error_message,
             "created_at": self.created_at.isoformat() if self.created_at else None,

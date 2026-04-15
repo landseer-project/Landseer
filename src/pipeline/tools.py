@@ -5,6 +5,7 @@ This module defines the structure for tools used in the pipeline execution.
 """
 
 from typing import Dict, Optional
+
 from pydantic import BaseModel, Field
 import logging
 
@@ -20,9 +21,18 @@ class ContainerConfig(BaseModel):
 
 class ToolDefinition(BaseModel):
     """Tool definition loaded from tools.yaml."""
+
     name: str = Field(description="Tool name")
     container: ContainerConfig = Field(description="Container configuration")
     is_baseline: bool = Field(default=False, description="Whether this tool is a baseline/noop tool")
+    defense_stage: Optional[str] = Field(
+        default=None,
+        description=(
+            "Pipeline stage this tool belongs to (synonym of pre_training, during_training, "
+            "post_training, deployment). Alias key in YAML: 'stage'. Used for config validation; "
+            "not inferred from tool id."
+        ),
+    )
 
 
 # Alias for backward compatibility and cleaner naming
@@ -62,7 +72,8 @@ def load_tools_from_yaml(yaml_path: str) -> Dict[str, ToolDefinition]:
         tools[tool_name] = ToolDefinition(
             name=tool_data.get('name', tool_name),
             container=ContainerConfig(**tool_data['container']),
-            is_baseline=tool_data.get('is_baseline', False)
+            is_baseline=tool_data.get('is_baseline', False),
+            defense_stage=tool_data.get('defense_stage') or tool_data.get('stage'),
         )
     
     return tools

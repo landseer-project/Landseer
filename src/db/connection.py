@@ -149,8 +149,28 @@ class Database:
     def create_tables(self) -> None:
         """Create all database tables."""
         Base.metadata.create_all(bind=self.engine)
+        self._apply_migrations()
         self._initialized = True
         logger.info("Database tables created")
+
+    def _apply_migrations(self) -> None:
+        """
+        Apply additive schema migrations for columns added after initial table creation.
+        Each ALTER TABLE is silently ignored if the column already exists.
+        """
+        migrations = [
+            "ALTER TABLE pipeline_runs ADD COLUMN tools_config JSON",
+        ]
+        from sqlalchemy import text
+        with self.engine.connect() as conn:
+            for stmt in migrations:
+                try:
+                    conn.execute(text(stmt))
+                    conn.commit()
+                    logger.info(f"Schema migration applied: {stmt}")
+                except Exception:
+                    # Column already exists or DB doesn't support this syntax — safe to ignore
+                    pass
     
     def drop_tables(self) -> None:
         """Drop all database tables."""

@@ -3,6 +3,9 @@ import react from '@vitejs/plugin-react';
 import path from 'node:path';
 export default defineConfig({
     server: {
+        allowedHosts: [
+    'landseer.tsel.purdue.wtf',
+    ],
         proxy: {
             '/api': {
                 target: 'http://localhost:8000',
@@ -20,6 +23,7 @@ export default defineConfig({
             '/tools': { target: 'http://localhost:8000', changeOrigin: true },
             '/registry': { target: 'http://localhost:8000', changeOrigin: true },
         },
+
     },
     resolve: {
         alias: {
