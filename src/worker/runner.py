@@ -9,6 +9,7 @@ This module handles the actual execution of tasks, including:
 """
 
 import errno
+import json
 import os
 import shutil
 import subprocess
@@ -920,6 +921,12 @@ class TaskRunner:
                 else:
                     shutil.copy2(model_script_path, dest_path)
                     logger.debug(f"Copied model script to: {dest_path}")
+
+            # Persist per-task config into input/config.json so evaluator
+            # containers can read structured context (defense types, stage tools).
+            if isinstance(task.config, dict):
+                config_json_path = input_dir / "config.json"
+                config_json_path.write_text(json.dumps(task.config, indent=2, default=str))
 
             # Build environment
             task_env = env or {}

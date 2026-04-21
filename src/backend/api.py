@@ -2224,6 +2224,24 @@ def _workflow_tools_metadata(tasks: List[Any]) -> Dict[str, Any]:
     }
 
 
+def _allowed_metrics_for_evaluator(evaluator_name: str) -> Optional[set]:
+    """
+    Return the allowlist of metric names for an evaluator.
+
+    This prevents one evaluator from overwriting another evaluator's metrics
+    with undeclared keys (e.g., fingerprinting emitting clean_accuracy).
+    """
+    try:
+        from ..pipeline.config_loader import get_all_evaluators
+        evaluators = get_all_evaluators()
+        evaluator = evaluators.get(evaluator_name)
+        if evaluator and evaluator.metrics:
+            return set(evaluator.metrics)
+    except Exception:
+        pass
+    return None
+
+
 @app.get("/pipelines/{pipeline_id}/metrics", response_model=PipelineMetricsResponse, tags=["Metrics"])
 async def get_pipeline_metrics(
     pipeline_id: str,
@@ -2278,7 +2296,10 @@ async def get_pipeline_metrics(
                             by_workflow[r.workflow_id]["skipped"].append(r.evaluator_name)
                         else:
                             by_workflow[r.workflow_id]["run"].append(r.evaluator_name)
+                        allowed_metrics = _allowed_metrics_for_evaluator(r.evaluator_name)
                         for metric_name, value in (r.metrics or {}).items():
+                            if allowed_metrics is not None and metric_name not in allowed_metrics:
+                                continue
                             by_workflow[r.workflow_id]["metrics"][metric_name] = value
                             metric_names.add(metric_name)
 
@@ -2842,7 +2863,10 @@ async def get_pipeline_run_metrics(run_id: str):
                     by_workflow[r.workflow_id]["skipped"].append(r.evaluator_name)
                 else:
                     by_workflow[r.workflow_id]["run"].append(r.evaluator_name)
+                allowed_metrics = _allowed_metrics_for_evaluator(r.evaluator_name)
                 for metric_name, value in (r.metrics or {}).items():
+                    if allowed_metrics is not None and metric_name not in allowed_metrics:
+                        continue
                     by_workflow[r.workflow_id]["metrics"][metric_name] = value
                     metric_names.add(metric_name)
 
