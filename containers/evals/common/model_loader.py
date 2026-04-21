@@ -12,6 +12,7 @@ Handles:
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 from typing import Any, Union
 
@@ -125,12 +126,27 @@ def _build_model_from_state_dict(
     model = mod.config()
     if not isinstance(model, nn.Module):
         raise ValueError("config() must return an nn.Module")
+    # Try canonical and common-prefix variants first.
+    state_variants = [state]
+    state_no_module = _maybe_strip_prefix(state, "module.")
+    if state_no_module is not state:
+        state_variants.append(state_no_module)
+    is_dp_context = _is_dp_workflow_context(input_dir)
     try:
-        model.load_state_dict(state)
+        _load_first_matching_state_dict(model, state_variants)
     except Exception as e:
-        state2 = _maybe_strip_prefix(state, "module.")
-        if state2 is not state:
-            model.load_state_dict(state2)
+        # Only apply Opacus fix when workflow context says DP was used.
+        if is_dp_context:
+            try:
+                from opacus.validators import ModuleValidator
+
+                fixed_model = ModuleValidator.fix(model)
+                _load_first_matching_state_dict(fixed_model, state_variants)
+                model = fixed_model
+            except Exception:
+                raise ValueError(
+                    f"state_dict does not match model architecture: {e}"
+                ) from e
         else:
             raise ValueError(
                 f"state_dict does not match model architecture: {e}"
@@ -138,6 +154,48 @@ def _build_model_from_state_dict(
     model = model.to(device)
     model.eval()
     return model
+
+
+def _load_first_matching_state_dict(model: nn.Module, candidates: list[dict[str, Any]]) -> None:
+    """Load the first candidate state_dict that matches the model."""
+    last_error: Exception | None = None
+    for candidate in candidates:
+        try:
+            model.load_state_dict(candidate)
+            return
+        except Exception as e:
+            last_error = e
+    if last_error is not None:
+        raise last_error
+
+
+def _is_dp_workflow_context(input_dir: Path) -> bool:
+    """Return True when evaluation context indicates differential privacy tools."""
+    config_path = input_dir / "config.json"
+    if not config_path.exists():
+        return False
+    try:
+        config = json.loads(config_path.read_text())
+    except Exception:
+        return False
+
+    defense_types = config.get("workflow_defense_types", [])
+    if isinstance(defense_types, list):
+        for defense_type in defense_types:
+            token = str(defense_type).strip().lower()
+            if token in {"differential_privacy", "dp"}:
+                return True
+
+    tools_by_stage = config.get("workflow_tools_by_stage", {})
+    if isinstance(tools_by_stage, dict):
+        during_tools = tools_by_stage.get("during_training", [])
+        if isinstance(during_tools, list):
+            for tool_name in during_tools:
+                token = str(tool_name).strip().lower()
+                if token in {"in-dp", "in_dp", "differential_privacy"}:
+                    return True
+
+    return False
 
 
 def _maybe_strip_prefix(

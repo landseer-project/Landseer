@@ -69,6 +69,13 @@ def _read_dp_metrics(input_dir: Path) -> Tuple[Optional[float], Optional[float]]
     return epsilon, dp_accuracy
 
 
+def _normalize_accuracy(value: float) -> float:
+    """Normalize accuracy to [0, 1] when source reports percentages."""
+    if value > 1.0:
+        return value / 100.0
+    return value
+
+
 def write_results(output_dir, payload):
     (output_dir / "evaluation_results.json").write_text(json.dumps(payload, indent=2))
 
@@ -140,7 +147,7 @@ def main():
     epsilon, dp_accuracy = _read_dp_metrics(input_dir)
 
     # DP runs may emit dp_accuracy as the canonical reported accuracy.
-    reported_clean = dp_accuracy if dp_accuracy is not None else clean_acc
+    reported_clean = _normalize_accuracy(dp_accuracy) if dp_accuracy is not None else clean_acc
     if dp_accuracy is not None:
         print(
             f"DP metrics detected. raw_clean_accuracy={clean_acc:.4f}, "
