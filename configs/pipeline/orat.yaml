@@ -18,8 +18,8 @@ pipeline:
     tools:
       - name: in_orat
         container:
-          image: oras://ghcr.io/aarpatel1/in_orat:v1
-          command: python /workspace/orat/main.py --epochs 5
+          image: oras://ghcr.io/landseer-project/in_orat:v3
+          command: python /workspace/orat/main.py --epochs 120 --eval-every 10
     noop:
       name: in_noop
       container:
