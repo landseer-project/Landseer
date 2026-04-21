@@ -5,7 +5,7 @@ dataset:
   variant: clean
 
 model:
-  script: configs/model/config_model_combined.py
+  script: configs/model/config_model_resnet20.py
   framework: pytorch
 
 pipeline:

@@ -258,6 +258,21 @@ def add_evaluation_tasks_to_workflow(
         List of created evaluation tasks
     """
     eval_tasks = []
+
+    # Capture non-evaluation defense context once per workflow so evaluators
+    # can make model-loading decisions (e.g., Opacus fix for DP checkpoints).
+    tools_by_stage: Dict[str, List[str]] = {}
+    defense_types: set[str] = set()
+    for wf_task in workflow.tasks:
+        if wf_task.task_type == TaskType.EVALUATION:
+            continue
+        stage = wf_task.task_type.value
+        tools_by_stage.setdefault(stage, [])
+        if wf_task.tool.name not in tools_by_stage[stage]:
+            tools_by_stage[stage].append(wf_task.tool.name)
+        tool_token = str(wf_task.tool.name).strip().lower().replace("-", "_").replace(" ", "_")
+        if tool_token in {"in_dp", "post_dp", "deploy_dp", "dp"} or "differential_privacy" in tool_token:
+            defense_types.add("differential_privacy")
     
     for eval_name, eval_def in evaluators.items():
         # Create task config
@@ -267,6 +282,8 @@ def add_evaluation_tasks_to_workflow(
             "tool_name": eval_def.name,
             "metrics": eval_def.metrics,
             "required_artifacts": eval_def.required_artifacts,
+            "workflow_tools_by_stage": tools_by_stage,
+            "workflow_defense_types": sorted(defense_types),
         }
         
         # Create dependencies

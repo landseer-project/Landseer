@@ -728,6 +728,14 @@ class Worker:
                         }
 
                 if isinstance(payload.get("metrics"), dict):
+                    # Keep only declared evaluator metrics so stray keys
+                    # do not pollute dashboard aggregation.
+                    if expected_metrics:
+                        payload["metrics"] = {
+                            key: val
+                            for key, val in payload["metrics"].items()
+                            if key in expected_metrics
+                        }
                     return payload
             except Exception as e:
                 logger.warning(f"Failed to read {filename} for task {task.id}: {e}")
