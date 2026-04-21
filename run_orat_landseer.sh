@@ -2,7 +2,7 @@
 #SBATCH --job-name=orat_landseer
 #SBATCH --output=/scratch/gilbreth/%u/landseer_logs/orat_landseer_%j.out
 #SBATCH --error=/scratch/gilbreth/%u/landseer_logs/orat_landseer_%j.err
-#SBATCH --time=08:00:00
+#SBATCH --time=07:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
