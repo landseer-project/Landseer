@@ -6,6 +6,7 @@ executes them in containers, and reports results back.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import signal
@@ -121,6 +122,8 @@ class Worker:
         self._two_level_cache: Optional["TwoLevelCache"] = None
         self._use_minio: bool = os.environ.get("LANDSEER_USE_MINIO", "true").lower() == "true"
         self._model_script_path: Optional[Path] = None  # Path to model config script (e.g., config_model.py)
+        self._dataset_info: Dict[str, Any] = {}
+        self._active_run_id: Optional[str] = None
         
         # Signal handling
         self._setup_signal_handlers()
@@ -191,6 +194,7 @@ class Worker:
         except Exception as e:
             logger.warning(f"Failed to get dataset info from backend: {e}")
             return None
+        self._dataset_info = dataset_info or {}
         
         if not dataset_info.get("available"):
             logger.info("No dataset available from backend")
@@ -398,6 +402,66 @@ class Worker:
                 paths.append(p)
                 seen.add(key)
     
+    def _dataset_fingerprint(self, data_dir: Optional[Path]) -> Dict[str, Any]:
+        """Build a lightweight dataset identity fingerprint for cache keys."""
+        if not data_dir:
+            return {"available": False}
+        try:
+            resolved = data_dir.resolve()
+        except Exception:
+            resolved = data_dir
+        fp: Dict[str, Any] = {
+            "available": True,
+            "path": str(resolved),
+            "name": self._dataset_info.get("name"),
+            "variant": self._dataset_info.get("variant"),
+            "minio_key": self._dataset_info.get("minio_key"),
+        }
+        tracked: Dict[str, Any] = {}
+        for name in ("data.npy", "labels.npy", "test_data.npy", "test_labels.npy"):
+            p = data_dir / name
+            if p.exists():
+                st = p.stat()
+                tracked[name] = {
+                    "size": st.st_size,
+                    "mtime_ns": st.st_mtime_ns,
+                }
+        fp["tracked_files"] = tracked
+        return fp
+
+    @staticmethod
+    def _model_fingerprint(model_script_path: Optional[Path]) -> Dict[str, Any]:
+        """Build model-script identity fingerprint for cache keys."""
+        if not model_script_path:
+            return {"available": False}
+        fp: Dict[str, Any] = {
+            "available": False,
+            "path": str(model_script_path),
+        }
+        try:
+            if model_script_path.exists():
+                st = model_script_path.stat()
+                fp.update({
+                    "available": True,
+                    "size": st.st_size,
+                    "mtime_ns": st.st_mtime_ns,
+                })
+                hasher = hashlib.sha256()
+                with model_script_path.open("rb") as f:
+                    for chunk in iter(lambda: f.read(8192), b""):
+                        hasher.update(chunk)
+                fp["sha256"] = hasher.hexdigest()
+        except Exception as e:
+            fp["error"] = str(e)
+        return fp
+
+    def _build_cache_context(self, data_dir: Optional[Path]) -> Dict[str, Any]:
+        """Build shared cache context so cache keys include model/dataset identity."""
+        return {
+            "dataset": self._dataset_fingerprint(data_dir),
+            "model": self._model_fingerprint(self._model_script_path),
+        }
+
     def _execute_task(self, task: TaskInfo) -> ExecutionResult:
         """
         Execute a single task.
@@ -413,6 +477,16 @@ class Worker:
         logger.info(f"Executing task: {task.id} ({task.tool_name})")
         
         try:
+            # Refresh dataset/model context when pipeline run changes.
+            # Without this, long-lived workers may keep stale model_script/dataset
+            # identity and incorrectly reuse cache entries across runs.
+            if task.run_id and task.run_id != self._active_run_id:
+                logger.info(f"Run changed ({self._active_run_id} -> {task.run_id}); refreshing dataset/model context")
+                refreshed = self._fetch_dataset()
+                if refreshed:
+                    self._dataset_path = refreshed
+                self._active_run_id = task.run_id
+
             # Build parent_hashes (for cache key) and ancestor_dirs (ordered
             # output dirs from all upstream stages, earliest first) in one pass.
             parent_hashes: List[str] = []
@@ -447,10 +521,19 @@ class Worker:
                         if ws_out.exists():
                             self._append_unique_paths(ancestor_dirs, [ws_out])
 
-            cache_key = self._compute_cache_key(task, parent_hashes)
+            data_dir = self.data_path if (self.data_path and self.data_path.exists()) else self._dataset_path
+            if data_dir is None:
+                # Headless backend may expose dataset only after a run is started.
+                # Retry dataset fetch at task execution time instead of only worker startup.
+                refreshed = self._fetch_dataset()
+                if refreshed:
+                    self._dataset_path = refreshed
+                    data_dir = refreshed
+            cache_context = self._build_cache_context(data_dir)
+            cache_key = self._compute_cache_key(task, parent_hashes, cache_context)
 
             if self.use_cache:
-                cached_path = self._check_cache(cache_key, task, parent_hashes)
+                cached_path = self._check_cache(cache_key, task, parent_hashes, cache_context)
                 if cached_path:
                     logger.info(f"Cache hit for task {task.id}")
                     symlink_target = self._runner.workspace_dir / task.id / "output"
@@ -466,14 +549,6 @@ class Worker:
                         artifacts={"cache_hit": True, "cache_key": cache_key}
                     )
 
-            data_dir = self.data_path if (self.data_path and self.data_path.exists()) else self._dataset_path
-            if data_dir is None:
-                # Headless backend may expose dataset only after a run is started.
-                # Retry dataset fetch at task execution time instead of only worker startup.
-                refreshed = self._fetch_dataset()
-                if refreshed:
-                    self._dataset_path = refreshed
-                    data_dir = refreshed
             result = self._runner.run_task(
                 task,
                 input_path=data_dir,
@@ -501,7 +576,8 @@ class Worker:
                     task=task,
                     output_path=result.output_path,
                     execution_time_ms=result.execution_time_ms,
-                    parent_hashes=parent_hashes
+                    parent_hashes=parent_hashes,
+                    cache_context=cache_context
                 )
                 result.artifacts["cache_key"] = cache_key
 
@@ -511,17 +587,20 @@ class Worker:
             self._stop_task_heartbeat()
             self._current_task = None
     
-    def _compute_cache_key(self, task: TaskInfo, parent_hashes: List[str]) -> str:
+    def _compute_cache_key(
+        self,
+        task: TaskInfo,
+        parent_hashes: List[str],
+        cache_context: Optional[Dict[str, Any]] = None,
+    ) -> str:
         """Compute cache key for a task."""
-        import hashlib
-        import json
-        
         identity = {
             "tool_name": task.tool_name,
             "tool_image": task.tool_image,
             "tool_command": task.tool_command,
             "config": task.config,
-            "parents": sorted(parent_hashes)
+            "parents": sorted(parent_hashes),
+            "context": cache_context or {},
         }
         json_str = json.dumps(identity, sort_keys=True, separators=(',', ':'))
         return hashlib.blake2s(json_str.encode()).hexdigest()
@@ -530,7 +609,8 @@ class Worker:
         self,
         cache_key: str,
         task: TaskInfo,
-        parent_hashes: List[str]
+        parent_hashes: List[str],
+        cache_context: Optional[Dict[str, Any]] = None,
     ) -> Optional[Path]:
         """Check cache for a task output."""
         # Prefer two-level cache
@@ -539,7 +619,7 @@ class Worker:
         
         # Fall back to local-only cache
         if self._cache:
-            return self._cache.check_cache(task, parent_hashes)
+            return self._cache.check_cache(task, parent_hashes, cache_context=cache_context)
         
         return None
     
@@ -549,7 +629,8 @@ class Worker:
         task: TaskInfo,
         output_path: Path,
         execution_time_ms: int,
-        parent_hashes: List[str]
+        parent_hashes: List[str],
+        cache_context: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Store task output in cache."""
         # Prefer two-level cache
@@ -572,7 +653,8 @@ class Worker:
                 output_path=output_path,
                 execution_time_ms=execution_time_ms,
                 parent_hashes=parent_hashes,
-                run_id=run_id
+                run_id=run_id,
+                cache_context=cache_context,
             )
     
     def _eval_failed(self, task: TaskInfo, output_path: Path) -> bool:

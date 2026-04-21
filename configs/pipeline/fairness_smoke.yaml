@@ -1,22 +1,27 @@
+# Smoke test pipeline for fairness tool integration.
+# Keeps pre/post/deploy at baseline and toggles fairness in during_training.
 dataset:
-  name: cifar10
+  name: celeba
   variant: clean
+
 model:
-  script: configs/model/config_model_resnet20.py
+  script: configs/model/config_model_combined.py
   framework: pytorch
+
 pipeline:
   pre_training:
     tools:
-      - pre_xgbod
       - pre_noop
+
   during_training:
     tools:
-      - in_trades
+      - in_fair
       - in_noop
+
   post_training:
     tools:
-      - post_fineprune
       - post_noop
+
   deployment:
     tools:
       - deploy_noop

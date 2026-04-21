@@ -7,6 +7,23 @@ import { StatsCard } from '@/components/StatsCard';
 import { getPipelineMetrics, getPipelineDetail } from '@/lib/api';
 import { Loader2 } from 'lucide-react';
 
+function getWorkflowToolsLabel(workflow: {
+  workflow_tools_label?: string;
+  workflow_tools?: Record<string, string[]>;
+}): string {
+  if (workflow.workflow_tools_label && workflow.workflow_tools_label.trim().length > 0) {
+    return workflow.workflow_tools_label;
+  }
+  const parts: string[] = [];
+  for (const stage of ['pre', 'in', 'post', 'deploy']) {
+    const tools = workflow.workflow_tools?.[stage] ?? [];
+    if (tools.length > 0) {
+      parts.push(`${stage}: ${tools.join(', ')}`);
+    }
+  }
+  return parts.join(' | ');
+}
+
 // Sparkline with optional baseline reference line
 function Sparkline({
   values,
@@ -297,15 +314,25 @@ export function Metrics() {
                           }
                         >
                           <td className="py-2 px-3">
-                            <span className="flex items-center gap-2">
-                              {workflow.workflow_name}
-                              {isBaseline && (
-                                <Badge
-                                  variant="outline"
-                                  className="border-amber-500 text-amber-700 dark:text-amber-400 text-xs"
+                            <span className="flex flex-col gap-0.5">
+                              <span className="flex items-center gap-2">
+                                {workflow.workflow_name}
+                                {isBaseline && (
+                                  <Badge
+                                    variant="outline"
+                                    className="border-amber-500 text-amber-700 dark:text-amber-400 text-xs"
+                                  >
+                                    Baseline
+                                  </Badge>
+                                )}
+                              </span>
+                              {getWorkflowToolsLabel(workflow) && (
+                                <span
+                                  className="text-xs text-muted-foreground font-normal"
+                                  title={getWorkflowToolsLabel(workflow)}
                                 >
-                                  Baseline
-                                </Badge>
+                                  {getWorkflowToolsLabel(workflow)}
+                                </span>
                               )}
                             </span>
                           </td>
@@ -431,7 +458,11 @@ export function Metrics() {
                         >
                           <div
                             className="w-24 flex-shrink-0 text-xs font-medium truncate"
-                            title={workflow.workflow_name}
+                            title={
+                              getWorkflowToolsLabel(workflow)
+                                ? `${workflow.workflow_name}\n${getWorkflowToolsLabel(workflow)}`
+                                : workflow.workflow_name
+                            }
                           >
                             {workflow.workflow_name}
                             {isBaseline && (
