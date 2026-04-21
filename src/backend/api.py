@@ -2242,6 +2242,23 @@ def _allowed_metrics_for_evaluator(evaluator_name: str) -> Optional[set]:
     return None
 
 
+def _should_override_metric(existing_evaluator: Optional[str], new_evaluator: str, metric_name: str) -> bool:
+    """
+    Decide overwrite behavior when multiple evaluators emit the same metric key.
+
+    clean_accuracy may appear in both clean and adversarial evaluators; prefer
+    the clean evaluator value for dashboard consistency.
+    """
+    if existing_evaluator is None:
+        return True
+    if metric_name == "clean_accuracy":
+        if existing_evaluator == "clean":
+            return False
+        if new_evaluator == "clean":
+            return True
+    return False
+
+
 @app.get("/pipelines/{pipeline_id}/metrics", response_model=PipelineMetricsResponse, tags=["Metrics"])
 async def get_pipeline_metrics(
     pipeline_id: str,
@@ -2288,6 +2305,7 @@ async def get_pipeline_metrics(
                         if r.workflow_id not in by_workflow:
                             by_workflow[r.workflow_id] = {
                                 "metrics": {},
+                                "metric_sources": {},
                                 "run": [],
                                 "skipped": []
                             }
@@ -2300,7 +2318,11 @@ async def get_pipeline_metrics(
                         for metric_name, value in (r.metrics or {}).items():
                             if allowed_metrics is not None and metric_name not in allowed_metrics:
                                 continue
-                            by_workflow[r.workflow_id]["metrics"][metric_name] = value
+                            wf_bucket = by_workflow[r.workflow_id]
+                            existing_source = wf_bucket["metric_sources"].get(metric_name)
+                            if _should_override_metric(existing_source, r.evaluator_name, metric_name):
+                                wf_bucket["metrics"][metric_name] = value
+                                wf_bucket["metric_sources"][metric_name] = r.evaluator_name
                             metric_names.add(metric_name)
 
                     for wf in pipeline.workflows:
@@ -2858,7 +2880,12 @@ async def get_pipeline_run_metrics(run_id: str):
             metric_names: set = set()
             for r in results:
                 if r.workflow_id not in by_workflow:
-                    by_workflow[r.workflow_id] = {"metrics": {}, "run": [], "skipped": []}
+                    by_workflow[r.workflow_id] = {
+                        "metrics": {},
+                        "metric_sources": {},
+                        "run": [],
+                        "skipped": []
+                    }
                 if r.skipped:
                     by_workflow[r.workflow_id]["skipped"].append(r.evaluator_name)
                 else:
@@ -2867,7 +2894,11 @@ async def get_pipeline_run_metrics(run_id: str):
                 for metric_name, value in (r.metrics or {}).items():
                     if allowed_metrics is not None and metric_name not in allowed_metrics:
                         continue
-                    by_workflow[r.workflow_id]["metrics"][metric_name] = value
+                    wf_bucket = by_workflow[r.workflow_id]
+                    existing_source = wf_bucket["metric_sources"].get(metric_name)
+                    if _should_override_metric(existing_source, r.evaluator_name, metric_name):
+                        wf_bucket["metrics"][metric_name] = value
+                        wf_bucket["metric_sources"][metric_name] = r.evaluator_name
                     metric_names.add(metric_name)
 
             # Build per-workflow metrics; determine is_baseline from DB task records.
