@@ -931,6 +931,25 @@ async def update_task_status(
                     evaluator_image=task.tool.container.image,
                     run_id=run_id
                 )
+
+    # If all tasks are terminal, finalize the pipeline-run status in DB.
+    # This keeps historical run state in sync with scheduler completion so
+    # the UI does not stay stuck on "running".
+    if scheduler.is_complete():
+        try:
+            from ..db import session_scope, PipelineRunRepository, PipelineRunStatus
+            run_id = getattr(scheduler.pipeline, "id", None)
+            if run_id:
+                with session_scope() as session:
+                    run_repo = PipelineRunRepository(session)
+                    run = run_repo.get_by_id(run_id)
+                    if run and run.status in (PipelineRunStatus.PENDING, PipelineRunStatus.RUNNING, PipelineRunStatus.STOPPING):
+                        progress = scheduler.get_progress()
+                        final_status = PipelineRunStatus.FAILED if progress.get("failed", 0) > 0 else PipelineRunStatus.COMPLETED
+                        run_repo.update_status(run_id, final_status)
+                        logger.info(f"Pipeline run {run_id} finalized as {final_status.value}")
+        except Exception as e:
+            logger.warning(f"Failed to finalize pipeline run status: {e}")
     
     status_str = "completed successfully" if new_status == TaskStatus.COMPLETED else "failed"
     logger.info(f"Task {request.task_id} {status_str}")
@@ -2106,6 +2125,14 @@ class WorkflowMetrics(BaseModel):
     """Metrics for a single workflow."""
     workflow_id: str = Field(description="Workflow ID")
     workflow_name: str = Field(description="Workflow name")
+    workflow_tools: Dict[str, List[str]] = Field(
+        default_factory=dict,
+        description="Non-evaluation tool names grouped by stage"
+    )
+    workflow_tools_label: str = Field(
+        default="",
+        description="Human-readable non-evaluation tool sequence"
+    )
     metrics: Dict[str, Optional[float]] = Field(description="Metric name to value mapping")
     evaluators_run: List[str] = Field(description="Evaluators that ran")
     evaluators_skipped: List[str] = Field(description="Evaluators that skipped")
@@ -2122,6 +2149,79 @@ class PipelineMetricsResponse(BaseModel):
     summary: Dict[str, Dict[str, Optional[float]]] = Field(
         description="Summary stats (min, max, avg) per metric"
     )
+
+
+def _stage_rank(task_type: Any) -> int:
+    """Sort task stages in pipeline order, putting unknowns at the end."""
+    key = str(task_type).lower()
+    order = {
+        TaskType.PRE_TRAINING.value: 0,
+        "pre": 0,
+        TaskType.IN_TRAINING.value: 1,
+        "in": 1,
+        "during": 1,
+        "during_training": 1,
+        TaskType.POST_TRAINING.value: 2,
+        "post": 2,
+        "post_training": 2,
+        TaskType.DEPLOYMENT.value: 3,
+        "deploy": 3,
+        "deployment": 3,
+    }
+    return order.get(key, 99)
+
+
+def _stage_label(task_type: Any) -> str:
+    """Map task type to a user-friendly short stage label."""
+    key = str(task_type).lower()
+    mapping = {
+        TaskType.PRE_TRAINING.value: "pre",
+        "pre": "pre",
+        TaskType.IN_TRAINING.value: "in",
+        "in": "in",
+        "during": "in",
+        "during_training": "in",
+        TaskType.POST_TRAINING.value: "post",
+        "post": "post",
+        "post_training": "post",
+        TaskType.DEPLOYMENT.value: "deploy",
+        "deploy": "deploy",
+        "deployment": "deploy",
+    }
+    return mapping.get(key, key)
+
+
+def _workflow_tools_metadata(tasks: List[Any]) -> Dict[str, Any]:
+    """Return grouped stage tools and a compact label for workflow display."""
+    grouped: Dict[str, List[str]] = {}
+    for task in sorted(tasks, key=lambda t: (_stage_rank(getattr(t, "task_type", "")), getattr(t, "tool_name", ""))):
+        task_type = getattr(task, "task_type", "")
+        if str(task_type).lower() in {TaskType.EVALUATION.value, "evaluation"}:
+            continue
+
+        stage = _stage_label(task_type)
+        tool_name = getattr(task, "tool_name", None)
+        if tool_name is None:
+            tool_obj = getattr(task, "tool", None)
+            tool_name = getattr(tool_obj, "name", None)
+        if not tool_name:
+            continue
+
+        grouped.setdefault(stage, [])
+        if tool_name not in grouped[stage]:
+            grouped[stage].append(str(tool_name))
+
+    label_parts: List[str] = []
+    for stage in ("pre", "in", "post", "deploy"):
+        tools = grouped.get(stage, [])
+        if not tools:
+            continue
+        label_parts.append(f"{stage}: {', '.join(tools)}")
+
+    return {
+        "workflow_tools": grouped,
+        "workflow_tools_label": " | ".join(label_parts),
+    }
 
 
 @app.get("/pipelines/{pipeline_id}/metrics", response_model=PipelineMetricsResponse, tags=["Metrics"])
@@ -2185,9 +2285,12 @@ async def get_pipeline_metrics(
                     for wf in pipeline.workflows:
                         wf_data = by_workflow.get(wf.id, {"metrics": {}, "run": [], "skipped": []})
                         non_eval = [t for t in wf.tasks if t.task_type != TaskType.EVALUATION]
+                        workflow_tools = _workflow_tools_metadata(wf.tasks)
                         all_metrics.append(WorkflowMetrics(
                             workflow_id=wf.id,
                             workflow_name=wf.name,
+                            workflow_tools=workflow_tools["workflow_tools"],
+                            workflow_tools_label=workflow_tools["workflow_tools_label"],
                             metrics=wf_data["metrics"],
                             evaluators_run=wf_data["run"],
                             evaluators_skipped=wf_data["skipped"],
@@ -2237,9 +2340,12 @@ async def get_pipeline_metrics(
         for wf in pipeline.workflows:
             wf_data = by_workflow.get(wf.id, {"metrics": {}, "run": [], "skipped": []})
             non_eval = [t for t in wf.tasks if t.task_type != TaskType.EVALUATION]
+            workflow_tools = _workflow_tools_metadata(wf.tasks)
             all_metrics.append(WorkflowMetrics(
                 workflow_id=wf.id,
                 workflow_name=wf.name,
+                workflow_tools=workflow_tools["workflow_tools"],
+                workflow_tools_label=workflow_tools["workflow_tools_label"],
                 metrics=wf_data["metrics"],
                 evaluators_run=wf_data["run"],
                 evaluators_skipped=wf_data["skipped"],
@@ -2250,9 +2356,12 @@ async def get_pipeline_metrics(
     if not all_metrics:
         for wf in pipeline.workflows:
             non_eval = [t for t in wf.tasks if t.task_type != TaskType.EVALUATION]
+            workflow_tools = _workflow_tools_metadata(wf.tasks)
             all_metrics.append(WorkflowMetrics(
                 workflow_id=wf.id,
                 workflow_name=wf.name,
+                workflow_tools=workflow_tools["workflow_tools"],
+                workflow_tools_label=workflow_tools["workflow_tools_label"],
                 metrics={},
                 evaluators_run=[],
                 evaluators_skipped=[],
@@ -2679,22 +2788,49 @@ async def get_pipeline_run_metrics(run_id: str):
     """
     try:
         from ..db import session_scope
-        from ..db.models import EvaluationResultModel, WorkflowModel
+        from ..db.models import EvaluationResultModel, PipelineRunModel, WorkflowModel
 
         with session_scope() as session:
+            run = session.query(PipelineRunModel).filter(
+                PipelineRunModel.id == run_id
+            ).first()
+            if not run:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Pipeline run '{run_id}' not found"
+                )
+
             workflows = session.query(WorkflowModel).filter(
                 WorkflowModel.run_id == run_id
             ).all()
 
+            # Backward-compatibility fallback: older rows may only have pipeline_id set.
             if not workflows:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"No workflows found for run '{run_id}'"
-                )
+                workflows = session.query(WorkflowModel).filter(
+                    WorkflowModel.pipeline_id == run_id
+                ).all()
 
             results = session.query(EvaluationResultModel).filter(
                 EvaluationResultModel.run_id == run_id
             ).all()
+
+            # Backward-compatibility fallback for legacy rows keyed only by pipeline_id.
+            if not results:
+                results = session.query(EvaluationResultModel).filter(
+                    EvaluationResultModel.pipeline_id == run_id
+                ).all()
+
+            # Return an empty-but-valid payload so UI can distinguish
+            # "run exists, no metrics persisted yet" from true not-found.
+            if not workflows and not results:
+                return PipelineMetricsResponse(
+                    pipeline_id=run_id,
+                    pipeline_name=run_id,
+                    workflow_count=0,
+                    metric_names=[],
+                    workflows=[],
+                    summary={},
+                )
 
             # Group evaluation results by workflow
             by_workflow: dict = {}
@@ -2710,7 +2846,8 @@ async def get_pipeline_run_metrics(run_id: str):
                     by_workflow[r.workflow_id]["metrics"][metric_name] = value
                     metric_names.add(metric_name)
 
-            # Build per-workflow metrics; determine is_baseline from DB task records
+            # Build per-workflow metrics; determine is_baseline from DB task records.
+            workflow_map = {wf.id: wf for wf in workflows}
             all_metrics = []
             for wf in workflows:
                 non_eval_tasks = [t for t in wf.tasks if t.task_type != "evaluation"]
@@ -2718,13 +2855,31 @@ async def get_pipeline_run_metrics(run_id: str):
                     t.tool_is_baseline for t in non_eval_tasks
                 )
                 wf_data = by_workflow.get(wf.id, {"metrics": {}, "run": [], "skipped": []})
+                workflow_tools = _workflow_tools_metadata(wf.tasks)
                 all_metrics.append(WorkflowMetrics(
                     workflow_id=wf.id,
                     workflow_name=wf.name,
+                    workflow_tools=workflow_tools["workflow_tools"],
+                    workflow_tools_label=workflow_tools["workflow_tools_label"],
                     metrics=wf_data["metrics"],
                     evaluators_run=wf_data["run"],
                     evaluators_skipped=wf_data["skipped"],
                     is_baseline=is_baseline,
+                ))
+
+            # Include result-only workflows that may exist even when workflow rows are missing.
+            for workflow_id, wf_data in by_workflow.items():
+                if workflow_id in workflow_map:
+                    continue
+                all_metrics.append(WorkflowMetrics(
+                    workflow_id=workflow_id,
+                    workflow_name=workflow_id,
+                    workflow_tools={},
+                    workflow_tools_label="",
+                    metrics=wf_data["metrics"],
+                    evaluators_run=wf_data["run"],
+                    evaluators_skipped=wf_data["skipped"],
+                    is_baseline=False,
                 ))
 
             # Compute summary statistics

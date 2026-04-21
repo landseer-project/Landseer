@@ -135,7 +135,7 @@ class ArtifactCacheDB:
     # Hash Computation
     # =========================================================================
     
-    def compute_tool_hash(self, task: TaskInfo) -> str:
+    def compute_tool_hash(self, task: TaskInfo, cache_context: Optional[Dict[str, Any]] = None) -> str:
         """
         Compute a hash that identifies the tool configuration.
         
@@ -156,14 +156,16 @@ class ArtifactCacheDB:
             "image": task.tool_image,
             "command": task.tool_command,
             "config": task.config,
-            "task_type": task.task_type
+            "task_type": task.task_type,
+            "context": cache_context or {},
         }
         return _stable_json_hash(identity)
     
     def compute_task_hash(
         self,
         task: TaskInfo,
-        parent_hashes: List[str]
+        parent_hashes: List[str],
+        cache_context: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
         Compute a hash for a task based on its tool and dependencies.
@@ -179,7 +181,7 @@ class ArtifactCacheDB:
         Returns:
             Node hash for cache lookup
         """
-        tool_hash = self.compute_tool_hash(task)
+        tool_hash = self.compute_tool_hash(task, cache_context=cache_context)
         node_data = {
             "parents": sorted(parent_hashes),  # Sort for determinism - Check what's this we need to keep order of the parents intact - eg. ABC and ACB should be different
             "tool": tool_hash
@@ -583,7 +585,8 @@ class CacheManager:
     def check_cache(
         self,
         task: TaskInfo,
-        parent_hashes: Optional[List[str]] = None
+        parent_hashes: Optional[List[str]] = None,
+        cache_context: Optional[Dict[str, Any]] = None,
     ) -> Optional[Path]:
         """
         Check if a task's output is cached.
@@ -595,7 +598,7 @@ class CacheManager:
         Returns:
             Path to cached output if available, None otherwise
         """
-        node_hash = self.db.compute_task_hash(task, parent_hashes or [])
+        node_hash = self.db.compute_task_hash(task, parent_hashes or [], cache_context=cache_context)
         return self.db.get_cached_artifact(node_hash)
     
     def store_result(
@@ -604,7 +607,8 @@ class CacheManager:
         output_path: Path,
         execution_time_ms: int,
         parent_hashes: Optional[List[str]] = None,
-        run_id: Optional[str] = None
+        run_id: Optional[str] = None,
+        cache_context: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
         Store task result in cache.
@@ -619,7 +623,7 @@ class CacheManager:
         Returns:
             Node hash of stored artifact
         """
-        node_hash = self.db.compute_task_hash(task, parent_hashes or [])
+        node_hash = self.db.compute_task_hash(task, parent_hashes or [], cache_context=cache_context)
         # Get run_id from task if not provided
         if run_id is None:
             run_id = getattr(task, 'run_id', None)
@@ -637,7 +641,8 @@ class CacheManager:
         self,
         task: TaskInfo,
         error_message: str,
-        parent_hashes: Optional[List[str]] = None
+        parent_hashes: Optional[List[str]] = None,
+        cache_context: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
         Record a task failure in cache.
@@ -650,7 +655,7 @@ class CacheManager:
         Returns:
             Node hash of failed artifact
         """
-        node_hash = self.db.compute_task_hash(task, parent_hashes or [])
+        node_hash = self.db.compute_task_hash(task, parent_hashes or [], cache_context=cache_context)
         self.db.mark_failed(node_hash, error_message, task)
         return node_hash
     

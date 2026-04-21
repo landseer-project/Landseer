@@ -175,6 +175,21 @@ function DeltaCell({ value, baseline }: { value: number | null | undefined; base
   return <span className="flex items-center gap-0.5 text-red-500 font-medium"><TrendingDown className="h-3 w-3" />{formatted}</span>;
 }
 
+function getWorkflowToolsLabel(workflow: {
+  workflow_tools_label?: string;
+  workflow_tools?: Record<string, string[]>;
+}): string {
+  if (workflow.workflow_tools_label && workflow.workflow_tools_label.trim().length > 0) {
+    return workflow.workflow_tools_label;
+  }
+  const parts: string[] = [];
+  for (const stage of ['pre', 'in', 'post', 'deploy']) {
+    const tools = workflow.workflow_tools?.[stage] ?? [];
+    if (tools.length > 0) parts.push(`${stage}: ${tools.join(', ')}`);
+  }
+  return parts.join(' | ');
+}
+
 function CompareDialog({
   runIds,
   runs,
@@ -413,9 +428,21 @@ function RunMetricsDialog({
                     <th className="text-left py-2 pr-4 font-medium text-muted-foreground w-40">Metric</th>
                     {data.workflows.map((wf) => (
                       <th key={wf.workflow_id} className="text-left py-2 px-3 font-medium min-w-[120px]">
-                        <span className="block truncate max-w-[150px]" title={wf.workflow_name}>
+                        <span
+                          className="block truncate max-w-[170px]"
+                          title={
+                            getWorkflowToolsLabel(wf)
+                              ? `${wf.workflow_name}\n${getWorkflowToolsLabel(wf)}`
+                              : wf.workflow_name
+                          }
+                        >
                           {wf.workflow_name}
                         </span>
+                        {getWorkflowToolsLabel(wf) && (
+                          <span className="block truncate max-w-[190px] text-[11px] font-normal text-muted-foreground" title={getWorkflowToolsLabel(wf)}>
+                            {getWorkflowToolsLabel(wf)}
+                          </span>
+                        )}
                         {wf.is_baseline && (
                           <Badge variant="outline" className="text-xs px-1.5 py-0 h-4 border-amber-400 text-amber-600 font-normal mt-0.5">
                             baseline

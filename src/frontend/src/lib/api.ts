@@ -303,6 +303,8 @@ export async function addRegistryEvaluator(request: AddEvaluatorRequest): Promis
 export interface WorkflowMetrics {
   workflow_id: string;
   workflow_name: string;
+  workflow_tools: Record<string, string[]>;
+  workflow_tools_label: string;
   metrics: Record<string, number | null>;
   evaluators_run: string[];
   evaluators_skipped: string[];
@@ -332,6 +334,8 @@ function normalizePipelineMetricsResponse(raw: PipelineMetricsResponse): Pipelin
     }
     return {
       ...workflow,
+      workflow_tools: workflow.workflow_tools ?? {},
+      workflow_tools_label: workflow.workflow_tools_label ?? '',
       metrics: normalizedMetrics,
     };
   });

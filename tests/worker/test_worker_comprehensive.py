@@ -105,7 +105,7 @@ class TestWorkerInitialization:
         assert worker.workspace_dir == temp_workspace
         assert worker.gpu_id is None
         assert worker.poll_interval == 5.0
-        assert worker.task_timeout == 3600
+        assert worker.task_timeout == 7200
         assert worker.heartbeat_interval == 30.0
         assert worker.use_cache is True
         assert worker._running is False
@@ -610,6 +610,54 @@ class TestTaskExecution:
         worker._cache.store_result.assert_called_once()
         call_kw = worker._cache.store_result.call_args[1]
         assert call_kw.get("run_id") == "run_20250203_120000_abc123"
+
+    def test_execute_task_refreshes_dataset_context_on_run_change(
+        self, temp_workspace, temp_data_dir, mock_task
+    ):
+        """Worker should refresh dataset/model context when run_id changes."""
+        worker = Worker(workspace_dir=temp_workspace, data_path=temp_data_dir, use_cache=False)
+        worker._runner = MagicMock()
+        worker._runner.workspace_dir = temp_workspace
+
+        output1 = temp_workspace / "task_run1" / "output"
+        output1.mkdir(parents=True, exist_ok=True)
+        worker._runner.run_task.return_value = ExecutionResult(
+            success=True,
+            exit_code=0,
+            execution_time_ms=1000,
+            output_path=output1,
+        )
+        worker._fetch_dataset = MagicMock(return_value=temp_data_dir)
+
+        task_run1 = TaskInfo(
+            id="task_run1",
+            tool_name=mock_task.tool_name,
+            tool_image=mock_task.tool_image,
+            tool_command=mock_task.tool_command,
+            tool_runtime=mock_task.tool_runtime,
+            tool_is_baseline=mock_task.tool_is_baseline,
+            config=mock_task.config,
+            priority=mock_task.priority,
+            status=mock_task.status,
+            task_type=mock_task.task_type,
+            counter=mock_task.counter,
+            workflows=mock_task.workflows,
+            pipeline_id=mock_task.pipeline_id,
+            dependency_ids=[],
+            run_id="run_1",
+        )
+        task_run1_b = TaskInfo(
+            **{**task_run1.__dict__, "id": "task_run1_b"}
+        )
+        task_run2 = TaskInfo(
+            **{**task_run1.__dict__, "id": "task_run2", "run_id": "run_2"}
+        )
+
+        worker._execute_task(task_run1)
+        worker._execute_task(task_run1_b)
+        worker._execute_task(task_run2)
+
+        assert worker._fetch_dataset.call_count == 2
     
     def test_execute_task_mounts_data_directory(self, temp_workspace, temp_data_dir, mock_task):
         """_execute_task should mount data directory if available."""
@@ -1015,6 +1063,43 @@ class TestCacheManagement:
         
         # Different parents should produce different keys
         assert key1 != key2
+
+    def test_compute_cache_key_includes_cache_context(self, temp_workspace, mock_task):
+        """Cache key should change when dataset/model cache context changes."""
+        worker = Worker(workspace_dir=temp_workspace)
+        key1 = worker._compute_cache_key(
+            mock_task,
+            [],
+            cache_context={
+                "dataset": {"name": "cifar10", "variant": "clean"},
+                "model": {"path": "configs/model/config_model.py", "sha256": "aaa"},
+            },
+        )
+        key2 = worker._compute_cache_key(
+            mock_task,
+            [],
+            cache_context={
+                "dataset": {"name": "cifar10", "variant": "poisoned"},
+                "model": {"path": "configs/model/config_model.py", "sha256": "aaa"},
+            },
+        )
+        assert key1 != key2
+
+    def test_build_cache_context_captures_dataset_and_model(self, temp_workspace, temp_data_dir):
+        """_build_cache_context should capture dataset and model identity."""
+        worker = Worker(workspace_dir=temp_workspace)
+        model_script = temp_workspace / "config_model.py"
+        model_script.write_text("MODEL = 'A'\n")
+        worker._model_script_path = model_script
+        worker._dataset_info = {"name": "cifar10", "variant": "clean", "minio_key": "datasets/cifar10/clean"}
+
+        context = worker._build_cache_context(temp_data_dir)
+
+        assert context["dataset"]["name"] == "cifar10"
+        assert context["dataset"]["variant"] == "clean"
+        assert "data.npy" in context["dataset"]["tracked_files"]
+        assert context["model"]["available"] is True
+        assert context["model"]["sha256"]
     
     def test_check_cache_uses_two_level_cache(self, temp_workspace, mock_task):
         """_check_cache should use two-level cache if available."""
@@ -1033,10 +1118,11 @@ class TestCacheManagement:
         worker._cache = MagicMock()
         worker._cache.check_cache.return_value = Path("/cached")
         
-        result = worker._check_cache("cache_key", mock_task, [])
+        cache_context = {"dataset": {"name": "cifar10", "variant": "clean"}}
+        result = worker._check_cache("cache_key", mock_task, [], cache_context=cache_context)
         
         assert result == Path("/cached")
-        worker._cache.check_cache.assert_called_once()
+        worker._cache.check_cache.assert_called_once_with(mock_task, [], cache_context=cache_context)
     
     def test_store_in_cache_uses_two_level_cache(self, temp_workspace, mock_task, temp_cache_dir):
         """_store_in_cache should use two-level cache if available."""
@@ -1058,9 +1144,11 @@ class TestCacheManagement:
         output_path = temp_cache_dir / "output"
         output_path.mkdir(parents=True, exist_ok=True)
         
-        worker._store_in_cache("cache_key", mock_task, output_path, 1000, [])
+        cache_context = {"dataset": {"name": "cifar10", "variant": "clean"}}
+        worker._store_in_cache("cache_key", mock_task, output_path, 1000, [], cache_context=cache_context)
         
         worker._cache.store_result.assert_called_once()
+        assert worker._cache.store_result.call_args.kwargs["cache_context"] == cache_context
 
 
 # ============================================================================
