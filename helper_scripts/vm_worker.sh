@@ -82,6 +82,10 @@ start_worker() {
   (
     cd "$PROJECT_ROOT"
 
+    # Non-login shells (and this background subshell) often lack ~/.local/bin;
+    # uv installs there by default.
+    export PATH="${HOME}/.local/bin:${PATH}"
+
     export LANDSEER_PIPELINE_KEYS
     export MINIO_ENDPOINT
     export MINIO_ACCESS_KEY
@@ -89,17 +93,29 @@ start_worker() {
     export MINIO_BUCKET
     export MINIO_SECURE
 
-    exec uv run landseer-worker \
-      --backend-url "$LANDSEER_BACKEND_URL" \
-      --worker-id "$WORKER_ID" \
-      --workspace "$WORKER_WORKSPACE" \
-      --cache-dir "$WORKER_CACHE_DIR" \
-      --gpu "$WORKER_GPU" \
-      --runtime "$WORKER_RUNTIME" \
-      --poll-interval "$WORKER_POLL_INTERVAL" \
-      --heartbeat-interval "$WORKER_HEARTBEAT_INTERVAL" \
-      --minio-endpoint "$MINIO_ENDPOINT" \
-      $WORKER_EXTRA_ARGS
+    VENV_WORKER="${PROJECT_ROOT}/.venv/bin/landseer-worker"
+    WORKER_ARGS=(
+      --backend-url "$LANDSEER_BACKEND_URL"
+      --worker-id "$WORKER_ID"
+      --workspace "$WORKER_WORKSPACE"
+      --cache-dir "$WORKER_CACHE_DIR"
+      --gpu "$WORKER_GPU"
+      --runtime "$WORKER_RUNTIME"
+      --poll-interval "$WORKER_POLL_INTERVAL"
+      --heartbeat-interval "$WORKER_HEARTBEAT_INTERVAL"
+      --minio-endpoint "$MINIO_ENDPOINT"
+    )
+    # shellcheck disable=SC2206
+    WORKER_ARGS+=( $WORKER_EXTRA_ARGS )
+
+    if [[ -x "$VENV_WORKER" ]]; then
+      exec "$VENV_WORKER" "${WORKER_ARGS[@]}"
+    fi
+    if command -v uv >/dev/null 2>&1; then
+      exec uv run landseer-worker "${WORKER_ARGS[@]}"
+    fi
+    echo "vm_worker.sh: neither $VENV_WORKER nor uv found. Run: cd $PROJECT_ROOT && uv sync" >&2
+    exit 127
   ) >>"$LOG_FILE" 2>&1 &
 
   echo $! >"$PID_FILE"

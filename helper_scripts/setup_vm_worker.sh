@@ -105,13 +105,13 @@ install_packages() {
 }
 
 install_uv() {
+  export PATH="$HOME/.local/bin:$PATH"
   if command -v uv >/dev/null 2>&1; then
     log "uv already installed."
     return
   fi
   log "Installing uv."
   curl -LsSf https://astral.sh/uv/install.sh | sh
-  export PATH="$HOME/.local/bin:$PATH"
   if ! grep -q 'HOME/.local/bin' "$HOME/.bashrc" 2>/dev/null; then
     echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
   fi
