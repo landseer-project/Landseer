@@ -89,7 +89,7 @@ start_worker() {
     export MINIO_BUCKET
     export MINIO_SECURE
 
-    exec poetry run landseer-worker \
+    exec uv run landseer-worker \
       --backend-url "$LANDSEER_BACKEND_URL" \
       --worker-id "$WORKER_ID" \
       --workspace "$WORKER_WORKSPACE" \
