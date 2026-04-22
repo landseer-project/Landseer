@@ -4,7 +4,7 @@ import argparse
 import sys
 from typing import Optional
 
-from ..common import get_logger
+from ..common import get_logger, init_sentry
 from .initialization import initialize_backend, set_backend_context
 
 # Get logger for this module
@@ -66,6 +66,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     """Main entry point for the backend CLI."""
     parser = create_parser()
     args = parser.parse_args(argv)
+
+    init_sentry("backend")
     
     # Set logging level based on debug flag
     if args.debug:
