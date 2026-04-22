@@ -93,7 +93,12 @@ start_worker() {
     export MINIO_BUCKET
     export MINIO_SECURE
 
-    VENV_WORKER="${PROJECT_ROOT}/.venv/bin/landseer-worker"
+    # Console scripts (landseer-worker) call `from src.worker.cli import main`, but the
+    # wheel layout installs `worker`/`common` as top-level packages, so `src` is missing.
+    # Running the module with repo root on PYTHONPATH matches the source tree.
+    export PYTHONPATH="${PROJECT_ROOT}${PYTHONPATH:+:$PYTHONPATH}"
+
+    VENV_PY="${PROJECT_ROOT}/.venv/bin/python"
     WORKER_ARGS=(
       --backend-url "$LANDSEER_BACKEND_URL"
       --worker-id "$WORKER_ID"
@@ -108,13 +113,13 @@ start_worker() {
     # shellcheck disable=SC2206
     WORKER_ARGS+=( $WORKER_EXTRA_ARGS )
 
-    if [[ -x "$VENV_WORKER" ]]; then
-      exec "$VENV_WORKER" "${WORKER_ARGS[@]}"
+    if [[ -x "$VENV_PY" ]]; then
+      exec "$VENV_PY" -m src.worker.cli "${WORKER_ARGS[@]}"
     fi
     if command -v uv >/dev/null 2>&1; then
-      exec uv run landseer-worker "${WORKER_ARGS[@]}"
+      exec uv run python -m src.worker.cli "${WORKER_ARGS[@]}"
     fi
-    echo "vm_worker.sh: neither $VENV_WORKER nor uv found. Run: cd $PROJECT_ROOT && uv sync" >&2
+    echo "vm_worker.sh: no ${VENV_PY} and no uv. Run: cd $PROJECT_ROOT && uv sync" >&2
     exit 127
   ) >>"$LOG_FILE" 2>&1 &
 
