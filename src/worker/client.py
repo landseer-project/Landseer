@@ -230,8 +230,36 @@ class LandseerClient:
         Returns:
             Progress statistics dictionary
         """
-        response = self._make_request("GET", "/progress")
-        return response.json()
+        try:
+            response = self._make_request("GET", "/progress")
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            # Headless backend: scheduler not initialized until a pipeline run starts.
+            # /workers/.../claim already returns has_task=False; /progress still 503s.
+            if e.response.status_code != 503:
+                raise
+            detail = ""
+            try:
+                body = e.response.json()
+                raw = body.get("detail", "")
+                detail = raw if isinstance(raw, str) else ""
+            except Exception:
+                pass
+            if "Scheduler not initialized" in detail or "scheduler" in detail.lower():
+                logger.debug(
+                    "Progress unavailable until scheduler is initialized; "
+                    "worker will keep polling for tasks."
+                )
+                return {
+                    "total": 0,
+                    "pending": 0,
+                    "running": 0,
+                    "completed": 0,
+                    "failed": 0,
+                    "progress_percent": 0.0,
+                    "is_complete": False,
+                }
+            raise
     
     def get_dataset_info(self) -> Dict[str, Any]:
         """

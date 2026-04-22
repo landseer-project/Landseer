@@ -114,10 +114,10 @@ start_worker() {
     WORKER_ARGS+=( $WORKER_EXTRA_ARGS )
 
     if [[ -x "$VENV_PY" ]]; then
-      exec "$VENV_PY" -m src.worker.cli "${WORKER_ARGS[@]}"
+      exec "$VENV_PY" -m src.worker "${WORKER_ARGS[@]}"
     fi
     if command -v uv >/dev/null 2>&1; then
-      exec uv run python -m src.worker.cli "${WORKER_ARGS[@]}"
+      exec uv run python -m src.worker "${WORKER_ARGS[@]}"
     fi
     echo "vm_worker.sh: no ${VENV_PY} and no uv. Run: cd $PROJECT_ROOT && uv sync" >&2
     exit 127

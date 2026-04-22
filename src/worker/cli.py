@@ -17,7 +17,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ..common import get_logger
+from ..common import get_logger, init_sentry
 from .client import LandseerClient, TaskInfo
 from .db import ArtifactCacheDB, CacheManager
 from .runner import TaskRunner, ExecutionResult, ContainerRuntime
@@ -1088,6 +1088,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     """Main entry point for the worker CLI."""
     parser = create_parser()
     args = parser.parse_args(argv)
+
+    init_sentry("worker")
     
     # Configure logging
     from ..common.pylogger import set_global_log_level
