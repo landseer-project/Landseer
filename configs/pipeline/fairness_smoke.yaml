@@ -16,7 +16,7 @@ pipeline:
   during_training:
     tools:
       - in_fair
-      - in_noop
+      - in_noop_celeba
 
   post_training:
     tools:

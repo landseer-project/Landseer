@@ -15,6 +15,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { StatusBadge } from '@/components/StatusBadge';
+import { Input } from '@/components/ui/input';
 import {
   getPipelineConfigs,
   getPipelineRuns,
@@ -23,6 +24,10 @@ import {
   getRegistryTools,
   getRunMetrics,
   getModelConfigs,
+  setPipelineKey,
+  getPipelineKey,
+  clearPipelineKey,
+  isPipelineKeyAuthError,
 } from '@/lib/api';
 import type { PipelineMetricsResponse, ModelConfigInfo } from '@/lib/api';
 import { formatTimestamp, formatRelativeTime, truncateId } from '@/lib/utils';
@@ -1096,6 +1101,17 @@ export function Pipelines() {
   const [compareOpen, setCompareOpen] = useState(false);
   const [customRunOpen, setCustomRunOpen] = useState(false);
   const [allRunsMetricsId, setAllRunsMetricsId] = useState<string | null>(null);
+  const [pipelineKeyDialogOpen, setPipelineKeyDialogOpen] = useState(false);
+  const [pipelineKeyInput, setPipelineKeyInput] = useState('');
+  const [pipelineKeyError, setPipelineKeyError] = useState<string | null>(null);
+  const [pendingStartRequest, setPendingStartRequest] = useState<{
+    configId: string;
+    dataset_name: string;
+    dataset_variant: string;
+    use_cache: boolean;
+    tools_override: Record<string, string[]> | null;
+    model_script?: string | null;
+  } | null>(null);
 
   const { data: configsData, isLoading: configsLoading } = useQuery({
     queryKey: ['pipeline-configs'],
@@ -1134,10 +1150,19 @@ export function Pipelines() {
     }) =>
       startPipelineRun(configId, { use_cache, dataset_name, dataset_variant, tools_override, model_script }),
     onSuccess: () => {
+      setPendingStartRequest(null);
       queryClient.invalidateQueries({ queryKey: ['pipeline-runs'] });
       queryClient.invalidateQueries({ queryKey: ['pipeline-configs'] });
       queryClient.invalidateQueries({ queryKey: ['scheduler-status'] });
       queryClient.invalidateQueries({ queryKey: ['progress'] });
+    },
+    onError: (error, variables) => {
+      if (isPipelineKeyAuthError(error)) {
+        setPendingStartRequest(variables);
+        setPipelineKeyInput('');
+        setPipelineKeyError('Access denied. Enter a valid pipeline key to continue.');
+        setPipelineKeyDialogOpen(true);
+      }
     },
   });
 
@@ -1153,6 +1178,40 @@ export function Pipelines() {
   const runs = runsData?.runs ?? [];
   const allTools = toolsData?.tools ?? [];
   const activeRun = runs.find((r) => r.status === 'running' || r.status === 'pending');
+  const hasStoredPipelineKey = Boolean(getPipelineKey());
+
+  function handleStartRun(request: {
+    configId: string;
+    dataset_name: string;
+    dataset_variant: string;
+    use_cache: boolean;
+    tools_override: Record<string, string[]> | null;
+    model_script?: string | null;
+  }) {
+    startMutation.mutate(request);
+  }
+
+  function openPipelineKeyDialog() {
+    setPipelineKeyError(null);
+    setPipelineKeyInput('');
+    setPipelineKeyDialogOpen(true);
+  }
+
+  function savePipelineKeyAndRetry() {
+    const key = pipelineKeyInput.trim();
+    if (!key) {
+      setPipelineKeyError('Pipeline key is required.');
+      return;
+    }
+    setPipelineKey(key);
+    setPipelineKeyError(null);
+    setPipelineKeyDialogOpen(false);
+    if (pendingStartRequest) {
+      const req = pendingStartRequest;
+      setPendingStartRequest(null);
+      startMutation.mutate(req);
+    }
+  }
 
   if (configsLoading && runsLoading) {
     return (
@@ -1183,6 +1242,15 @@ export function Pipelines() {
           <Button
             variant="outline"
             size="sm"
+            onClick={openPipelineKeyDialog}
+            title={hasStoredPipelineKey ? 'Pipeline key configured for this browser session' : 'Set pipeline key'}
+          >
+            <Lock className="mr-2 h-4 w-4" />
+            {hasStoredPipelineKey ? 'Pipeline Key Set' : 'Set Pipeline Key'}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => {
               queryClient.invalidateQueries({ queryKey: ['pipeline-configs'] });
               queryClient.invalidateQueries({ queryKey: ['pipeline-runs'] });
@@ -1202,7 +1270,7 @@ export function Pipelines() {
         </div>
       </div>
 
-      {startMutation.isError && (
+      {!isPipelineKeyAuthError(startMutation.error) && startMutation.isError && (
         <Card className="border-destructive">
           <CardContent className="flex items-center gap-3 py-3">
             <AlertCircle className="h-5 w-5 text-destructive shrink-0" />
@@ -1220,7 +1288,7 @@ export function Pipelines() {
               key={config.id}
               config={config}
               runs={runs}
-              onStartRun={(id, opts) => startMutation.mutate({ configId: id, model_script: null, ...opts })}
+              onStartRun={(id, opts) => handleStartRun({ configId: id, model_script: null, ...opts })}
               onStopRun={(id) => stopMutation.mutate(id)}
               isStarting={startMutation.isPending}
             />
@@ -1372,11 +1440,64 @@ export function Pipelines() {
         <CustomRunDialog
           configs={configs}
           allTools={allTools}
-          onStartRun={(id, opts) => startMutation.mutate({ configId: id, ...opts })}
+          onStartRun={(id, opts) => handleStartRun({ configId: id, ...opts })}
           isStarting={startMutation.isPending}
           onClose={() => setCustomRunOpen(false)}
         />
       )}
+
+      <Dialog open={pipelineKeyDialogOpen} onOpenChange={setPipelineKeyDialogOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Lock className="h-4 w-4" />
+              Pipeline Access Key
+            </DialogTitle>
+            <DialogDescription>
+              Enter the key sent as <code className="text-xs">X-Pipeline-Key</code> for protected actions.
+              Key is stored only for this browser session.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Input
+              type="password"
+              value={pipelineKeyInput}
+              placeholder="Enter pipeline key"
+              onChange={(e) => {
+                setPipelineKeyInput(e.target.value);
+                if (pipelineKeyError) setPipelineKeyError(null);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') savePipelineKeyAndRetry();
+              }}
+            />
+            {pipelineKeyError && <p className="text-xs text-destructive">{pipelineKeyError}</p>}
+            {hasStoredPipelineKey && (
+              <p className="text-xs text-muted-foreground">
+                A key is already saved for this session. Saving a new key replaces it.
+              </p>
+            )}
+          </div>
+          <DialogFooter className="gap-2 sm:justify-between">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                clearPipelineKey();
+                setPendingStartRequest(null);
+                setPipelineKeyInput('');
+                setPipelineKeyError(null);
+                setPipelineKeyDialogOpen(false);
+              }}
+            >
+              Clear Key
+            </Button>
+            <Button type="button" onClick={savePipelineKeyAndRetry}>
+              Save {pendingStartRequest ? 'and Retry' : 'Key'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
     </div>
   );

@@ -29,8 +29,79 @@ from .workflow_generator import (
     generate_during_training_options,
 )
 from .stage_validation import load_tools_and_validate_pipeline_stages, resolve_tools_yaml_path
+from .container_labels import get_container_labels_for_image
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_dataset_token(value: str) -> str:
+    """Canonical dataset token used for compatibility checks."""
+    token = "".join(ch for ch in str(value).lower() if ch.isalnum())
+    aliases = {
+        "cifar10": "cifar10",
+        "cifar100": "cifar100",
+        "celeba": "celeba",
+    }
+    return aliases.get(token, token)
+
+
+def parse_supported_datasets_label(label_value: str) -> List[str]:
+    """Parse org.opencontainers.image.dataset label into canonical dataset tokens."""
+    if not label_value:
+        return []
+    parts = [p.strip() for p in str(label_value).split(",")]
+    return [normalize_dataset_token(p) for p in parts if p.strip()]
+
+
+def validate_pipeline_tool_dataset_compatibility(
+    pipeline_config: "PipelineConfig",
+    tools_by_id: Dict[str, ToolDefinition],
+    requested_dataset_name: str,
+    *,
+    fetch_remote_labels: bool = True,
+) -> List[Dict[str, str]]:
+    """
+    Validate selected tools support the requested dataset via image labels.
+
+    Returns list of incompatibilities; each item contains stage, tool_id,
+    image, requested_dataset, and supported_datasets.
+    """
+    requested = normalize_dataset_token(requested_dataset_name)
+    incompatibilities: List[Dict[str, str]] = []
+
+    for stage_name in ("pre_training", "during_training", "post_training", "deployment"):
+        stage_cfg = pipeline_config.pipeline.get(stage_name)
+        if stage_cfg is None:
+            continue
+        for tool_id in getattr(stage_cfg, "tools", []) or []:
+            tool_def = tools_by_id.get(tool_id)
+            if tool_def is None:
+                continue
+            labels: Dict[str, str] = {}
+            if fetch_remote_labels:
+                labels = get_container_labels_for_image(
+                    tool_def.container.image,
+                    tool_def.container.runtime,
+                )
+
+            supported_raw = labels.get("org.opencontainers.image.dataset", "")
+            supported = parse_supported_datasets_label(supported_raw)
+            if not supported:
+                # Non-breaking behavior: no dataset label means allow.
+                continue
+            if requested not in supported:
+                incompatibilities.append(
+                    {
+                        "stage": stage_name,
+                        "tool_id": tool_id,
+                        "tool_name": tool_def.name,
+                        "image": tool_def.container.image,
+                        "requested_dataset": requested_dataset_name,
+                        "supported_datasets": ", ".join(supported),
+                    }
+                )
+
+    return incompatibilities
 
 
 # ============================================================================

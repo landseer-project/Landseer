@@ -1,44 +1,23 @@
-# Fairness Evaluation Pipeline Configuration
-# Uses CelebA dataset with the in_fair:v3 tool for fairness training
-# Evaluates demographic parity and equalized odds
-
+# Fairness pipeline (new-format tool ids from configs/tools.yaml)
 dataset:
   name: celeba
   variant: clean
 
 model:
   script: configs/model/config_model_combined.py
+  framework: pytorch
 
 pipeline:
   pre_training:
-    noop:
-      name: noop
-      container:
-        image: ghcr.io/landseer-project/pre_noop:v2
-        command: python main.py
-
+    tools:
+      - pre_noop
   during_training:
     tools:
-    - name: in-fair
-      container:
-        image: ghcr.io/landseer-project/in_fair:v5
-        command: python3 main.py
-    noop:
-      name: in_noop
-      container:
-        image: ghcr.io/landseer-project/in_noop:v5
-        command: python main.py
-
+      - in_fair
+      - in_noop
   post_training:
-    noop:
-      name: post_noop
-      container:
-        image: ghcr.io/landseer-project/post_noop_new:v1
-        command: python main.py
-
+    tools:
+      - post_noop
   deployment:
-    noop:
-      name: deploy_noop
-      container:
-        image: ghcr.io/landseer-project/deploy_noop_docker:v1
-        command: python main.py
+    tools:
+      - deploy_noop

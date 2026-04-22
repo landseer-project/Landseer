@@ -25,6 +25,10 @@ vi.mock('../lib/api', () => ({
   getRegistryTools: vi.fn(),
   getRunMetrics: vi.fn(),
   getModelConfigs: vi.fn(),
+  setPipelineKey: vi.fn(),
+  getPipelineKey: vi.fn(),
+  clearPipelineKey: vi.fn(),
+  isPipelineKeyAuthError: vi.fn(),
 }));
 
 import * as api from '../lib/api';
@@ -157,6 +161,8 @@ describe('combination count logic', () => {
     vi.mocked(api.getPipelineConfigs).mockResolvedValue({ configs: [MOCK_CONFIG], total: 1 });
     vi.mocked(api.getPipelineRuns).mockResolvedValue({ runs: [], total: 0 });
     vi.mocked(api.getModelConfigs).mockResolvedValue({ models: [], total: 0 });
+    vi.mocked(api.getPipelineKey).mockReturnValue(null);
+    vi.mocked(api.isPipelineKeyAuthError).mockReturnValue(false);
   });
 
   it('shows 1 combo when only pre_training baseline tool is registered', async () => {
@@ -200,6 +206,8 @@ describe('CustomRunDialog', () => {
     vi.mocked(api.getPipelineConfigs).mockResolvedValue({ configs: [MOCK_CONFIG], total: 1 });
     vi.mocked(api.getPipelineRuns).mockResolvedValue({ runs: [], total: 0 });
     vi.mocked(api.getModelConfigs).mockResolvedValue({ models: [], total: 0 });
+    vi.mocked(api.getPipelineKey).mockReturnValue(null);
+    vi.mocked(api.isPipelineKeyAuthError).mockReturnValue(false);
   });
 
   async function openCustomRunDialog() {
@@ -329,6 +337,8 @@ describe('ConfigCard', () => {
   beforeEach(() => {
     vi.mocked(api.getRegistryTools).mockResolvedValue({ tools: ALL_MOCK_TOOLS, total: ALL_MOCK_TOOLS.length });
     vi.mocked(api.getModelConfigs).mockResolvedValue({ models: [], total: 0 });
+    vi.mocked(api.getPipelineKey).mockReturnValue(null);
+    vi.mocked(api.isPipelineKeyAuthError).mockReturnValue(false);
   });
 
   it('shows Start Run button when no active run', async () => {
@@ -407,6 +417,8 @@ describe('CompareDialog', () => {
     vi.mocked(api.getPipelineRuns).mockResolvedValue({ runs: twoCompletedRuns, total: 2 });
     vi.mocked(api.getRegistryTools).mockResolvedValue({ tools: [], total: 0 });
     vi.mocked(api.getModelConfigs).mockResolvedValue({ models: [], total: 0 });
+    vi.mocked(api.getPipelineKey).mockReturnValue(null);
+    vi.mocked(api.isPipelineKeyAuthError).mockReturnValue(false);
   });
 
   async function openCompareDialog() {
@@ -477,6 +489,8 @@ describe('Pipelines page', () => {
   beforeEach(() => {
     vi.mocked(api.getRegistryTools).mockResolvedValue({ tools: [], total: 0 });
     vi.mocked(api.getModelConfigs).mockResolvedValue({ models: [], total: 0 });
+    vi.mocked(api.getPipelineKey).mockReturnValue(null);
+    vi.mocked(api.isPipelineKeyAuthError).mockReturnValue(false);
   });
 
   it('shows loading state while queries are in flight', () => {
@@ -575,5 +589,55 @@ describe('Pipelines page', () => {
     // Selection cleared, "2 selected" text should be gone
     expect(screen.queryByText('· 2 selected')).toBeNull();
     expect(screen.getByRole('button', { name: /^compare$/i })).toBeDefined();
+  });
+});
+
+describe('Pipeline key auth flow', () => {
+  beforeEach(() => {
+    vi.mocked(api.getPipelineConfigs).mockResolvedValue({ configs: [MOCK_CONFIG], total: 1 });
+    vi.mocked(api.getPipelineRuns).mockResolvedValue({ runs: [], total: 0 });
+    vi.mocked(api.getRegistryTools).mockResolvedValue({ tools: ALL_MOCK_TOOLS, total: ALL_MOCK_TOOLS.length });
+    vi.mocked(api.getModelConfigs).mockResolvedValue({ models: [], total: 0 });
+    vi.mocked(api.getPipelineKey).mockReturnValue(null);
+    vi.mocked(api.isPipelineKeyAuthError).mockReturnValue(false);
+  });
+
+  it('prompts for pipeline key on auth error and retries start', async () => {
+    const forbidden = new Error('forbidden');
+    vi.mocked(api.startPipelineRun)
+      .mockRejectedValueOnce(forbidden)
+      .mockResolvedValueOnce({ ...MOCK_RUN_COMPLETED, status: 'pending' });
+    vi.mocked(api.isPipelineKeyAuthError).mockImplementation((err) => err === forbidden);
+
+    wrap(<Pipelines />);
+
+    const startBtn = await screen.findByRole('button', { name: /^start run$/i });
+    await userEvent.click(startBtn);
+    await screen.findByText(`Start Run — ${MOCK_CONFIG.name}`);
+    await userEvent.click(screen.getByRole('button', { name: /^start$/i }));
+
+    await screen.findByRole('heading', { name: /pipeline access key/i });
+    await userEvent.type(screen.getByPlaceholderText(/enter pipeline key/i), 'secret-key');
+    await userEvent.click(screen.getByRole('button', { name: /save and retry/i }));
+
+    await waitFor(() => {
+      expect(api.setPipelineKey).toHaveBeenCalledWith('secret-key');
+      expect(api.startPipelineRun).toHaveBeenCalled();
+    });
+
+    const lastCall = vi.mocked(api.startPipelineRun).mock.calls.at(-1);
+    expect(lastCall?.[0]).toBe(MOCK_CONFIG.id);
+  });
+
+  it('supports clearing an existing session key', async () => {
+    vi.mocked(api.getPipelineKey).mockReturnValue('existing-key');
+
+    wrap(<Pipelines />);
+
+    await userEvent.click(await screen.findByRole('button', { name: /pipeline key set/i }));
+    await screen.findByRole('heading', { name: /pipeline access key/i });
+    await userEvent.click(screen.getByRole('button', { name: /clear key/i }));
+
+    expect(api.clearPipelineKey).toHaveBeenCalled();
   });
 });
