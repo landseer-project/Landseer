@@ -46,6 +46,15 @@ tools:
       command: python main.py
       runtime: null
 
+  in_noop_celeba:
+    name: in-noop-celeba
+    defense_stage: during_training
+    is_baseline: true
+    container:
+      image: ghcr.io/landseer-project/in_noop_celeba:v3
+      command: python main.py
+      runtime: null
+
   in_trades:
     name: in-trades
     defense_stage: during_training

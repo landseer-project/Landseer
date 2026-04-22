@@ -20,5 +20,5 @@ pipeline:
   deployment:
     tools:
       - deploy_dp
-      - post_magnet
+      - deploy_explainshap
       - deploy_noop

@@ -14,12 +14,14 @@ Usage:
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Depends, Query
+from fastapi import FastAPI, HTTPException, Depends, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+import yaml
 
 from ..common import get_logger
 from ..pipeline.tasks import TaskStatus, TaskType
@@ -235,6 +237,10 @@ class AddToolRequest(BaseModel):
     command: str = Field(description="Command to run")
     runtime: Optional[str] = Field(default=None, description="Container runtime")
     is_baseline: bool = Field(default=False, description="Whether this is a baseline tool")
+    defense_stage: Optional[str] = Field(
+        default=None,
+        description="Pipeline stage this tool belongs to (pre_training/during_training/post_training/deployment)",
+    )
 
 
 class ToolListResponse(BaseModel):
@@ -493,19 +499,23 @@ class SchedulerState:
         image: str,
         command: str,
         runtime: Optional[str] = None,
-        is_baseline: bool = False
+        is_baseline: bool = False,
+        defense_stage: Optional[str] = None,
+        key: Optional[str] = None,
     ) -> None:
         """Add a custom tool to the registry."""
-        self._custom_tools[name] = {
+        registry_key = key or name
+        self._custom_tools[registry_key] = {
             "name": name,
             "container": {
                 "image": image,
                 "command": command,
                 "runtime": runtime
             },
-            "is_baseline": is_baseline
+            "is_baseline": is_baseline,
+            "defense_stage": defense_stage,
         }
-        logger.info(f"Tool added: {name}")
+        logger.info(f"Tool added: key={registry_key}, name={name}")
     
     def get_all_tools(self) -> Dict[str, Dict[str, Any]]:
         """Get all tools (from registry + custom)."""
@@ -613,6 +623,80 @@ def task_to_response(task, state: Optional["SchedulerState"] = None) -> TaskResp
         error_message=error_message,
         execution_time_ms=execution_time_ms
     )
+
+
+def _required_pipeline_keys() -> List[str]:
+    """Read configured API keys used to protect mutating endpoints."""
+    raw = os.getenv("LANDSEER_PIPELINE_KEYS", "")
+    if not raw:
+        return []
+    return [k.strip() for k in raw.split(",") if k.strip()]
+
+
+def _require_pipeline_key(x_pipeline_key: Optional[str] = Header(default=None, alias="X-Pipeline-Key")) -> None:
+    """
+    Enforce the same key gate as run-start when LANDSEER_PIPELINE_KEYS is configured.
+    If no keys are configured, endpoint remains open for local/dev workflows.
+    """
+    allowed = _required_pipeline_keys()
+    if not allowed:
+        return
+    if not x_pipeline_key or x_pipeline_key not in allowed:
+        raise HTTPException(status_code=403, detail="Invalid or missing X-Pipeline-Key")
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _tools_registry_path() -> Path:
+    """
+    Resolve persistent tools registry YAML path.
+    Allows override via LANDSEER_TOOLS_YAML for tests or custom deployments.
+    """
+    cfg = os.getenv("LANDSEER_TOOLS_YAML", "configs/tools.yaml")
+    p = Path(cfg)
+    if p.is_absolute():
+        return p
+    cwd_candidate = Path.cwd() / p
+    if cwd_candidate.exists():
+        return cwd_candidate
+    return _repo_root() / p
+
+
+def _tool_key_from_name(name: str) -> str:
+    slug = "".join(ch.lower() if ch.isalnum() else "_" for ch in str(name).strip())
+    slug = "_".join(part for part in slug.split("_") if part)
+    return slug or "custom_tool"
+
+
+def _persist_tool_to_yaml(tool_key: str, request: AddToolRequest) -> None:
+    """Persist a tool entry to tools.yaml so registry survives backend restart."""
+    yaml_path = _tools_registry_path()
+    yaml_path.parent.mkdir(parents=True, exist_ok=True)
+    if yaml_path.exists():
+        with yaml_path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    else:
+        data = {}
+    tools = data.get("tools")
+    if not isinstance(tools, dict):
+        tools = {}
+
+    tools[tool_key] = {
+        "name": request.name,
+        "defense_stage": request.defense_stage,
+        "is_baseline": request.is_baseline,
+        "container": {
+            "image": request.image,
+            "command": request.command,
+            "runtime": request.runtime,
+        },
+    }
+    data["tools"] = tools
+
+    with yaml_path.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(data, f, sort_keys=False)
 
 
 # ==============================================================================
@@ -1647,7 +1731,8 @@ async def add_tool(
         image=request.image,
         command=request.command,
         runtime=request.runtime,
-        is_baseline=request.is_baseline
+        is_baseline=request.is_baseline,
+        defense_stage=request.defense_stage,
     )
     
     return ToolInfo(
@@ -1657,7 +1742,8 @@ async def add_tool(
             command=request.command,
             runtime=request.runtime
         ),
-        is_baseline=request.is_baseline
+        is_baseline=request.is_baseline,
+        defense_stage=request.defense_stage,
     )
 
 
@@ -2033,29 +2119,42 @@ async def registry_list_tools(state: SchedulerState = Depends(get_scheduler_stat
 @app.post("/registry/tools", response_model=ToolInfo, tags=["Registry"])
 async def registry_add_tool(
     request: AddToolRequest,
-    state: SchedulerState = Depends(get_scheduler_state)
+    state: SchedulerState = Depends(get_scheduler_state),
+    _auth: None = Depends(_require_pipeline_key),
 ):
     """
     Add a new tool to the registry.
     
-    Note: This adds to runtime registry. For persistence, update configs/tools.yaml.
+    Persists to tools registry YAML and also updates runtime registry.
     """
+    tool_key = _tool_key_from_name(request.name)
+    _persist_tool_to_yaml(tool_key, request)
+    try:
+        from ..pipeline.tools import init_tool_registry
+        init_tool_registry(str(_tools_registry_path()))
+    except Exception as exc:
+        logger.warning("Failed to reload tool registry after persistence: %s", exc)
+
     state.add_tool(
         name=request.name,
         image=request.image,
         command=request.command,
         runtime=request.runtime,
-        is_baseline=request.is_baseline
+        is_baseline=request.is_baseline,
+        defense_stage=request.defense_stage,
+        key=tool_key,
     )
     
     return ToolInfo(
         name=request.name,
+        key=tool_key,
         container=ContainerInfo(
             image=request.image,
             command=request.command,
             runtime=request.runtime
         ),
-        is_baseline=request.is_baseline
+        is_baseline=request.is_baseline,
+        defense_stage=request.defense_stage,
     )
 
 
@@ -2644,13 +2743,19 @@ async def list_model_configs():
 async def start_pipeline_run(
     config_id: str,
     request: StartPipelineRunRequest,
-    state: SchedulerState = Depends(get_scheduler_state)
+    state: SchedulerState = Depends(get_scheduler_state),
+    _auth: None = Depends(_require_pipeline_key),
 ):
     """Start a new pipeline run for a configuration."""
     try:
         from .config_discovery import get_config_by_id
         from ..db import get_session, session_scope, PipelineRunRepository, PipelineRunStatus
-        from ..pipeline.config_loader import create_pipeline_from_config, load_pipeline_config
+        from ..pipeline.config_loader import (
+            create_pipeline_from_config,
+            load_pipeline_config,
+            validate_pipeline_tool_dataset_compatibility,
+        )
+        from ..pipeline.stage_validation import load_tools_and_validate_pipeline_stages
         from ..data import DatasetManager
         import uuid
         from datetime import datetime
@@ -2659,6 +2764,44 @@ async def start_pipeline_run(
         config = get_config_by_id(config_id)
         if not config:
             raise HTTPException(status_code=404, detail=f"Pipeline config '{config_id}' not found")
+
+        config_path_obj = Path(config.config_path)
+        if config_path_obj.exists():
+            loaded_cfg = load_pipeline_config(config.config_path)
+            effective_dataset_name = request.dataset_name or loaded_cfg.dataset.name
+            if request.tools_override:
+                for stage_name, tools in request.tools_override.items():
+                    stage_cfg = loaded_cfg.pipeline.get(stage_name)
+                    if stage_cfg is not None:
+                        stage_cfg.tools = list(tools)
+
+            tools_for_validation = load_tools_and_validate_pipeline_stages(
+                loaded_cfg.pipeline,
+                tools_yaml_path="configs/tools.yaml",
+                fetch_remote_labels=True,
+            )
+            compatibility_issues = validate_pipeline_tool_dataset_compatibility(
+                loaded_cfg,
+                tools_for_validation,
+                effective_dataset_name,
+                fetch_remote_labels=True,
+            )
+            if compatibility_issues:
+                first = compatibility_issues[0]
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Tool/dataset compatibility check failed: "
+                        f"tool '{first['tool_id']}' ({first['tool_name']}) in stage '{first['stage']}' "
+                        f"uses image '{first['image']}' which supports datasets [{first['supported_datasets']}], "
+                        f"but requested dataset is '{first['requested_dataset']}'."
+                    ),
+                )
+        else:
+            logger.warning(
+                "Skipping dataset compatibility check because config path does not exist: %s",
+                config.config_path,
+            )
 
         # ── Step 1: DB check + create run record (short-lived session) ──────────
         with session_scope() as session:

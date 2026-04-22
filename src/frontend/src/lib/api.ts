@@ -30,6 +30,44 @@ import type {
 // Re-export types for convenience (EvaluatorInfo and AddEvaluatorRequest are already exported as interfaces above)
 export type { ToolInfo, AddToolRequest };
 
+const PIPELINE_KEY_STORAGE_KEY = 'landseer.pipeline_key';
+const PIPELINE_KEY_HEADER = 'X-Pipeline-Key';
+
+function safeSessionStorage(): Storage | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+export function getPipelineKey(): string | null {
+  const storage = safeSessionStorage();
+  if (!storage) return null;
+  const value = storage.getItem(PIPELINE_KEY_STORAGE_KEY);
+  return value && value.trim().length > 0 ? value.trim() : null;
+}
+
+export function setPipelineKey(key: string): void {
+  const storage = safeSessionStorage();
+  if (!storage) return;
+  storage.setItem(PIPELINE_KEY_STORAGE_KEY, key.trim());
+}
+
+export function clearPipelineKey(): void {
+  const storage = safeSessionStorage();
+  if (!storage) return;
+  storage.removeItem(PIPELINE_KEY_STORAGE_KEY);
+}
+
+export function isPipelineKeyAuthError(error: unknown): boolean {
+  if (!axios.isAxiosError(error)) return false;
+  if (error.response?.status !== 403) return false;
+  const detail = String(error.response?.data?.detail ?? '').toLowerCase();
+  return detail.includes('x-pipeline-key') || detail.includes('invalid') || detail.includes('missing');
+}
+
 // Create axios instance with base configuration
 const api: AxiosInstance = axios.create({
   baseURL: '',
@@ -42,6 +80,13 @@ const api: AxiosInstance = axios.create({
 // Request interceptor for debugging
 api.interceptors.request.use(
   (config) => {
+    const pipelineKey = getPipelineKey();
+    if (pipelineKey) {
+      config.headers = config.headers ?? {};
+      if (!(PIPELINE_KEY_HEADER in config.headers)) {
+        config.headers[PIPELINE_KEY_HEADER] = pipelineKey;
+      }
+    }
     console.debug(`[API] ${config.method?.toUpperCase()} ${config.url}`);
     return config;
   },
