@@ -34,6 +34,23 @@ except ImportError:
 logger = get_logger(__name__)
 
 
+def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: Dict[str, Any]) -> None:
+    try:
+        payload = {
+            "sessionId": "26edf1",
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        with open("/share/landseer/workspace-ayushi/Landseer/.cursor/debug-26edf1.log", "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, separators=(",", ":")) + "\n")
+    except Exception:
+        pass
+
+
 class Worker:
     """
     Landseer Worker - executes pipeline tasks.
@@ -195,6 +212,22 @@ class Worker:
             logger.warning(f"Failed to get dataset info from backend: {e}")
             return None
         self._dataset_info = dataset_info or {}
+        # #region agent log
+        _debug_log(
+            run_id="pre-fix",
+            hypothesis_id="H1",
+            location="src/worker/cli.py:_fetch_dataset",
+            message="dataset_info fetched",
+            data={
+                "available": bool(dataset_info.get("available")),
+                "name": dataset_info.get("name"),
+                "variant": dataset_info.get("variant"),
+                "local_path": dataset_info.get("local_path"),
+                "minio_key_present": bool(dataset_info.get("minio_key")),
+                "minio_available": bool(dataset_info.get("minio_available")),
+            },
+        )
+        # #endregion
         
         if not dataset_info.get("available"):
             logger.info("No dataset available from backend")
@@ -216,6 +249,15 @@ class Worker:
             local_dir = Path(local_path)
             if local_dir.exists() and (local_dir / "data.npy").exists():
                 logger.info(f"Using local dataset path: {local_dir}")
+                # #region agent log
+                _debug_log(
+                    run_id="pre-fix",
+                    hypothesis_id="H2",
+                    location="src/worker/cli.py:_fetch_dataset",
+                    message="selected local dataset path",
+                    data={"selected_path": str(local_dir)},
+                )
+                # #endregion
                 return local_dir
         
         # Try to download from MinIO
@@ -231,6 +273,15 @@ class Worker:
                 # Check if already downloaded
                 if (download_dir / "data.npy").exists():
                     logger.info(f"Dataset already cached at: {download_dir}")
+                    # #region agent log
+                    _debug_log(
+                        run_id="pre-fix",
+                        hypothesis_id="H2",
+                        location="src/worker/cli.py:_fetch_dataset",
+                        message="selected cached minio dataset path",
+                        data={"selected_path": str(download_dir)},
+                    )
+                    # #endregion
                     return download_dir
                 
                 logger.info(f"Downloading dataset from MinIO: {minio_key}")
@@ -241,6 +292,15 @@ class Worker:
                         minio_key, download_dir
                     )
                     logger.info(f"Dataset downloaded to: {download_dir}")
+                    # #region agent log
+                    _debug_log(
+                        run_id="pre-fix",
+                        hypothesis_id="H2",
+                        location="src/worker/cli.py:_fetch_dataset",
+                        message="selected downloaded minio dataset path",
+                        data={"selected_path": str(download_dir)},
+                    )
+                    # #endregion
                     return download_dir
                     
             except Exception as e:
@@ -529,6 +589,25 @@ class Worker:
                 if refreshed:
                     self._dataset_path = refreshed
                     data_dir = refreshed
+            # #region agent log
+            _debug_log(
+                run_id="pre-fix",
+                hypothesis_id="H3",
+                location="src/worker/cli.py:_execute_task",
+                message="task execution context before run_task",
+                data={
+                    "task_id": task.id,
+                    "tool_name": task.tool_name,
+                    "run_id": task.run_id,
+                    "dependency_count": len(task.dependency_ids or []),
+                    "ancestor_count": len(ancestor_dirs),
+                    "data_dir": str(data_dir) if data_dir else None,
+                    "data_dir_exists": bool(data_dir and data_dir.exists()),
+                    "dataset_name": self._dataset_info.get("name"),
+                    "task_config_dataset": task.config.get("dataset") if isinstance(task.config, dict) else None,
+                },
+            )
+            # #endregion
             cache_context = self._build_cache_context(data_dir)
             cache_key = self._compute_cache_key(task, parent_hashes, cache_context)
 

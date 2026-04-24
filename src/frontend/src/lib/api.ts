@@ -147,8 +147,13 @@ export async function getWorkflowResults(workflowId: string): Promise<WorkflowRe
 // Tasks
 // ==============================================================================
 
-export async function getAllTasks(status?: string): Promise<TaskListResponse> {
-  const params = status ? { status } : {};
+export type GetAllTasksParams = {
+  status?: string;
+  limit?: number;
+  offset?: number;
+};
+
+export async function getAllTasks(params: GetAllTasksParams = {}): Promise<TaskListResponse> {
   const { data } = await api.get<TaskListResponse>('/tasks', { params });
   return data;
 }
@@ -417,7 +422,7 @@ export async function getPipelineMetrics(pipelineId: string): Promise<PipelineMe
 }
 
 export async function getRunningTasks(): Promise<TaskListResponse> {
-  return getAllTasks('running');
+  return getAllTasks({ status: 'running' });
 }
 
 export async function getWorkflowMetrics(workflowId: string): Promise<{

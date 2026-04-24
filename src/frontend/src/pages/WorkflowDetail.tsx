@@ -53,11 +53,11 @@ export function WorkflowDetail() {
     return (
       <div className="flex h-[60vh] flex-col items-center justify-center gap-4">
         <AlertTriangle className="h-12 w-12 text-yellow-500" />
-        <p className="text-lg text-muted-foreground">Workflow not found</p>
+        <p className="text-lg text-muted-foreground">Combination not found</p>
         <Button asChild>
           <Link to="/workflows">
             <ArrowLeft className="mr-2 h-4 w-4" />
-            Back to Workflows
+            Back to Combinations
           </Link>
         </Button>
       </div>
@@ -177,9 +177,9 @@ export function WorkflowDetail() {
         <TabsContent value="tasks" className="mt-4">
           <Card>
             <CardHeader>
-              <CardTitle>Task Pipeline</CardTitle>
+              <CardTitle>Task Sequence</CardTitle>
               <CardDescription>
-                Visual representation of tasks in this workflow
+                Visual representation of tasks in this combination
               </CardDescription>
             </CardHeader>
             <CardContent>

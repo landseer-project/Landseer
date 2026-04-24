@@ -37,7 +37,7 @@ const navItems: NavItem[] = [
     icon: <LayoutDashboard className="h-5 w-5" />,
   },
   {
-    title: 'Pipelines',
+    title: 'Experiments',
     href: '/pipelines',
     icon: <Rocket className="h-5 w-5" />,
   },
@@ -47,7 +47,7 @@ const navItems: NavItem[] = [
     icon: <ListTodo className="h-5 w-5" />,
   },
   {
-    title: 'Workflows',
+    title: 'Combinations',
     href: '/workflows',
     icon: <GitBranch className="h-5 w-5" />,
   },
