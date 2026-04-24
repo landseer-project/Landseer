@@ -143,7 +143,7 @@ tools:
     is_baseline: false
     container:
       image: ghcr.io/landseer-project/post_neuronprune:v1
-      command: python3 main.py --prune-percentage 0.1
+      command: python3 main.py 
       runtime: null
 
   # Deployment tools

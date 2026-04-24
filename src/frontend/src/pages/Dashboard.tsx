@@ -75,7 +75,7 @@ export function Dashboard() {
 
   const { data: completedTasksData } = useQuery({
     queryKey: ['completed-tasks'],
-    queryFn: () => getAllTasks('completed'),
+    queryFn: () => getAllTasks({ status: 'completed' }),
     refetchInterval: 5_000,
   });
 
@@ -123,16 +123,16 @@ export function Dashboard() {
             <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-yellow-100 dark:bg-yellow-900/30">
               <AlertCircle className="h-8 w-8 text-yellow-600 dark:text-yellow-400" />
             </div>
-            <CardTitle>No Active Pipeline Run</CardTitle>
+            <CardTitle>No Active Experiment Run</CardTitle>
             <CardDescription>
-              Start a pipeline run from the Pipelines page to see progress here.
+              Start an experiment run from the Experiments page to see progress here.
             </CardDescription>
           </CardHeader>
           <CardContent className="text-center">
             <Button asChild>
               <Link to="/pipelines">
                 <PlayCircle className="mr-2 h-4 w-4" />
-                Go to Pipelines
+                Go to Experiments
               </Link>
             </Button>
           </CardContent>
@@ -176,7 +176,7 @@ export function Dashboard() {
             )}
           </div>
           <p className="text-muted-foreground flex items-center gap-2">
-            Pipeline:{' '}
+            Experiment:{' '}
             <Link to="/pipelines" className="inline-flex items-center gap-1 font-medium text-foreground hover:underline">
               <Rocket className="h-3.5 w-3.5" />
               {pipeline?.name || 'Unknown'}
@@ -206,7 +206,7 @@ export function Dashboard() {
         <StatsCard
           title="Total Tasks"
           value={progress?.total || 0}
-          subtitle={`${pipeline?.workflow_count || 0} workflows`}
+          subtitle={`${pipeline?.workflow_count || 0} combinations`}
           icon={Layers}
           iconClassName="bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400"
         />
@@ -240,7 +240,7 @@ export function Dashboard() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Activity className="h-5 w-5" />
-              Pipeline Progress
+              Experiment Progress
             </CardTitle>
             <CardDescription>
               Real-time overview of task execution status

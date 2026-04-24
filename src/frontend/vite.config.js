@@ -7,10 +7,7 @@ export default defineConfig({
     'landseer.tsel.purdue.wtf',
     ],
         proxy: {
-            '/api': {
-                target: 'http://localhost:8000',
-                changeOrigin: true,
-            },
+            '/api': { target: 'http://localhost:8000', changeOrigin: true },
             '/health': { target: 'http://localhost:8000', changeOrigin: true },
             '/info': { target: 'http://localhost:8000', changeOrigin: true },
             '/pipeline': { target: 'http://localhost:8000', changeOrigin: true },

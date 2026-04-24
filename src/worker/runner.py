@@ -25,6 +25,23 @@ from .client import TaskInfo
 logger = get_logger(__name__)
 
 
+def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: Dict[str, Any]) -> None:
+    try:
+        payload = {
+            "sessionId": "26edf1",
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        with open("/share/landseer/workspace-ayushi/Landseer/.cursor/debug-26edf1.log", "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, separators=(",", ":")) + "\n")
+    except Exception:
+        pass
+
+
 def _link_or_copy(src: Path, dst: Path) -> None:
     """Hard-link *src* to *dst*; fall back to copy on cross-filesystem or permission error.
 
@@ -670,6 +687,74 @@ class TaskRunner:
         
         # Initialize appropriate runner
         self._init_container_runner()
+        self._last_prune_ts = 0.0
+
+    def _maybe_prune_stale_storage(self) -> None:
+        """Best-effort pruning of stale worker storage to avoid disk quota failures."""
+        now = time.time()
+        # Run at most once every 10 minutes per worker process.
+        if now - self._last_prune_ts < 600:
+            return
+        self._last_prune_ts = now
+
+        workspace_retention_h = int(os.environ.get("LANDSEER_WORKSPACE_RETENTION_HOURS", "24"))
+        cache_retention_h = int(os.environ.get("LANDSEER_CACHE_RETENTION_HOURS", "72"))
+        workspace_cutoff = now - (workspace_retention_h * 3600)
+        cache_cutoff = now - (cache_retention_h * 3600)
+
+        reclaimed_workspace = 0
+        reclaimed_cache = 0
+        removed_workspace = 0
+        removed_cache = 0
+
+        # Prune stale task directories in workspace.
+        for p in self.workspace_dir.glob("task_*"):
+            if not p.is_dir():
+                continue
+            try:
+                st = p.stat()
+                if st.st_mtime >= workspace_cutoff:
+                    continue
+                size = self._dir_size_bytes(p)
+                shutil.rmtree(p, ignore_errors=True)
+                reclaimed_workspace += size
+                removed_workspace += 1
+            except Exception:
+                continue
+
+        # Prune stale local cache entries.
+        if self.artifact_cache_dir and self.artifact_cache_dir.exists():
+            for p in self.artifact_cache_dir.iterdir():
+                try:
+                    st = p.stat()
+                    if st.st_mtime >= cache_cutoff:
+                        continue
+                    size = self._dir_size_bytes(p) if p.is_dir() else p.stat().st_size
+                    if p.is_dir():
+                        shutil.rmtree(p, ignore_errors=True)
+                    else:
+                        p.unlink(missing_ok=True)
+                    reclaimed_cache += size
+                    removed_cache += 1
+                except Exception:
+                    continue
+
+    @staticmethod
+    def _dir_size_bytes(path: Path) -> int:
+        total = 0
+        try:
+            if path.is_file():
+                return path.stat().st_size
+            for root, _dirs, files in os.walk(path):
+                for name in files:
+                    fp = Path(root) / name
+                    try:
+                        total += fp.stat().st_size
+                    except OSError:
+                        pass
+        except Exception:
+            return 0
+        return total
     
     def _init_container_runner(self) -> None:
         """Initialize the container runner based on detected runtime."""
@@ -699,6 +784,7 @@ class TaskRunner:
         Returns:
             Tuple of (task_dir, input_dir, output_dir)
         """
+        self._maybe_prune_stale_storage()
         task_dir = self.workspace_dir / task.id
         input_dir = task_dir / "input"
         output_dir = task_dir / "output"
@@ -927,10 +1013,37 @@ class TaskRunner:
             if isinstance(task.config, dict):
                 config_json_path = input_dir / "config.json"
                 config_json_path.write_text(json.dumps(task.config, indent=2, default=str))
+            # #region agent log
+            staged_files = sorted([p.name for p in input_dir.iterdir()]) if input_dir.exists() else []
+            required = ["data.npy", "test_data.npy", "filenames.npy", "test_filenames.npy"]
+            _debug_log(
+                run_id="pre-fix",
+                hypothesis_id="H4",
+                location="src/worker/runner.py:run_task",
+                message="staged task input before container run",
+                data={
+                    "task_id": task.id,
+                    "tool_name": task.tool_name,
+                    "input_dir": str(input_dir),
+                    "staged_file_count": len(staged_files),
+                    "staged_files_sample": staged_files[:25],
+                    "required_presence": {name: (input_dir / name).exists() for name in required},
+                },
+            )
+            # #endregion
 
             # Build environment
             task_env = env or {}
             task_env.update(task.config)  # Add task config to environment
+
+            # Normalize command for tools that follow Landseer CLI conventions.
+            # This prevents fragile failures when tool YAML omits standard I/O args.
+            effective_command = task.tool_command
+            if task.tool_name == "deploy_dataset_inference":
+                if "--input-dir" not in effective_command:
+                    effective_command = f"{effective_command} --input-dir /input"
+                if "--output" not in effective_command:
+                    effective_command = f"{effective_command} --output /output"
             
             # Add PYTHONPATH to include /input so containers can import config_model
             # This is a fallback in case the direct mount to /app/ doesn't work
@@ -956,7 +1069,7 @@ class TaskRunner:
             # Handle both old (exit_code, logs) and new (exit_code, logs, docker_command) return formats
             container_result = self._container_runner.run(
                 image=task.tool_image,
-                command=task.tool_command,
+                command=effective_command,
                 input_dir=input_dir,
                 output_dir=output_dir,
                 env=task_env,

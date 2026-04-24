@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   Select,
@@ -49,10 +50,17 @@ export function Tasks() {
   const [sortBy, setSortBy] = useState<'priority' | 'status' | 'name'>('priority');
   const [showReadyQueue, setShowReadyQueue] = useState(false);
   const [showBlockedTasks, setShowBlockedTasks] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(200);
 
   const { data: tasksData, isLoading, isFetching } = useQuery({
-    queryKey: ['tasks', statusFilter === 'all' ? undefined : statusFilter],
-    queryFn: () => getAllTasks(statusFilter === 'all' ? undefined : statusFilter),
+    queryKey: ['tasks', statusFilter === 'all' ? undefined : statusFilter, page, pageSize],
+    queryFn: () =>
+      getAllTasks({
+        status: statusFilter === 'all' ? undefined : statusFilter,
+        limit: pageSize,
+        offset: (page - 1) * pageSize,
+      }),
     refetchInterval: 5_000,
   });
 
@@ -81,9 +89,23 @@ export function Tasks() {
   });
 
   const tasks = tasksData?.tasks || [];
+  const totalTasks = tasksData?.total || 0;
+  const totalPages = Math.max(1, Math.ceil(totalTasks / pageSize));
+  const startIndex = totalTasks === 0 ? 0 : (page - 1) * pageSize + 1;
+  const endIndex = totalTasks === 0 ? 0 : Math.min(page * pageSize, totalTasks);
   const readyTasks = readyTasksData?.tasks || [];
   const blockedTasks = blockedTasksData?.tasks || [];
   const isRefreshing = isFetching && !isLoading;
+
+  useEffect(() => {
+    setPage(1);
+  }, [statusFilter, pageSize]);
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [page, totalPages]);
 
   // Handle task query parameter (from worker card click)
   useEffect(() => {
@@ -153,7 +175,7 @@ export function Tasks() {
           )}
         </div>
         <p className="text-muted-foreground">
-          View and monitor all pipeline tasks
+          View and monitor all experiment tasks
         </p>
       </div>
 
@@ -414,7 +436,7 @@ export function Tasks() {
         <CardHeader>
           <CardTitle>Task List</CardTitle>
           <CardDescription>
-            {filteredTasks.length} of {tasks.length} tasks
+            {filteredTasks.length} shown on this page • {totalTasks} total matching tasks
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -449,7 +471,7 @@ export function Tasks() {
                   <div className="flex items-center gap-4">
                     <div className="hidden text-right sm:block">
                       <p className="text-sm">
-                        <span className="text-muted-foreground">Workflows:</span>{' '}
+                        <span className="text-muted-foreground">Combinations:</span>{' '}
                         {task.workflow_names.length > 0
                           ? task.workflow_names.slice(0, 2).join(', ') + (task.workflow_names.length > 2 ? '...' : '')
                           : task.workflows.length}
@@ -482,6 +504,43 @@ export function Tasks() {
               )}
             </div>
           </ScrollArea>
+          <div className="mt-4 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-muted-foreground">
+              Showing {startIndex}-{endIndex} of {totalTasks}
+            </p>
+            <div className="flex items-center gap-2">
+              <Select value={String(pageSize)} onValueChange={(v) => setPageSize(Number(v))}>
+                <SelectTrigger className="w-[120px]">
+                  <SelectValue placeholder="Page size" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="50">50 / page</SelectItem>
+                  <SelectItem value="100">100 / page</SelectItem>
+                  <SelectItem value="200">200 / page</SelectItem>
+                  <SelectItem value="500">500 / page</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page <= 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+              >
+                Previous
+              </Button>
+              <span className="min-w-[90px] text-center text-sm text-muted-foreground">
+                Page {page} / {totalPages}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page >= totalPages}
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              >
+                Next
+              </Button>
+            </div>
+          </div>
         </CardContent>
       </Card>
 
@@ -527,7 +586,7 @@ export function Tasks() {
                   </div>
                   <div className="space-y-1">
                     <p className="text-sm text-muted-foreground">Shared by</p>
-                    <p className="font-medium">{selectedTask.counter} workflow{selectedTask.counter !== 1 ? 's' : ''}</p>
+                    <p className="font-medium">{selectedTask.counter} combination{selectedTask.counter !== 1 ? 's' : ''}</p>
                   </div>
                   {selectedTask.worker_id && (
                     <div className="space-y-1">
@@ -574,7 +633,7 @@ export function Tasks() {
                 </div>
 
                 <div className="space-y-2">
-                  <p className="text-sm text-muted-foreground">Workflows ({selectedTask.workflows.length})</p>
+                  <p className="text-sm text-muted-foreground">Combinations ({selectedTask.workflows.length})</p>
                   <div className="flex flex-wrap gap-2">
                     {selectedTask.workflow_names.length > 0
                       ? selectedTask.workflow_names.map((wfName, idx) => (

@@ -201,7 +201,7 @@ export function Metrics() {
           {isFetching && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
         </div>
         <p className="text-gray-600">
-          {metrics.pipeline_name} · {metrics.workflow_count} workflows
+          {metrics.pipeline_name} · {metrics.workflow_count} combinations
         </p>
       </div>
 
@@ -219,10 +219,10 @@ export function Metrics() {
               <div>
                 <h3 className="font-semibold text-blue-900 dark:text-blue-100">No metrics yet</h3>
                 <p className="mt-1 text-sm text-blue-800 dark:text-blue-200">
-                  Metrics will appear here after workflow evaluations complete. Run your pipeline (training and evaluation tasks); once evaluators run, you'll see clean accuracy, PGD accuracy, and other metrics in the cards and comparison table below.
+                  Metrics will appear here after combination evaluations complete. Run your experiment (training and evaluation tasks); once evaluators run, you'll see clean accuracy, PGD accuracy, and other metrics in the cards and comparison table below.
                 </p>
                 <p className="mt-2 text-xs text-blue-700 dark:text-blue-300">
-                  You can still see workflow status (Pending / Completed) in the table. Use the <strong>Tasks</strong> or <strong>Workflows</strong> pages to monitor progress.
+                  You can still see combination status (Pending / Completed) in the table. Use the <strong>Tasks</strong> or <strong>Combinations</strong> pages to monitor progress.
                 </p>
               </div>
             </div>
@@ -233,14 +233,14 @@ export function Metrics() {
       {/* Overview Cards */}
       <div className="grid gap-4 md:grid-cols-4">
         <StatsCard
-          title="Total Workflows"
+          title="Total Combinations"
           value={metrics.workflow_count}
-          subtitle="Workflow combinations"
+          subtitle="Combinations in experiment"
         />
         <StatsCard
           title="Avg Clean Accuracy"
           value={avgCleanAccuracy != null ? `${(avgCleanAccuracy * 100).toFixed(1)}%` : 'N/A'}
-          subtitle={hasNoData ? 'Complete evaluations to see value' : 'Across all workflows'}
+          subtitle={hasNoData ? 'Complete evaluations to see value' : 'Across all combinations'}
         />
         <StatsCard
           title="Best PGD Accuracy"
@@ -250,7 +250,7 @@ export function Metrics() {
         <StatsCard
           title="Completed Evaluations"
           value={completedEvals}
-          subtitle={`of ${metrics.workflow_count} workflows`}
+          subtitle={`of ${metrics.workflow_count} combinations`}
         />
       </div>
 
@@ -265,11 +265,11 @@ export function Metrics() {
         <TabsContent value="table">
           <Card>
             <CardHeader>
-              <CardTitle>Workflow Comparison</CardTitle>
+              <CardTitle>Combination Comparison</CardTitle>
               <CardDescription>
                 {allMetricNames.length > 0 ? (
                   <>
-                    All metrics across workflows.
+                    All metrics across combinations.
                     {baselineWorkflow && (
                       <span className="ml-1 text-amber-600 dark:text-amber-400">
                         <span className="inline-block w-3 h-3 rounded-sm bg-amber-400 mr-1 align-middle" />
@@ -279,7 +279,7 @@ export function Metrics() {
                     )}
                   </>
                 ) : (
-                  'Workflow status. Metrics columns will appear once evaluations complete.'
+                  'Combination status. Metrics columns will appear once evaluations complete.'
                 )}
               </CardDescription>
             </CardHeader>
@@ -288,7 +288,7 @@ export function Metrics() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b">
-                      <th className="text-left py-2 px-3">Workflow</th>
+                      <th className="text-left py-2 px-3">Combination</th>
                       {allMetricNames.length > 0 ? (
                         allMetricNames.slice(0, 6).map((name) => (
                           <th key={name} className="text-left py-2 px-3">

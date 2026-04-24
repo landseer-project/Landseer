@@ -41,9 +41,13 @@ class Scheduler(ABC):
         ensuring tasks are in the correct state before creating a scheduler.
         """
         self._all_tasks = []
+        seen_task_ids = set()
         for workflow in self.pipeline.workflows:
             for task in workflow.tasks:
-                if task not in self._all_tasks:
+                # Dedup by stable task id in O(1). The previous `task in list` check
+                # becomes quadratic for large pipelines like trades.
+                if task.id not in seen_task_ids:
+                    seen_task_ids.add(task.id)
                     self._all_tasks.append(task)
     
     @abstractmethod

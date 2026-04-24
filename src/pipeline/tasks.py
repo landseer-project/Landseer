@@ -296,6 +296,9 @@ class EvaluationTask(Task):
 
 # Task registry for deduplication
 _task_registry: Dict[str, Task] = {}
+# Fast lookup index to avoid O(n) scan on every dedup check.
+# Key: (pipeline_id, task_hash)
+_task_registry_by_hash: Dict[tuple[str, str], Task] = {}
 
 
 def get_or_create_task(
@@ -331,23 +334,25 @@ def get_or_create_task(
     )
     
     task_hash = temp_task.get_hash()
-    
-    # Check if a task with this hash exists in the same pipeline
-    for existing_task in _task_registry.values():
-        if (existing_task.get_hash() == task_hash and 
-            (not existing_task.pipeline_id or existing_task.pipeline_id == pipeline_id)):
-            return existing_task
+    existing_task = _task_registry_by_hash.get((pipeline_id, task_hash))
+    if existing_task is None:
+        # Backward-compatible fallback for tasks with empty pipeline id.
+        existing_task = _task_registry_by_hash.get(("", task_hash))
+    if existing_task is not None:
+        return existing_task
     
     # No matching task found, register the new one
     temp_task.pipeline_id = pipeline_id
     _task_registry[temp_task.id] = temp_task
+    _task_registry_by_hash[(pipeline_id, task_hash)] = temp_task
     return temp_task
 
 
 def clear_task_registry():
     """Clear the task registry. Useful for testing."""
-    global _task_registry
+    global _task_registry, _task_registry_by_hash
     _task_registry.clear()
+    _task_registry_by_hash.clear()
 
 
 # Task factory for creating tasks by type

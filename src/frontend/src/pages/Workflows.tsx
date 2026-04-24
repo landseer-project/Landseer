@@ -55,13 +55,13 @@ export function Workflows() {
       {/* Header */}
       <div>
         <div className="flex items-center gap-2">
-          <h1 className="text-3xl font-bold tracking-tight">Workflows</h1>
+          <h1 className="text-3xl font-bold tracking-tight">Combinations</h1>
           {isRefreshing && (
             <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
           )}
         </div>
         <p className="text-muted-foreground">
-          View and manage pipeline workflows
+          View and manage experiment combinations
         </p>
       </div>
 
@@ -74,7 +74,7 @@ export function Workflows() {
             </div>
             <div>
               <p className="text-2xl font-bold">{workflows.length}</p>
-              <p className="text-sm text-muted-foreground">Total Workflows</p>
+              <p className="text-sm text-muted-foreground">Total Combinations</p>
             </div>
           </CardContent>
         </Card>
@@ -114,7 +114,7 @@ export function Workflows() {
           <div className="relative max-w-sm">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              placeholder="Search workflows..."
+              placeholder="Search combinations..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-9"
@@ -123,7 +123,7 @@ export function Workflows() {
         </CardContent>
       </Card>
 
-      {/* Workflow List */}
+      {/* Combination List */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {filteredWorkflows.map((workflow) => (
           <WorkflowCard key={workflow.id} workflow={workflow} />
@@ -131,7 +131,7 @@ export function Workflows() {
 
         {filteredWorkflows.length === 0 && (
           <div className="col-span-full flex h-32 items-center justify-center text-muted-foreground">
-            No workflows found
+            No combinations found
           </div>
         )}
       </div>

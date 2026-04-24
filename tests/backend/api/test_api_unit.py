@@ -525,6 +525,42 @@ class TestSchedulerStateWorkerManagement:
         result = scheduler_state.update_worker_heartbeat("no_such_worker")
         assert result is False
 
+    def test_idle_heartbeat_clears_orphan_completed_task_pointer(self, scheduler_state):
+        task = make_task()
+        pipeline = build_pipeline_with_task(task)
+        scheduler_state.initialize(pipeline)
+        wid = scheduler_state.register_worker("h")
+        scheduler_state.workers[wid]["current_task_id"] = task.id
+        task.status = TaskStatus.COMPLETED
+
+        scheduler_state.update_worker_heartbeat(wid, status="idle")
+
+        assert scheduler_state.workers[wid]["current_task_id"] is None
+
+    def test_idle_heartbeat_reclaims_running_task(self, scheduler_state):
+        task = make_task()
+        pipeline = build_pipeline_with_task(task)
+        scheduler_state.initialize(pipeline)
+        wid = scheduler_state.register_worker("h")
+        scheduler_state.workers[wid]["current_task_id"] = task.id
+        task.status = TaskStatus.RUNNING
+
+        scheduler_state.update_worker_heartbeat(wid, status="idle")
+
+        assert task.status == TaskStatus.PENDING
+        assert scheduler_state.workers[wid]["current_task_id"] is None
+
+    def test_idle_heartbeat_clears_unknown_task_id(self, scheduler_state):
+        task = make_task()
+        pipeline = build_pipeline_with_task(task)
+        scheduler_state.initialize(pipeline)
+        wid = scheduler_state.register_worker("h")
+        scheduler_state.workers[wid]["current_task_id"] = "no_such_task_id"
+
+        scheduler_state.update_worker_heartbeat(wid, status="idle")
+
+        assert scheduler_state.workers[wid]["current_task_id"] is None
+
     def test_assign_task_sets_status_busy(self, scheduler_state):
         wid = scheduler_state.register_worker("h")
         scheduler_state.assign_task_to_worker(wid, "task_1")

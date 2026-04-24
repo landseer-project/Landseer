@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -273,7 +273,7 @@ function CompareDialog({
             Compare {runIds.length} Runs
           </DialogTitle>
           <DialogDescription>
-            Side-by-side metric comparison. Deltas are relative to each run's own baseline workflow.
+            Side-by-side metric comparison. Deltas are relative to each run's own baseline combination.
           </DialogDescription>
         </DialogHeader>
 
@@ -381,12 +381,36 @@ function RunMetricsDialog({
   runLabel: string;
   onClose: () => void;
 }) {
+  const PAGE_SIZE = 20;
+  const [page, setPage] = useState(1);
+
   const { data, isLoading, isError } = useQuery({
     queryKey: ['run-metrics', runId],
     queryFn: () => getRunMetrics(runId),
     retry: 1,
     staleTime: 30_000,
   });
+
+  useEffect(() => {
+    setPage(1);
+  }, [runId]);
+
+  const workflows = data?.workflows ?? [];
+  const metricNames = data?.metric_names ?? [];
+  const totalPages = Math.max(1, Math.ceil(workflows.length / PAGE_SIZE));
+  const clampedPage = Math.min(page, totalPages);
+  const startIdx = (clampedPage - 1) * PAGE_SIZE;
+  const endIdx = Math.min(startIdx + PAGE_SIZE, workflows.length);
+  const paginatedWorkflows = workflows.slice(startIdx, endIdx);
+
+  function getCombinationStatus(workflow: {
+    evaluators_run: string[];
+    evaluators_skipped: string[];
+  }): 'Completed' | 'Partial' | 'Pending' {
+    if (workflow.evaluators_run.length > 0) return 'Completed';
+    if (workflow.evaluators_skipped.length > 0) return 'Partial';
+    return 'Pending';
+  }
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
@@ -397,7 +421,7 @@ function RunMetricsDialog({
             Metrics — {runLabel}
           </DialogTitle>
           <DialogDescription>
-            Per-workflow evaluation metrics for this run.
+            Per-combination metrics, tool sequence, and evaluator status for this run.
           </DialogDescription>
         </DialogHeader>
 
@@ -425,73 +449,145 @@ function RunMetricsDialog({
         )}
 
         {data && !isLoading && data.metric_names.length > 0 && (
-          <ScrollArea className="flex-1">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b">
-                    <th className="text-left py-2 pr-4 font-medium text-muted-foreground w-40">Metric</th>
-                    {data.workflows.map((wf) => (
-                      <th key={wf.workflow_id} className="text-left py-2 px-3 font-medium min-w-[120px]">
-                        <span
-                          className="block truncate max-w-[170px]"
-                          title={
-                            getWorkflowToolsLabel(wf)
-                              ? `${wf.workflow_name}\n${getWorkflowToolsLabel(wf)}`
-                              : wf.workflow_name
-                          }
-                        >
-                          {wf.workflow_name}
-                        </span>
-                        {getWorkflowToolsLabel(wf) && (
-                          <span className="block truncate max-w-[190px] text-[11px] font-normal text-muted-foreground" title={getWorkflowToolsLabel(wf)}>
-                            {getWorkflowToolsLabel(wf)}
-                          </span>
-                        )}
-                        {wf.is_baseline && (
-                          <Badge variant="outline" className="text-xs px-1.5 py-0 h-4 border-amber-400 text-amber-600 font-normal mt-0.5">
-                            baseline
-                          </Badge>
-                        )}
-                      </th>
-                    ))}
-                    <th className="text-left py-2 px-3 font-medium text-muted-foreground min-w-[70px]">Avg</th>
-                    <th className="text-left py-2 px-3 font-medium text-emerald-600 min-w-[70px]">Best</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.metric_names.map((metric) => {
-                    const summary = data.summary[metric];
-                    return (
-                      <tr key={metric} className="border-b last:border-0 hover:bg-muted/30">
-                        <td className="py-2 pr-4 font-mono text-xs text-muted-foreground">{metric}</td>
-                        {data.workflows.map((wf) => {
-                          const val = wf.metrics[metric];
-                          return (
-                            <td key={wf.workflow_id} className="py-2 px-3 tabular-nums">
-                              {val != null ? (
-                                <span className={wf.is_baseline ? 'text-amber-600 dark:text-amber-400' : ''}>
-                                  {val.toFixed(4)}
-                                </span>
-                              ) : (
-                                <span className="text-muted-foreground">—</span>
-                              )}
-                            </td>
-                          );
-                        })}
-                        <td className="py-2 px-3 tabular-nums text-muted-foreground">
-                          {summary?.avg != null ? summary.avg.toFixed(4) : '—'}
-                        </td>
-                        <td className="py-2 px-3 tabular-nums text-emerald-600 font-medium">
-                          {summary?.max != null ? summary.max.toFixed(4) : '—'}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+          <div className="flex-1 min-h-0 space-y-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+              <div className="rounded-md border px-3 py-2">
+                <p className="text-muted-foreground">Combinations</p>
+                <p className="text-sm font-semibold">{workflows.length}</p>
+              </div>
+              <div className="rounded-md border px-3 py-2">
+                <p className="text-muted-foreground">Metrics tracked</p>
+                <p className="text-sm font-semibold">{metricNames.length}</p>
+              </div>
+              <div className="rounded-md border px-3 py-2">
+                <p className="text-muted-foreground">Completed combos</p>
+                <p className="text-sm font-semibold">
+                  {workflows.filter((w) => getCombinationStatus(w) === 'Completed').length}
+                </p>
+              </div>
+              <div className="rounded-md border px-3 py-2">
+                <p className="text-muted-foreground">Baseline combos</p>
+                <p className="text-sm font-semibold">{workflows.filter((w) => w.is_baseline).length}</p>
+              </div>
             </div>
-          </ScrollArea>
+
+            <ScrollArea className="flex-1 border rounded-md">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b bg-muted/40">
+                      <th className="text-left py-2 px-3 font-medium text-muted-foreground min-w-[180px]">
+                        Combination
+                      </th>
+                      <th className="text-left py-2 px-3 font-medium text-muted-foreground min-w-[220px]">
+                        Tool Sequence
+                      </th>
+                      {metricNames.map((metric) => (
+                        <th key={metric} className="text-left py-2 px-3 font-medium text-muted-foreground min-w-[110px]">
+                          {metric}
+                        </th>
+                      ))}
+                      <th className="text-left py-2 px-3 font-medium text-muted-foreground min-w-[140px]">
+                        Evaluators
+                      </th>
+                      <th className="text-left py-2 px-3 font-medium text-muted-foreground min-w-[100px]">
+                        Status
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paginatedWorkflows.map((wf) => {
+                      const status = getCombinationStatus(wf);
+                      return (
+                        <tr
+                          key={wf.workflow_id}
+                          className={`border-b last:border-0 hover:bg-muted/30 ${
+                            wf.is_baseline ? 'bg-amber-50/40 dark:bg-amber-950/15' : ''
+                          }`}
+                        >
+                          <td className="py-2 px-3 align-top">
+                            <div className="flex flex-col gap-1">
+                              <span className="font-medium">{wf.workflow_name}</span>
+                              <span className="text-xs text-muted-foreground font-mono">
+                                {truncateId(wf.workflow_id, 16)}
+                              </span>
+                              {wf.is_baseline && (
+                                <Badge variant="outline" className="text-xs px-1.5 py-0 h-4 w-fit border-amber-400 text-amber-600">
+                                  baseline
+                                </Badge>
+                              )}
+                            </div>
+                          </td>
+                          <td className="py-2 px-3 align-top">
+                            <span
+                              className="text-xs text-muted-foreground block max-w-[340px] truncate"
+                              title={getWorkflowToolsLabel(wf) || 'No tool sequence info'}
+                            >
+                              {getWorkflowToolsLabel(wf) || 'No tool sequence info'}
+                            </span>
+                          </td>
+                          {metricNames.map((metric) => {
+                            const val = wf.metrics[metric];
+                            return (
+                              <td key={metric} className="py-2 px-3 tabular-nums align-top">
+                                {val != null ? `${(val * 100).toFixed(2)}%` : '—'}
+                              </td>
+                            );
+                          })}
+                          <td className="py-2 px-3 align-top">
+                            <div className="flex flex-col gap-1 text-xs">
+                              <span className="text-emerald-600">run: {wf.evaluators_run.length}</span>
+                              <span className="text-muted-foreground">skipped: {wf.evaluators_skipped.length}</span>
+                            </div>
+                          </td>
+                          <td className="py-2 px-3 align-top">
+                            <Badge
+                              variant={
+                                status === 'Completed'
+                                  ? 'default'
+                                  : status === 'Partial'
+                                    ? 'secondary'
+                                    : 'outline'
+                              }
+                            >
+                              {status}
+                            </Badge>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </ScrollArea>
+
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span>
+                Showing {workflows.length === 0 ? 0 : startIdx + 1}-{endIdx} of {workflows.length} combinations
+              </span>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  disabled={clampedPage <= 1}
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                >
+                  Previous
+                </Button>
+                <span>Page {clampedPage} / {totalPages}</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  disabled={clampedPage >= totalPages}
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+          </div>
         )}
 
         <DialogFooter className="mt-3">
@@ -1218,7 +1314,7 @@ export function Pipelines() {
       <div className="flex h-[60vh] items-center justify-center">
         <div className="flex flex-col items-center gap-4">
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
-          <p className="text-muted-foreground">Loading pipeline configs...</p>
+          <p className="text-muted-foreground">Loading experiment configs...</p>
         </div>
       </div>
     );
@@ -1228,9 +1324,9 @@ export function Pipelines() {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Pipelines</h1>
+          <h1 className="text-3xl font-bold tracking-tight">Experiments</h1>
           <p className="text-muted-foreground">
-            {configs.length} config{configs.length !== 1 ? 's' : ''} discovered
+            {configs.length} experiment config{configs.length !== 1 ? 's' : ''} discovered
             {activeRun && (
               <span className="ml-2">
                 &middot; <span className="text-blue-500 font-medium">1 active run</span>
@@ -1275,7 +1371,7 @@ export function Pipelines() {
           <CardContent className="flex items-center gap-3 py-3">
             <AlertCircle className="h-5 w-5 text-destructive shrink-0" />
             <p className="text-sm text-destructive">
-              {(startMutation.error as Error)?.message || 'Failed to start pipeline run'}
+              {(startMutation.error as Error)?.message || 'Failed to start experiment run'}
             </p>
           </CardContent>
         </Card>
@@ -1298,7 +1394,7 @@ export function Pipelines() {
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12 text-center">
             <FolderOpen className="h-12 w-12 text-muted-foreground/40 mb-4" />
-            <p className="font-medium">No pipeline configs found</p>
+            <p className="font-medium">No experiment configs found</p>
             <p className="text-sm text-muted-foreground mt-1">
               Add YAML files to <code className="text-xs bg-muted px-1 py-0.5 rounded">configs/pipeline/</code> and
               they will be discovered automatically.

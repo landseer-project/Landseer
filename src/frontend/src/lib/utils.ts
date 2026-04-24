@@ -26,14 +26,42 @@ export function formatTimestamp(timestamp: string | null | undefined): string {
   return new Date(timestamp).toLocaleString();
 }
 
+/**
+ * Parse timestamps from the Python backend / DB. Returns null if the value
+ * cannot be interpreted (avoids treating parse failures as infinitely stale).
+ */
+export function parseBackendTimestampMs(
+  timestamp: string | null | undefined
+): number | null {
+  if (!timestamp) return null;
+  let ms = Date.parse(timestamp);
+  if (!Number.isNaN(ms)) return ms;
+  const normalized = timestamp.includes('T') ? timestamp : timestamp.replace(' ', 'T');
+  ms = Date.parse(normalized);
+  if (!Number.isNaN(ms)) return ms;
+  const t = new Date(timestamp).getTime();
+  return Number.isNaN(t) ? null : t;
+}
+
+/** Seconds since backend heartbeat time; null if unknown / unparseable. */
+export function heartbeatAgeSeconds(
+  timestamp: string | null | undefined
+): number | null {
+  const ms = parseBackendTimestampMs(timestamp);
+  if (ms == null) return null;
+  return Math.max(0, Math.floor((Date.now() - ms) / 1000));
+}
+
 export function formatRelativeTime(timestamp: string | null | undefined): string {
   if (!timestamp) return '--';
-  
-  const now = new Date();
-  const then = new Date(timestamp);
-  const diffMs = now.getTime() - then.getTime();
+
+  const ms = parseBackendTimestampMs(timestamp);
+  if (ms == null) return '--';
+
+  const now = Date.now();
+  const diffMs = now - ms;
   const diffSecs = Math.floor(diffMs / 1000);
-  
+
   if (diffSecs < 60) {
     return 'just now';
   } else if (diffSecs < 3600) {
