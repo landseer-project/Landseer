@@ -25,23 +25,6 @@ from .client import TaskInfo
 logger = get_logger(__name__)
 
 
-def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: Dict[str, Any]) -> None:
-    try:
-        payload = {
-            "sessionId": "26edf1",
-            "runId": run_id,
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data,
-            "timestamp": int(time.time() * 1000),
-        }
-        with open("/share/landseer/workspace-ayushi/Landseer/.cursor/debug-26edf1.log", "a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, separators=(",", ":")) + "\n")
-    except Exception:
-        pass
-
-
 def _link_or_copy(src: Path, dst: Path) -> None:
     """Hard-link *src* to *dst*; fall back to copy on cross-filesystem or permission error.
 
@@ -256,8 +239,15 @@ class DockerRunner:
         docker_cmd = ["docker", "run", "--rm"]
         # PyTorch DataLoader workers use POSIX shared memory under /dev/shm. Docker's default
         # (~64MB) is often exhausted by multi-worker loaders (bus error / killed workers).
-        shm_size = (os.environ.get("LANDSEER_DOCKER_SHM_SIZE") or "1g").strip() or "1g"
+        # CelebA in-training tools are especially memory-hungry, so give them a larger default.
+        default_shm_size = "8g" if "celeba" in image.lower() else "1g"
+        shm_size = (os.environ.get("LANDSEER_DOCKER_SHM_SIZE") or default_shm_size).strip() or default_shm_size
         docker_cmd.extend(["--shm-size", shm_size])
+        # Some tools (notably CelebA loaders with many DataLoader workers) can exceed
+        # Docker's default open-file descriptor cap and fail with "Too many open files".
+        # Raise nofile inside the container with an env-tunable default.
+        nofile_limit = (os.environ.get("LANDSEER_DOCKER_NOFILE") or "65535").strip() or "65535"
+        docker_cmd.extend(["--ulimit", f"nofile={nofile_limit}:{nofile_limit}"])
 
         # Add GPU support if available
         # Use --runtime=nvidia with NVIDIA_VISIBLE_DEVICES env var (compatible with CDI mode)
@@ -361,7 +351,14 @@ class DockerRunner:
         # Add extra mounts
         if extra_mounts:
             for host_path, container_path in extra_mounts.items():
-                docker_cmd.extend(["-v", f"{host_path}:{container_path}:ro"])
+                mount_mode = "ro"
+                mount_target = container_path
+                if ":" in container_path:
+                    maybe_target, maybe_mode = container_path.rsplit(":", 1)
+                    if maybe_mode in {"ro", "rw"}:
+                        mount_target = maybe_target
+                        mount_mode = maybe_mode
+                docker_cmd.extend(["-v", f"{host_path}:{mount_target}:{mount_mode}"])
         
         # Add environment variables
         if env:
@@ -451,7 +448,7 @@ class DockerRunner:
             start = time.monotonic()
             while proc.poll() is None:
                 elapsed = time.monotonic() - start
-                if elapsed >= self.timeout:
+                if self.timeout > 0 and elapsed >= self.timeout:
                     proc.kill()
                     proc.wait()
                     t_stdout.join(timeout=2.0)
@@ -623,7 +620,7 @@ class ApptainerRunner:
                 apptainer_cmd,
                 capture_output=True,
                 text=True,
-                timeout=self.timeout,
+                timeout=self.timeout if self.timeout > 0 else None,
                 env=run_env
             )
             
@@ -1013,28 +1010,12 @@ class TaskRunner:
             if isinstance(task.config, dict):
                 config_json_path = input_dir / "config.json"
                 config_json_path.write_text(json.dumps(task.config, indent=2, default=str))
-            # #region agent log
-            staged_files = sorted([p.name for p in input_dir.iterdir()]) if input_dir.exists() else []
-            required = ["data.npy", "test_data.npy", "filenames.npy", "test_filenames.npy"]
-            _debug_log(
-                run_id="pre-fix",
-                hypothesis_id="H4",
-                location="src/worker/runner.py:run_task",
-                message="staged task input before container run",
-                data={
-                    "task_id": task.id,
-                    "tool_name": task.tool_name,
-                    "input_dir": str(input_dir),
-                    "staged_file_count": len(staged_files),
-                    "staged_files_sample": staged_files[:25],
-                    "required_presence": {name: (input_dir / name).exists() for name in required},
-                },
-            )
-            # #endregion
 
             # Build environment
             task_env = env or {}
             task_env.update(task.config)  # Add task config to environment
+
+            local_extra_mounts = dict(extra_mounts or {})
 
             # Normalize command for tools that follow Landseer CLI conventions.
             # This prevents fragile failures when tool YAML omits standard I/O args.
@@ -1073,7 +1054,7 @@ class TaskRunner:
                 input_dir=input_dir,
                 output_dir=output_dir,
                 env=task_env,
-                extra_mounts=extra_mounts,
+                extra_mounts=local_extra_mounts or None,
                 model_script_path=model_script_path
             )
             

@@ -303,9 +303,33 @@ class Worker:
                 variant = dataset_info.get("variant", "clean")
                 download_dir = self.cache_dir / "datasets" / dataset_name / variant
                 download_dir.mkdir(parents=True, exist_ok=True)
+                model_script_minio_key = dataset_info.get("model_script_minio_key")
+                model_script_local = download_dir / "config_model.py"
+
+                def _download_model_script_if_needed() -> None:
+                    if not model_script_minio_key:
+                        return
+                    if model_script_local.exists():
+                        self._model_script_path = model_script_local
+                        return
+                    if hasattr(self._two_level_cache, "_minio_store"):
+                        ok = self._two_level_cache._minio_store.download_file(
+                            model_script_minio_key,
+                            model_script_local,
+                        )
+                        if ok:
+                            self._model_script_path = model_script_local
+                            logger.info(
+                                f"Downloaded model script from MinIO: {model_script_minio_key}"
+                            )
+                        else:
+                            logger.warning(
+                                f"Failed to download model script from MinIO: {model_script_minio_key}"
+                            )
                 
                 # Check if already downloaded
                 if (download_dir / "data.npy").exists():
+                    _download_model_script_if_needed()
                     logger.info(f"Dataset already cached at: {download_dir}")
                     return download_dir
                 
@@ -316,6 +340,7 @@ class Worker:
                     self._two_level_cache._minio_store.download_directory(
                         minio_key, download_dir
                     )
+                    _download_model_script_if_needed()
                     logger.info(f"Dataset downloaded to: {download_dir}")
                     return download_dir
                     
