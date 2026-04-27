@@ -17,6 +17,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import yaml
+
 from ..common import get_logger, init_sentry
 from .client import LandseerClient, TaskInfo
 from .db import ArtifactCacheDB, CacheManager
@@ -32,6 +34,7 @@ except ImportError:
     CacheConfig = None
 
 logger = get_logger(__name__)
+DEBUG_LOG_PATH = "/share/landseer/workspace-ayushi/Landseer/.cursor/debug-26edf1.log"
 
 
 def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: Dict[str, Any]) -> None:
@@ -45,7 +48,7 @@ def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, dat
             "data": data,
             "timestamp": int(time.time() * 1000),
         }
-        with open("/share/landseer/workspace-ayushi/Landseer/.cursor/debug-26edf1.log", "a", encoding="utf-8") as f:
+        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
             f.write(json.dumps(payload, separators=(",", ":")) + "\n")
     except Exception:
         pass
@@ -97,10 +100,10 @@ class Worker:
         self.worker_id = worker_id or f"worker_{uuid.uuid4().hex[:8]}"
         
         # Directories
-        self.workspace_dir = workspace_dir or Path(f"/tmp/landseer_worker_{self.worker_id}")
+        self.workspace_dir = workspace_dir or Path(f"/data/landseer/workers/{self.worker_id}")
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         
-        self.cache_dir = cache_dir or Path("/tmp/landseer_cache")
+        self.cache_dir = cache_dir or Path("/data/landseer/cache")
         self.data_path = data_path  # Path to input data (manual override)
         self._dataset_path: Optional[Path] = None  # Auto-fetched from backend
         
@@ -200,9 +203,65 @@ class Worker:
         Returns:
             Path to dataset directory, or None if not available
         """
-        # If manual data_path specified, use it
+        # If manual data_path specified, prefer it for dataset arrays, but still
+        # try to fetch backend dataset metadata so we can resolve model_script_path.
         if self.data_path and self.data_path.exists():
             logger.info(f"Using manual data path: {self.data_path}")
+            # In manual dataset mode, prefer explicit YAML config for model script
+            # so we don't couple to whichever pipeline the backend currently has loaded.
+            cfg_path_raw = os.environ.get("LANDSEER_PIPELINE_CONFIG")
+            if self._model_script_path is None and cfg_path_raw:
+                try:
+                    cfg_path = Path(cfg_path_raw).expanduser().resolve()
+                    cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+                    model_cfg = cfg.get("model") if isinstance(cfg, dict) else None
+                    model_script = model_cfg.get("script") if isinstance(model_cfg, dict) else None
+                    if model_script:
+                        model_path = Path(model_script)
+                        if not model_path.is_absolute():
+                            model_path = (cfg_path.parent / model_path).resolve()
+                        if model_path.exists():
+                            self._model_script_path = model_path
+                            logger.info(f"Model config script (pipeline yaml): {model_path}")
+                        else:
+                            logger.warning(
+                                f"Model script from LANDSEER_PIPELINE_CONFIG not found: {model_path}"
+                            )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to resolve model script from LANDSEER_PIPELINE_CONFIG={cfg_path_raw}: {e}"
+                    )
+
+            try:
+                dataset_info = self._client.get_dataset_info()
+                if isinstance(dataset_info, dict):
+                    self._dataset_info = dataset_info
+                    model_script = dataset_info.get("model_script")
+                    if model_script:
+                        model_path = Path(model_script)
+                        if model_path.exists():
+                            self._model_script_path = model_path
+                            logger.info(f"Model config script: {model_path}")
+                        else:
+                            logger.warning(f"Model script path not found: {model_script}")
+            except Exception as e:
+                logger.debug(
+                    f"Manual data path mode: failed to fetch dataset metadata for model script: {e}"
+                )
+            if self._model_script_path is None:
+                try:
+                    pipeline_info = self._client.get_pipeline_info()
+                    model = pipeline_info.get("model") if isinstance(pipeline_info, dict) else None
+                    model_script = model.get("script") if isinstance(model, dict) else None
+                    if model_script:
+                        model_path = Path(model_script)
+                        if model_path.exists():
+                            self._model_script_path = model_path
+                            logger.info(f"Model config script (pipeline info): {model_path}")
+                except Exception as e:
+                    logger.debug(
+                        f"Manual data path mode: failed to fetch pipeline info for model script: {e}"
+                    )
             return self.data_path
         
         # Try to get dataset info from backend
@@ -212,26 +271,6 @@ class Worker:
             logger.warning(f"Failed to get dataset info from backend: {e}")
             return None
         self._dataset_info = dataset_info or {}
-        # #region agent log
-        _debug_log(
-            run_id="pre-fix",
-            hypothesis_id="H1",
-            location="src/worker/cli.py:_fetch_dataset",
-            message="dataset_info fetched",
-            data={
-                "available": bool(dataset_info.get("available")),
-                "name": dataset_info.get("name"),
-                "variant": dataset_info.get("variant"),
-                "local_path": dataset_info.get("local_path"),
-                "minio_key_present": bool(dataset_info.get("minio_key")),
-                "minio_available": bool(dataset_info.get("minio_available")),
-            },
-        )
-        # #endregion
-        
-        if not dataset_info.get("available"):
-            logger.info("No dataset available from backend")
-            return None
         
         # Get model script path (for container execution)
         model_script = dataset_info.get("model_script")
@@ -242,6 +281,10 @@ class Worker:
                 logger.info(f"Model config script: {model_path}")
             else:
                 logger.warning(f"Model script path not found: {model_script}")
+
+        if not dataset_info.get("available"):
+            logger.info("No dataset available from backend")
+            return None
         
         # Check if we can use local path (same machine as backend)
         local_path = dataset_info.get("local_path")
@@ -249,15 +292,6 @@ class Worker:
             local_dir = Path(local_path)
             if local_dir.exists() and (local_dir / "data.npy").exists():
                 logger.info(f"Using local dataset path: {local_dir}")
-                # #region agent log
-                _debug_log(
-                    run_id="pre-fix",
-                    hypothesis_id="H2",
-                    location="src/worker/cli.py:_fetch_dataset",
-                    message="selected local dataset path",
-                    data={"selected_path": str(local_dir)},
-                )
-                # #endregion
                 return local_dir
         
         # Try to download from MinIO
@@ -273,15 +307,6 @@ class Worker:
                 # Check if already downloaded
                 if (download_dir / "data.npy").exists():
                     logger.info(f"Dataset already cached at: {download_dir}")
-                    # #region agent log
-                    _debug_log(
-                        run_id="pre-fix",
-                        hypothesis_id="H2",
-                        location="src/worker/cli.py:_fetch_dataset",
-                        message="selected cached minio dataset path",
-                        data={"selected_path": str(download_dir)},
-                    )
-                    # #endregion
                     return download_dir
                 
                 logger.info(f"Downloading dataset from MinIO: {minio_key}")
@@ -292,15 +317,6 @@ class Worker:
                         minio_key, download_dir
                     )
                     logger.info(f"Dataset downloaded to: {download_dir}")
-                    # #region agent log
-                    _debug_log(
-                        run_id="pre-fix",
-                        hypothesis_id="H2",
-                        location="src/worker/cli.py:_fetch_dataset",
-                        message="selected downloaded minio dataset path",
-                        data={"selected_path": str(download_dir)},
-                    )
-                    # #endregion
                     return download_dir
                     
             except Exception as e:
@@ -424,6 +440,28 @@ class Worker:
                     return path
             except Exception:
                 continue
+
+        # Cross-worker fallback: dependency output may exist only on a different
+        # worker host path. If we have a cache_key and two-level cache is active,
+        # rehydrate from MinIO into this worker's local cache.
+        if task_info.cache_key and self._two_level_cache:
+            try:
+                hydrated = self._two_level_cache.get(task_info.cache_key)
+                if hydrated and hydrated.exists():
+                    logger.info(
+                        "Hydrated dependency artifact %s from MinIO for task %s",
+                        task_info.cache_key[:12],
+                        task_info.id,
+                    )
+                    return hydrated
+            except Exception as e:
+                logger.warning(
+                    "Failed to hydrate dependency artifact from MinIO "
+                    "(task=%s, cache_key=%s): %s",
+                    task_info.id,
+                    task_info.cache_key[:12],
+                    e,
+                )
         return None
 
     def _collect_remote_ancestry(self, task_id: str, visited: Optional[set[str]] = None) -> tuple[list[Path], Optional[TaskInfo]]:
@@ -545,6 +583,22 @@ class Worker:
                 refreshed = self._fetch_dataset()
                 if refreshed:
                     self._dataset_path = refreshed
+                # Task IDs are reused across runs (task_1, task_2, ...). Clear
+                # per-task output lineage cache to avoid mixing dependency outputs
+                # from prior runs (e.g. CIFAR ancestry leaking into CelebA runs).
+                self._task_outputs.clear()
+                # region agent log
+                _debug_log(
+                    run_id=task.id,
+                    hypothesis_id="W4",
+                    location="src/worker/cli.py:_execute_task",
+                    message="cleared per-run task output cache on run switch",
+                    data={
+                        "previous_run_id": self._active_run_id,
+                        "new_run_id": task.run_id,
+                    },
+                )
+                # endregion
                 self._active_run_id = task.run_id
 
             # Build parent_hashes (for cache key) and ancestor_dirs (ordered
@@ -589,29 +643,27 @@ class Worker:
                 if refreshed:
                     self._dataset_path = refreshed
                     data_dir = refreshed
-            # #region agent log
-            _debug_log(
-                run_id="pre-fix",
-                hypothesis_id="H3",
-                location="src/worker/cli.py:_execute_task",
-                message="task execution context before run_task",
-                data={
-                    "task_id": task.id,
-                    "tool_name": task.tool_name,
-                    "run_id": task.run_id,
-                    "dependency_count": len(task.dependency_ids or []),
-                    "ancestor_count": len(ancestor_dirs),
-                    "data_dir": str(data_dir) if data_dir else None,
-                    "data_dir_exists": bool(data_dir and data_dir.exists()),
-                    "dataset_name": self._dataset_info.get("name"),
-                    "task_config_dataset": task.config.get("dataset") if isinstance(task.config, dict) else None,
-                },
-            )
-            # #endregion
             cache_context = self._build_cache_context(data_dir)
             cache_key = self._compute_cache_key(task, parent_hashes, cache_context)
+            run_use_cache = bool(task.config.get("_run_use_cache", True))
+            effective_use_cache = self.use_cache and run_use_cache
+            extra_mounts: Optional[Dict[str, str]] = None
+            # region agent log
+            _debug_log(
+                run_id=task.id,
+                hypothesis_id="W3",
+                location="src/worker/cli.py:_execute_task",
+                message="resolved cache policy for task",
+                data={
+                    "worker_use_cache": self.use_cache,
+                    "run_use_cache": run_use_cache,
+                    "effective_use_cache": effective_use_cache,
+                    "run_id": task.run_id,
+                },
+            )
+            # endregion
 
-            if self.use_cache:
+            if effective_use_cache:
                 cached_path = self._check_cache(cache_key, task, parent_hashes, cache_context)
                 if cached_path:
                     logger.info(f"Cache hit for task {task.id}")
@@ -631,7 +683,7 @@ class Worker:
             result = self._runner.run_task(
                 task,
                 input_path=data_dir,
-                extra_mounts=None,
+                extra_mounts=extra_mounts,
                 model_script_path=self._model_script_path,
                 ancestor_dirs=ancestor_dirs or None,
             )
@@ -644,7 +696,7 @@ class Worker:
             # succeeded — failures (e.g. "model.pt not found") should not be
             # persisted so the evaluator re-runs on the next attempt.
             should_cache = (
-                self.use_cache
+                effective_use_cache
                 and result.success
                 and result.output_path
                 and not self._eval_failed(task, result.output_path)
@@ -988,6 +1040,20 @@ class Worker:
         self._dataset_path = self._fetch_dataset()
         if self._dataset_path:
             logger.info(f"Dataset available at: {self._dataset_path}")
+            # Early visibility for manual data path mode: warn before tasks fail.
+            expected = ("data.npy", "labels.npy", "test_data.npy", "test_labels.npy")
+            missing = [name for name in expected if not (self._dataset_path / name).exists()]
+            if missing:
+                logger.warning(
+                    f"Dataset path {self._dataset_path} is missing files: {missing}"
+                )
+            if self._model_script_path:
+                logger.info(f"Model script resolved to: {self._model_script_path}")
+            else:
+                logger.warning(
+                    "Model script not resolved; tools that import `config_model` may fail. "
+                    "Set backend model.script or place config_model.py in manual data path."
+                )
         else:
             logger.warning("No dataset available - tasks may fail if data is required")
         
@@ -1074,9 +1140,9 @@ Examples:
     exec_group.add_argument(
         "--timeout",
         type=int,
-        default=7200,
+        default=int(os.environ.get("LANDSEER_TASK_TIMEOUT_SECONDS", "7200")),
         metavar="SECONDS",
-        help="Task execution timeout in seconds (default: 7200). Increase for long tools (e.g. pre-xgbod on full datasets).",
+        help="Task execution timeout in seconds (default: 7200, env: LANDSEER_TASK_TIMEOUT_SECONDS). Use 0 or a negative value to disable timeout.",
     )
     exec_group.add_argument(
         "--runtime",
@@ -1098,9 +1164,9 @@ Examples:
     storage_group.add_argument(
         "--cache-dir",
         type=str,
-        default=os.environ.get("LANDSEER_CACHE_DIR", "/tmp/landseer_cache"),
+        default=os.environ.get("LANDSEER_CACHE_DIR", "/data/landseer/cache"),
         metavar="DIR",
-        help="Artifact cache directory (default: /tmp/landseer_cache, env: LANDSEER_CACHE_DIR)",
+        help="Artifact cache directory (default: /data/landseer/cache, env: LANDSEER_CACHE_DIR)",
     )
     storage_group.add_argument(
         "--no-cache",
