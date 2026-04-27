@@ -10,6 +10,7 @@ This module provides a client class that handles:
 
 import socket
 import time
+import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 from urllib.parse import urljoin
@@ -19,6 +20,24 @@ import httpx
 from ..common import get_logger
 
 logger = get_logger(__name__)
+DEBUG_LOG_PATH = "/share/landseer/workspace-ayushi/Landseer/.cursor/debug-26edf1.log"
+
+
+def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: Dict[str, Any]) -> None:
+    try:
+        payload = {
+            "sessionId": "26edf1",
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, separators=(",", ":")) + "\n")
+    except Exception:
+        pass
 
 
 @dataclass
@@ -372,6 +391,19 @@ class LandseerClient:
             raise RuntimeError("Worker not registered. Call register() first.")
         response = self._make_request("POST", f"/workers/{self._worker_id}/claim")
         result = response.json()
+        # region agent log
+        _debug_log(
+            run_id=result.get("task", {}).get("id", "worker-claim"),
+            hypothesis_id="W2",
+            location="src/worker/client.py:claim_task",
+            message="worker claim response received",
+            data={
+                "worker_id": self._worker_id,
+                "has_task": bool(result.get("has_task")),
+                "message": result.get("message"),
+            },
+        )
+        # endregion
         
         if result.get("has_task"):
             task_data = result["task"]
