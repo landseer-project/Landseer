@@ -63,7 +63,7 @@ def _eval_acc(model: torch.nn.Module, loader: DataLoader, device: torch.device, 
         pred = logits.argmax(1)
         correct += (pred == yb).sum().item()
         total += yb.numel()
-    return 100.0 * correct / max(total, 1)
+    return correct / max(total, 1)
 
 
 def evaluate_wmacc_from_paths(
