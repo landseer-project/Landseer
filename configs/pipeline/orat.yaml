@@ -19,7 +19,7 @@ pipeline:
       - name: in_orat
         container:
           image: oras://ghcr.io/landseer-project/in_orat:v3
-          command: python /workspace/orat/main.py --epochs 120 --eval-every 10
+          command: python /workspace/orat/main.py --epochs 120 --eval-every 10 --epsilon 0.031372549 --step_size 0.007843137
     noop:
       name: in_noop
       container:
