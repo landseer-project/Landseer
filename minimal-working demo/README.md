@@ -124,31 +124,17 @@ landseer-pipeline/
 
 ## Usage
 
-### Quick Start
-
-For complete step-by-step instructions on running a pipeline, see **[Sphinx docs: Run a Pipeline](docs/how-to/run-a-pipeline.md)**, which covers:
-- System setup (backend, workers, frontend)
-- Starting pipeline runs via REST API or web UI
-- Monitoring progress in real-time
-- Interpreting and analyzing results
-
 ### Basic Pipeline Execution
 
 ```bash
-# 1. Start backend server
-python -m src.backend.cli --config configs/pipeline/trades.yaml
+# (Optional) Enable MySQL database logging
+source .env.db
 
-# 2. Start worker(s) to execute tasks
-python -m src.worker.cli --backend-url http://localhost:8000 --gpu 0
+# Run pipeline with configuration files
+poetry run landseer -c configs/pipeline/test_config.yaml -a configs/attack/test_config_1.yaml
 
-# 3. Trigger a pipeline run via REST API
-curl -X POST http://localhost:8000/api/pipeline-configs/trades/runs \
-  -H "Content-Type: application/json" \
-  -d '{"use_cache": true}'
-
-# 4. (Optional) View results in web dashboard
-python -m http.server 3000 --directory src/frontend/dist
-# Open http://localhost:3000
+# to spin up web interface
+poetry run uvicorn landseer_ui.server:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ### Configuration Options

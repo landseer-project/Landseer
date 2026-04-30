@@ -1,0 +1,325 @@
+"""
+Task definitions for the Landseer pipeline.
+
+Tasks are individual units of work that can be executed independently.
+Each task has a priority, tool, config, and dependencies.
+"""
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from typing import Any, List, Dict, Set
+from enum import Enum
+import hashlib
+import json
+from collections import Counter
+
+from .tools import ToolDefinition
+
+
+class TaskType(str, Enum):
+    """Types of tasks in the pipeline."""
+    PRE_TRAINING = "pre_training"
+    IN_TRAINING = "in_training"
+    POST_TRAINING = "post_training"
+    DEPLOYMENT = "deployment"
+    EVALUATION = "evaluation"
+
+
+class TaskStatus(Enum):
+    """Status of a task during execution."""
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+# Global ID counters
+_task_id_counter = 0
+_tool_id_counter = 0
+_workflow_id_counter = 0
+_pipeline_id_counter = 0
+
+
+def generate_task_id() -> str:
+    """Generate a unique task ID."""
+    global _task_id_counter
+    _task_id_counter += 1
+    return f"task_{_task_id_counter}"
+
+
+def generate_tool_id() -> str:
+    """Generate a unique tool ID."""
+    global _tool_id_counter
+    _tool_id_counter += 1
+    return f"tool_{_tool_id_counter}"
+
+
+def generate_workflow_id() -> str:
+    """Generate a unique workflow ID."""
+    global _workflow_id_counter
+    _workflow_id_counter += 1
+    return f"workflow_{_workflow_id_counter}"
+
+
+def generate_pipeline_id() -> str:
+    """Generate a unique pipeline ID."""
+    global _pipeline_id_counter
+    _pipeline_id_counter += 1
+    return f"pipeline_{_pipeline_id_counter}"
+
+
+@dataclass
+class Task(ABC): 
+    tool: ToolDefinition
+    config: Dict[str, Any] = field(default_factory=dict)
+    priority: int = 0
+    dependencies: List["Task"] = field(default_factory=list)
+    id: str = field(default="", init=False)
+    status: TaskStatus = field(default=TaskStatus.PENDING, init=False)
+    counter: int = field(default=0, init=False)
+    workflows: Set[str] = field(default_factory=set, init=False)
+    pipeline_id: str = field(default="", init=False)
+    _hash: str = field(default="", init=False, repr=False)
+    
+    def __post_init__(self):
+        """Initialize task with unique ID and compute hash."""
+        if not self.id:
+            self.id = generate_task_id()
+        self._compute_hash()
+    
+    def _compute_hash(self) -> str:
+        
+        hash_data = {
+            "tool_name": self.tool.name,
+            "tool_image": self.tool.container.image,
+            "tool_command": self.tool.container.command,
+            "config": self.config,
+            "dependencies": sorted([dep.id for dep in self.dependencies])
+        }
+        
+        json_str = json.dumps(hash_data, sort_keys=True)
+        self._hash = hashlib.sha256(json_str.encode()).hexdigest()
+        return self._hash
+    
+    def get_hash(self) -> str:
+        if not self._hash:
+            self._compute_hash()
+        return self._hash
+    
+    def __hash__(self) -> int:
+        return int(self.get_hash()[:16], 16)  
+    
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, Task):
+            return False
+        return self.get_hash() == other.get_hash()
+    
+    def add_to_workflow(self, workflow_id: str, pipeline_id: str) -> None:
+
+        if self.pipeline_id and self.pipeline_id != pipeline_id:
+            raise ValueError(f"Task {self.id} already belongs to pipeline {self.pipeline_id}, cannot add to {pipeline_id}")
+        
+        self.pipeline_id = pipeline_id
+        
+        # Only increment counter if this is a new workflow
+        if workflow_id not in self.workflows:
+            self.workflows.add(workflow_id)
+            self.counter += 1
+    
+    def add_dependency(self, dependency: "Task") -> None:
+
+        if dependency not in self.dependencies:
+            self.dependencies.append(dependency)
+            # Invalidate hash since dependencies changed
+            self._hash = ""
+    
+    @property
+    @abstractmethod
+    def task_type(self) -> TaskType:
+        pass
+    
+    @abstractmethod
+    def run(self, data: Any) -> Any:
+       
+        pass
+
+
+@dataclass
+class PreTrainingTask(Task):
+    
+    @property
+    def task_type(self) -> TaskType:
+        return TaskType.PRE_TRAINING
+    
+    def run(self, data: Any) -> Any:
+        """Execute pre-training logic."""
+        # Actual implementation will be handled by the tool runner
+        return data
+
+
+@dataclass
+class InTrainingTask(Task):
+    
+    @property
+    def task_type(self) -> TaskType:
+        return TaskType.IN_TRAINING
+    
+    def run(self, data: Any) -> Any:
+        #Actual implementation will be handled by the tool runner
+        return data
+
+
+@dataclass
+class PostTrainingTask(Task):
+    
+    @property
+    def task_type(self) -> TaskType:
+        return TaskType.POST_TRAINING
+    
+    def run(self, data: Any) -> Any:
+        """Execute post-training logic."""
+        #Actual implementation will be handled by the tool runner
+        return data
+
+
+@dataclass
+class DeploymentTask(Task):
+    
+    @property
+    def task_type(self) -> TaskType:
+        return TaskType.DEPLOYMENT
+    
+    def run(self, data: Any) -> Any:
+        """Execute deployment logic."""
+        # Actual implementation will be handled by the tool runner
+        return data
+
+
+@dataclass
+class EvaluationTask(Task):
+
+    required_artifacts: List[str] = field(default_factory=list)
+    
+    def __post_init__(self):
+        """Initialize evaluation task with low priority."""
+        super().__post_init__()
+        # Ensure evaluation tasks have low priority (run last)
+        if self.priority == 0:
+            self.priority = 50
+    
+    @property
+    def task_type(self) -> TaskType:
+        return TaskType.EVALUATION
+    
+    def run(self, data: Any) -> Any:
+        # Actual implementation will be handled by the tool runner
+        return data
+    
+    def _compute_hash(self) -> str:
+        """
+        Compute hash including required_artifacts.
+        """
+        hash_data = {
+            "tool_name": self.tool.name,
+            "tool_image": self.tool.container.image,
+            "tool_command": self.tool.container.command,
+            "config": self.config,
+            "dependencies": sorted([dep.id for dep in self.dependencies]),
+            "required_artifacts": sorted(self.required_artifacts)
+        }
+        
+        json_str = json.dumps(hash_data, sort_keys=True)
+        self._hash = hashlib.sha256(json_str.encode()).hexdigest()
+        return self._hash
+
+
+# Task registry for deduplication
+_task_registry: Dict[str, Task] = {}
+# Fast lookup index to avoid O(n) scan on every dedup check.
+# Key: (pipeline_id, task_hash)
+_task_registry_by_hash: Dict[tuple[str, str], Task] = {}
+
+
+def get_or_create_task(
+    task_type: TaskType,
+    tool: ToolDefinition,
+    config: Dict[str, Any] = None,
+    priority: int = 0,
+    dependencies: List[Task] = None,
+    pipeline_id: str = ""
+) -> Task:
+
+    # Create a temporary task to compute its hash
+    temp_task = TaskFactory.create_task(
+        task_type=task_type,
+        tool=tool,
+        config=config,
+        priority=priority,
+        dependencies=dependencies
+    )
+    
+    task_hash = temp_task.get_hash()
+    existing_task = _task_registry_by_hash.get((pipeline_id, task_hash))
+    if existing_task is None:
+        # Backward-compatible fallback for tasks with empty pipeline id.
+        existing_task = _task_registry_by_hash.get(("", task_hash))
+    if existing_task is not None:
+        return existing_task
+    
+    # No matching task found, register the new one
+    temp_task.pipeline_id = pipeline_id
+    _task_registry[temp_task.id] = temp_task
+    _task_registry_by_hash[(pipeline_id, task_hash)] = temp_task
+    return temp_task
+
+
+def clear_task_registry():
+    global _task_registry, _task_registry_by_hash
+    _task_registry.clear()
+    _task_registry_by_hash.clear()
+
+
+class TaskFactory:
+    
+    _task_classes = {
+        TaskType.PRE_TRAINING: PreTrainingTask,
+        TaskType.IN_TRAINING: InTrainingTask,
+        TaskType.POST_TRAINING: PostTrainingTask,
+        TaskType.DEPLOYMENT: DeploymentTask,
+        TaskType.EVALUATION: EvaluationTask,
+    }
+    
+    @classmethod
+    def create_task(
+        cls,
+        task_type: TaskType,
+        tool: ToolDefinition,
+        config: Dict[str, Any] = None,
+        priority: int = 0,
+        dependencies: List[Task] = None
+    ) -> Task:
+        """
+        Create a task of the specified type.
+        
+        Args:
+            task_type: Type of task to create
+            tool: Tool definition
+            config: Configuration parameters
+            priority: Task priority
+            dependencies: List of dependent tasks
+            
+        Returns:
+            Created task instance
+        """
+        if task_type not in cls._task_classes:
+            raise ValueError(f"Unknown task type: {task_type}")
+        
+        task_class = cls._task_classes[task_type]
+        return task_class(
+            tool=tool,
+            config=config or {},
+            priority=priority,
+            dependencies=dependencies or []
+        )
+    

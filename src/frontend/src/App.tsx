@@ -1,0 +1,34 @@
+import { Routes, Route } from 'react-router-dom';
+import { Layout } from '@/components/Layout';
+import { Dashboard } from '@/pages/Dashboard';
+import { Pipelines } from '@/pages/Pipelines';
+import { Tasks } from '@/pages/Tasks';
+import { Workflows } from '@/pages/Workflows';
+import { WorkflowDetail } from '@/pages/WorkflowDetail';
+import { Workers } from '@/pages/Workers';
+import { Tools } from '@/pages/Tools';
+import { Registry } from '@/pages/Registry';
+import { Metrics } from '@/pages/Metrics';
+import { Runs } from '@/pages/Runs';
+
+function App() {
+  return (
+    <Layout>
+      <Routes>
+        <Route path="/" element={<Dashboard />} />
+        <Route path="/pipelines" element={<Pipelines />} />
+        <Route path="/tasks" element={<Tasks />} />
+        <Route path="/workflows" element={<Workflows />} />
+        <Route path="/workflows/:id" element={<WorkflowDetail />} />
+        <Route path="/workers" element={<Workers />} />
+        <Route path="/tools" element={<Tools />} />
+        <Route path="/registry" element={<Registry />} />
+        <Route path="/metrics" element={<Metrics />} />
+        <Route path="/pipelines/:id/metrics" element={<Metrics />} />
+        <Route path="/runs" element={<Runs />} />
+      </Routes>
+    </Layout>
+  );
+}
+
+export default App;
