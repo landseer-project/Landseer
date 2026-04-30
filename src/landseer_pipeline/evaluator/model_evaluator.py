@@ -422,9 +422,23 @@ class ModelEvaluator:
             metrics["drop10_score"] = faithfulness_score
             config = load_config_from_script(self.model_script_path)
         
-            wmacc_badnets = evaluate_wmacc_from_paths(model_ctor=config, model_ckpt=model_path, wm_test_data= self.input_wm_test_dataset, wm_test_labels= self.input_wm_test_labels, device=self.device)
-            metrics["wmacc_badnets"] = wmacc_badnets
-            logger.info(f"{self.combination_id}: Watermark accuracy evaluation completed: {wmacc_badnets}")
+
+            wm_test_data = self.input_wm_test_dataset
+            wm_test_labels = self.input_wm_test_labels
+
+            if wm_test_data and wm_test_labels and os.path.exists(wm_test_data) and os.path.exists(wm_test_labels):
+                wmacc_badnets = evaluate_wmacc_from_paths(
+                    model_ctor=config,
+                    model_ckpt=model_path,
+                    wm_test_data=wm_test_data,
+                    wm_test_labels=wm_test_labels,
+                    device=self.device
+                )
+                metrics["wmacc_badnets"] = wmacc_badnets
+                logger.info(f"{self.combination_id}: Watermark accuracy evaluation completed: {wmacc_badnets}")
+            else:
+                logger.warning(f"{self.combination_id}: Missing wm_test_data.npy or wm_test_labels.npy. Skipping BadNets watermark evaluation.")
+                metrics["wmacc_badnets"] = -1.0 
 
             if hasattr(self, 'dataset_manager') and self.dataset_manager.poisoned_dataset_dir:
                 poisoned_loader = None
