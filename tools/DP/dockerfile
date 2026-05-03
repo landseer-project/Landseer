@@ -1,0 +1,16 @@
+FROM python:3.10-slim
+
+LABEL org.opencontainers.image.dataset="CIFAR-10, CelebA"
+LABEL org.opencontainers.image.defense_stage="during_training"
+LABEL org.opencontainers.image.defense_type="differential_privacy"
+LABEL org.opencontainers.image.framework="pytorch"
+
+
+WORKDIR /app
+COPY main.py /app/
+RUN pip install torch torchvision opacus pandas numpy tqdm scikit-learn
+
+
+# Default command (Landseer will override this)
+CMD ["python", "main.py", "--input-dir", "/data", "--output", "/output"]
+
