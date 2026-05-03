@@ -1,0 +1,30 @@
+ FROM python:3.11-slim
+
+LABEL org.opencontainers.image.dataset="CIFAR-10, CelebA"
+LABEL org.opencontainers.image.defense_stage="deployment"
+LABEL org.opencontainers.image.defense_type="explanation"
+LABEL org.opencontainers.image.framework="pytorch"
+
+
+
+WORKDIR /app
+COPY requirements.txt /app/
+
+# System deps commonly needed for scientific Python
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install PyTorch (CUDA 12.1 wheels) first, then requirements
+RUN pip install --no-cache-dir --upgrade pip \
+ && pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu121 \
+      torch torchvision torchaudio \
+ && pip install --no-cache-dir -r requirements.txt
+
+COPY main.py /app/
+COPY config_model.py /app/
+
+CMD ["python", "main.py", "--input-dir", "/data", "--output", "/output"]
+
+
+
