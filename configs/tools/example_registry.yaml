@@ -1,0 +1,204 @@
+# cp configs/tools/example_registry.yaml configs/tools.yaml
+
+tools:
+  # Pre-training tools
+  pre_noop:
+    name: noop
+    defense_stage: pre_training
+    is_baseline: true
+    container:
+      image: pre_noop:v2
+      command: python main.py
+      runtime: null
+
+  pre_xgbod:
+    name: pre-xgbod
+    defense_stage: pre_training
+    is_baseline: false
+    container:
+      image: pre_xgbod:v2
+      command: python3 main.py
+      runtime: null
+
+  pre_xgbod_celeba:
+    name: pre-xgbod-celeba
+    defense_stage: pre_training
+    is_baseline: false
+    container:
+      image: pre_xgbod_celeba:v1
+      command: python3 main.py
+      runtime: null
+
+  pre_watermarkbn:
+    name: pre-watermarkbn
+    defense_stage: pre_training
+    is_baseline: false
+    container:
+      image: pre_watermarkbn:v2
+      command: python3 main.py
+      runtime: null
+
+  # In-training (during training) tools
+  in_dp:
+    name: in-dp
+    defense_stage: during_training
+    is_baseline: false
+    container:
+      image: in_dp:v10
+      command: python3 main.py
+      runtime: null
+
+  in_noop:
+    name: in_noop
+    defense_stage: during_training
+    is_baseline: true
+    container:
+      image: in_noop:v7
+      command: python main.py
+      runtime: null
+
+  in_noop_celeba:
+    name: in-noop-celeba
+    defense_stage: during_training
+    is_baseline: true
+    container:
+      image: in_noop_celeba:v3
+      command: python main.py
+      runtime: null
+
+  in_trades:
+    name: in-trades
+    defense_stage: during_training
+    is_baseline: false
+    container:
+      image: in_trades:v3
+      command: python3 main.py
+      runtime: null
+
+  in_fair:
+    name: in-fair
+    defense_stage: during_training
+    is_baseline: false
+    container:
+      image: in_fair:v6
+      command: python3 main.py
+      runtime: null
+
+  in_teaching:
+    name: in-teaching
+    defense_stage: during_training
+    is_baseline: false
+    container:
+      image: in_teaching:v9
+      command: python3 main.py
+      runtime: null
+
+  watermarknn:
+    name: watermarknn
+    defense_stage: during_training
+    is_baseline: false
+    container:
+      image: pre_watermarknn_cpu:v1
+      command: conda run -n watermarknn python -u main.py
+      runtime: null
+
+  # Post-training tools
+  post_noop:
+    name: post_noop
+    defense_stage: post_training
+    is_baseline: true
+    container:
+      image: post_noop_new:v1
+      command: python main.py
+      runtime: null
+
+  post_fineprune:
+    name: fine pruning
+    defense_stage: post_training
+    is_baseline: false
+    container:
+      image: post_fineprune:v2
+      command: python3 main.py --prune-percentage 0.1
+      runtime: null
+
+  post_dp:
+    name: post_dp
+    defense_stage: post_training
+    is_baseline: false
+    container:
+      image: post_dp:v4
+      command: python3 main.py
+      runtime: null
+
+  post_magnet:
+    name: post_magnet
+    defense_stage: post_training
+    is_baseline: false
+    container:
+      image: post_magnet:v4
+      command: python3 main.py
+      runtime: null
+
+  post_magnet_celeba:
+    name: post-magnet-celeba
+    defense_stage: post_training
+    is_baseline: false
+    container:
+      image: post_magnet_celeba:v1
+      command: python3 main.py
+      runtime: null
+
+  post_inference:
+    name: post_inference
+    defense_stage: post_training
+    is_baseline: false
+    container:
+      image: post_inference:v1
+      command: python3 main.py
+      runtime: null
+
+  post_neuronprune:
+    name: post_neuronprune
+    defense_stage: post_training
+    is_baseline: false
+    container:
+      image: post_neuronprune:v1
+      command: python3 main.py
+      runtime: null
+
+  # Deployment tools
+  deploy_noop:
+    name: deploy_noop
+    defense_stage: deployment
+    is_baseline: true
+    container:
+      image: deploy_noop_docker:v1
+      command: python main.py
+      runtime: null
+
+  deploy_dp:
+    name: deploy_dp
+    defense_stage: deployment
+    is_baseline: false
+    container:
+      image: deploy_dp:v1
+      command: python3 main.py
+      runtime: null
+
+  deploy_explainshap:
+    name: deploy_explainshap
+    defense_stage: deployment
+    is_baseline: false
+    container:
+      image: deploy_explainshap:v2
+      command: python3 main.py
+      runtime: null
+
+  deploy_dataset_inference:
+    name: deploy_dataset_inference
+    defense_stage: deployment
+    is_baseline: false
+    container:
+      image: deploy_dataset_inference:v2
+      command: python3 main.py
+      runtime: null

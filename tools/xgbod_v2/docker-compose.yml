@@ -1,0 +1,28 @@
+services:
+  demo:
+    image: xgboddemo1
+    build:
+      context: .
+      dockerfile: Dockerfile-demo
+    runtime: nvidia
+    shm_size: 1g
+    command: python /home/Dockerfile-demo/xgbod_demo.py
+    volumes:
+      - ./xgbod_demo.py:/home/Dockerfile-demo/xgbod_demo.py
+
+  main:
+    image: xgbodmain1
+    build:
+      context: .
+      dockerfile: Dockerfile-main
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    shm_size: 1g
+    command: python /workspace/xgbod_main.py
+    volumes:
+      - ./xgbod_main.py:/workspace/xgbod_main.py

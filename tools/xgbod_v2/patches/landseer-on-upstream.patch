@@ -1,0 +1,3108 @@
+diff --git a/Dockerfile-demo b/Dockerfile-demo
+new file mode 100644
+index 0000000..68329a6
+--- /dev/null
++++ b/Dockerfile-demo
+@@ -0,0 +1,14 @@
++FROM python:3.9
++
++WORKDIR /app
++
++COPY . .
++
++RUN apt-get update && apt-get install -y \
++    build-essential \
++    && rm -rf /var/lib/apt/lists/*
++
++RUN pip install --upgrade pip
++RUN pip install -r requirements.txt
++
++CMD ["python", "xgbod_demo.py"]
+\ No newline at end of file
+diff --git a/Dockerfile-main b/Dockerfile-main
+new file mode 100644
+index 0000000..19993fc
+--- /dev/null
++++ b/Dockerfile-main
+@@ -0,0 +1,14 @@
++FROM python:3.9
++
++WORKDIR /app
++
++RUN apt-get update && apt-get install -y \
++    build-essential \
++    && rm -rf /var/lib/apt/lists/*
++
++RUN pip install --upgrade pip
++RUN pip install -r requirements.txt
++
++COPY . .
++
++CMD ["python", "-u", "xgbod_cifar10.py"]
+\ No newline at end of file
+diff --git a/README.md b/README.md
+index 763a57b..899b5e3 100644
+--- a/README.md
++++ b/README.md
+@@ -1,125 +1,125 @@
+-# XGBOD (Extreme Boosting Based Outlier Detection)
+-
+-------------
+-
+-Zhao, Y. and Hryniewicki, M.K., "XGBOD: Improving Supervised Outlier Detection with Unsupervised Representation Learning," *International Joint Conference on Neural Networks (IJCNN)*, IEEE, 2018.
+-
+-Please cite the paper as:
+-
+-    @inproceedings{zhao2018xgbod,
+-      title={XGBOD: improving supervised outlier detection with unsupervised representation learning},
+-      author={Zhao, Yue and Hryniewicki, Maciej K},
+-      booktitle={2018 International Joint Conference on Neural Networks (IJCNN)},
+-      pages={1--8},
+-      year={2018},
+-      organization={IEEE}
+-    }
+-
+-[PDF](https://www.andrew.cmu.edu/user/yuezhao2/papers/18-ijcnn-xgbod.pdf) | 
+-[IEEE Explore](https://ieeexplore.ieee.org/document/8489605) | 
+-[API Documentation](https://pyod.readthedocs.io/en/latest/pyod.models.html#module-pyod.models.xgbod) | 
+-[Example with PyOD](https://github.com/yzhao062/pyod/blob/master/examples/xgbod_example.py) 
+-
+-
+-**Update** (Dec 25th, 2018): XGBOD has been officially released in **[Python Outlier Detection (PyOD)](https://github.com/yzhao062/pyod)** V0.6.6.
+-
+-**Update** (Dec 6th, 2018): XGBOD has been implemented in **[Python Outlier Detection (PyOD)](https://github.com/yzhao062/pyod)**, to be released in pyod V0.6.6.
+-
+-------------
+-
+-Additional notes:
+-1. Two versions of codes are provided:
+-   1. **Demo version** (xgbod_demo.py) is refactored for fast execution and reproduction as a proof of concept. The key difference from the full version is TOS are built in once for both training and test data. It could be regarded as a static unsupervised engineering. However, it is noted users should not expose and use the testing data while building TOS in practice. 
+-   2. **Production version** ([Python Outlier Detection (PyOD)](https://github.com/yzhao062/pyod)) is released with full optimization and testing as a framework. The purpose of this version is to be used in real applications, which should require fewer dependencies and faster execution.
+-3. It is understood that there are **small variations** in the results due to the random process, such as xgboost and Random TOS Selection. Again, running demo code would only give you similar results but not the exact results. Additionally, specific setups are slightly different for distinct datasets, which we have not published yet.
+-4. While running *L1_Comb* and *L2_Comb*, EasyEnsemble is used to construct balanced bags. It is noted the demo code uses 10 bags instead of 50, for executing efficiently. Despite, increasing to 50 bags would not change the result too much but just bring better stablity. You are welcomed to change "BalancedBaggingClassifier" parameter for using 50 bags. However, it is very slow and this is also one of the reasons why we propose XGBOD -- it is much more efficient:)
+-
+-------------
+-
+-##  Introduction
+-XGBOD is a three-phase framework (see Figure below). In the first phase, it generates new data representations. Specifically, various unsupervised outlier detection methods are applied to the original data to get transformed outlier scores as new data representations. In the second phase, a selection process is performed on newly generated outlier scores to keep the useful ones. The selected outlier scores are then combined with the original features to become the new feature space. Finally, an XGBoost model is trained on the new feature space, and its output decides the outlier prediction result.
+-
+-![XGBOD Flowchart](https://github.com/yzhao062/XGBOD/blob/master/figs/flowchart.png "XGBOD Flowchart")
+-
+-## Dependency
+-The experiment code is writen in Python 3 and built on a number of Python packages:
+-- matplotlib==2.0.2
+-- xgboost==0.7
+-- pandas==0.21.0
+-- imbalanced_learn==0.3.2
+-- scipy==0.19.1
+-- numpy==1.13.1
+-- PyNomaly==0.1.7
+-- imblearn==0.0
+-- scikit_learn==0.19.1
+-
+-Batch installation is possible using the supplied "requirements.txt":
+-
+-````cmd
+-pip install -r requirements.txt
+-````
+-
+-------------
+-
+-
+-## Datasets
+-Seven datasets are used (see dataset folder):
+-
+-| Datasets     | Dimension  | Sample Size  | Number of Outliers  |
+-| ------------ | -----------| ------------ | ------------------- |
+-| Arrhythmia   | 351        | 274          | 126 (36%)           |
+-| Letter       | 1600       | 32           | 100 (6.25%)         |
+-| Cardio       | 1831       | 21           | 176 (9.6%)          |
+-| Speech       | 3686       | 600          | 61(1.65%)           |
+-| Satellite    | 6435       | 36           | 2036 (31.64%)       |
+-| Mnist        | 7603       | 100          | 700 (9.21%)         |
+-| Mammography  | 11863      | 6            | 260 (2.32%)         |
+-
+-All datasets are accessible at http://odds.cs.stonybrook.edu/. Citation Suggestion for the datasets please refer to: 
+-> Shebuti Rayana (2016).  ODDS Library [http://odds.cs.stonybrook.edu]. Stony Brook, NY: Stony Brook University, Department of Computer Science.
+-
+-------------
+-
+-
+-## Usage and Sample Output (Demo Version)
+-Experiments could be reproduced by running **xgbod_demo.py** directly. You could simply download/clone the entire repository and execute the code by "python xgbod_demo.py".
+-
+-The first part of the code read in the datasets using Scipy. Five public outlier datasets are supplied. Then various TOS are built by seven different algorithms:
+-1. KNN 
+-2. K-Median 
+-3. AvgKNN 
+-4. LOF
+-5. LoOP
+-6. One-Class SVM 
+-7. Isolation Forests
+-**Please be noted that you may include more TOS**
+-
+-Taking KNN as an example, codes are as below:
+-
+-```python
+-# Generate TOS using KNN based algorithms
+-feature_list, roc_knn, prc_n_knn, result_knn = get_TOS_knn(X_norm, y, k_range, feature_list)
+-```
+-
+-Then three TOS selection methods are used to select *p* TOS:
+-
+-```python
+-
+-p = 10  # number of selected TOS
+-# random selection
+-X_train_new_rand, X_train_all_rand = random_select(X, X_train_new_orig, roc_list, p)
+-# accurate selection
+-X_train_new_accu, X_train_all_accu = accurate_select(X, X_train_new_orig, feature_list, roc_list, p)
+-# balance selection
+-X_train_new_bal, X_train_all_bal = balance_select(X, X_train_new_orig, roc_list, p)
+-```
+-
+-Finally, various classification methods are applied to the datasets. Sample outputs are provided below:
+-
+-![Sample Outputs on Arrhythmia](https://github.com/yzhao062/XGBOD/blob/master/figs/sample_outputs.png "Sample Outputs on Arrhythmia")
+-------------
+-## Figures
+-
+-Running **plots.py** would generate the figures for various TOS selection algorithms:
+-![The effect of number of TOS and selection method](https://github.com/yzhao062/XGBOD/blob/master/figs/results.png "The effect of number of TOS and selection method")
+-
++# XGBOD (Extreme Boosting Based Outlier Detection)
++
++------------
++
++Zhao, Y. and Hryniewicki, M.K., "XGBOD: Improving Supervised Outlier Detection with Unsupervised Representation Learning," *International Joint Conference on Neural Networks (IJCNN)*, IEEE, 2018.
++
++Please cite the paper as:
++
++    @inproceedings{zhao2018xgbod,
++      title={XGBOD: improving supervised outlier detection with unsupervised representation learning},
++      author={Zhao, Yue and Hryniewicki, Maciej K},
++      booktitle={2018 International Joint Conference on Neural Networks (IJCNN)},
++      pages={1--8},
++      year={2018},
++      organization={IEEE}
++    }
++
++[PDF](https://www.andrew.cmu.edu/user/yuezhao2/papers/18-ijcnn-xgbod.pdf) | 
++[IEEE Explore](https://ieeexplore.ieee.org/document/8489605) | 
++[API Documentation](https://pyod.readthedocs.io/en/latest/pyod.models.html#module-pyod.models.xgbod) | 
++[Example with PyOD](https://github.com/yzhao062/pyod/blob/master/examples/xgbod_example.py) 
++
++
++**Update** (Dec 25th, 2018): XGBOD has been officially released in **[Python Outlier Detection (PyOD)](https://github.com/yzhao062/pyod)** V0.6.6.
++
++**Update** (Dec 6th, 2018): XGBOD has been implemented in **[Python Outlier Detection (PyOD)](https://github.com/yzhao062/pyod)**, to be released in pyod V0.6.6.
++
++------------
++
++Additional notes:
++1. Two versions of codes are provided:
++   1. **Demo version** (xgbod_demo.py) is refactored for fast execution and reproduction as a proof of concept. The key difference from the full version is TOS are built in once for both training and test data. It could be regarded as a static unsupervised engineering. However, it is noted users should not expose and use the testing data while building TOS in practice. 
++   2. **Production version** ([Python Outlier Detection (PyOD)](https://github.com/yzhao062/pyod)) is released with full optimization and testing as a framework. The purpose of this version is to be used in real applications, which should require fewer dependencies and faster execution.
++3. It is understood that there are **small variations** in the results due to the random process, such as xgboost and Random TOS Selection. Again, running demo code would only give you similar results but not the exact results. Additionally, specific setups are slightly different for distinct datasets, which we have not published yet.
++4. While running *L1_Comb* and *L2_Comb*, EasyEnsemble is used to construct balanced bags. It is noted the demo code uses 10 bags instead of 50, for executing efficiently. Despite, increasing to 50 bags would not change the result too much but just bring better stablity. You are welcomed to change "BalancedBaggingClassifier" parameter for using 50 bags. However, it is very slow and this is also one of the reasons why we propose XGBOD -- it is much more efficient:)
++
++------------
++
++##  Introduction
++XGBOD is a three-phase framework (see Figure below). In the first phase, it generates new data representations. Specifically, various unsupervised outlier detection methods are applied to the original data to get transformed outlier scores as new data representations. In the second phase, a selection process is performed on newly generated outlier scores to keep the useful ones. The selected outlier scores are then combined with the original features to become the new feature space. Finally, an XGBoost model is trained on the new feature space, and its output decides the outlier prediction result.
++
++![XGBOD Flowchart](https://github.com/yzhao062/XGBOD/blob/master/figs/flowchart.png "XGBOD Flowchart")
++
++## Dependency
++The experiment code is writen in Python 3 and built on a number of Python packages:
++- matplotlib==2.0.2
++- xgboost==0.7
++- pandas==0.21.0
++- imbalanced_learn==0.3.2
++- scipy==0.19.1
++- numpy==1.13.1
++- PyNomaly==0.1.7
++- imblearn==0.0
++- scikit_learn==0.19.1
++
++Batch installation is possible using the supplied "requirements.txt":
++
++````cmd
++pip install -r requirements.txt
++````
++
++------------
++
++
++## Datasets
++Seven datasets are used (see dataset folder):
++
++| Datasets     | Dimension  | Sample Size  | Number of Outliers  |
++| ------------ | -----------| ------------ | ------------------- |
++| Arrhythmia   | 351        | 274          | 126 (36%)           |
++| Letter       | 1600       | 32           | 100 (6.25%)         |
++| Cardio       | 1831       | 21           | 176 (9.6%)          |
++| Speech       | 3686       | 600          | 61(1.65%)           |
++| Satellite    | 6435       | 36           | 2036 (31.64%)       |
++| Mnist        | 7603       | 100          | 700 (9.21%)         |
++| Mammography  | 11863      | 6            | 260 (2.32%)         |
++
++All datasets are accessible at http://odds.cs.stonybrook.edu/. Citation Suggestion for the datasets please refer to: 
++> Shebuti Rayana (2016).  ODDS Library [http://odds.cs.stonybrook.edu]. Stony Brook, NY: Stony Brook University, Department of Computer Science.
++
++------------
++
++
++## Usage and Sample Output (Demo Version)
++Experiments could be reproduced by running **xgbod_demo.py** directly. You could simply download/clone the entire repository and execute the code by "python xgbod_demo.py".
++
++The first part of the code read in the datasets using Scipy. Five public outlier datasets are supplied. Then various TOS are built by seven different algorithms:
++1. KNN 
++2. K-Median 
++3. AvgKNN 
++4. LOF
++5. LoOP
++6. One-Class SVM 
++7. Isolation Forests
++**Please be noted that you may include more TOS**
++
++Taking KNN as an example, codes are as below:
++
++```python
++# Generate TOS using KNN based algorithms
++feature_list, roc_knn, prc_n_knn, result_knn = get_TOS_knn(X_norm, y, k_range, feature_list)
++```
++
++Then three TOS selection methods are used to select *p* TOS:
++
++```python
++
++p = 10  # number of selected TOS
++# random selection
++X_train_new_rand, X_train_all_rand = random_select(X, X_train_new_orig, roc_list, p)
++# accurate selection
++X_train_new_accu, X_train_all_accu = accurate_select(X, X_train_new_orig, feature_list, roc_list, p)
++# balance selection
++X_train_new_bal, X_train_all_bal = balance_select(X, X_train_new_orig, roc_list, p)
++```
++
++Finally, various classification methods are applied to the datasets. Sample outputs are provided below:
++
++![Sample Outputs on Arrhythmia](https://github.com/yzhao062/XGBOD/blob/master/figs/sample_outputs.png "Sample Outputs on Arrhythmia")
++------------
++## Figures
++
++Running **plots.py** would generate the figures for various TOS selection algorithms:
++![The effect of number of TOS and selection method](https://github.com/yzhao062/XGBOD/blob/master/figs/results.png "The effect of number of TOS and selection method")
++
+diff --git a/docker-compose.yml b/docker-compose.yml
+new file mode 100644
+index 0000000..4c5a77d
+--- /dev/null
++++ b/docker-compose.yml
+@@ -0,0 +1,40 @@
++services:
++  demo:
++    image: xgboddemo1
++    build:
++      dockerfile: Dockerfile-demo
++    runtime: nvidia
++    shm_size: 1g
++    # deploy:
++    #   resources:
++    #     limit:
++    #       memory: 4G
++    #     reservations:
++    #       memory: 2G
++    #       devices:
++    #         - driver: nvidia
++    #           device_ids: ['0']
++    #           capabilities: [gpu]
++    command: python /home/Dockerfile-demo/xgbod_demo.py
++    volumes:
++      - ./xgbod_demo.py:/home/Dockerfile-demo/xgbod_demo.py
++
++  main:
++    image: xgbodmain1
++    build:
++      dockerfile: Dockerfile-main
++    runtime: nvidia
++    shm_size: 1g
++    # deploy:
++    #   resources:
++    #     limit:
++    #       memory: 4G
++    #     reservations:
++    #       memory: 2G
++    #       devices:
++    #         - driver: nvidia
++    #           device_ids: ['0']
++    #           capabilities: [gpu]
++    command: python /home/Dockerfile-main/xgbod_main.py
++    volumes:
++      - ./xgbod_main.py:/home/Dockerfile-main/xgbod_main.py
+\ No newline at end of file
+diff --git a/models/generate_TOS.py b/models/generate_TOS.py
+index 81b87e3..61f8aca 100644
+--- a/models/generate_TOS.py
++++ b/models/generate_TOS.py
+@@ -1,191 +1,191 @@
+-import numpy as np
+-import pandas as pd
+-from models.utility import get_precn
+-from sklearn.metrics import roc_auc_score
+-from sklearn.neighbors import NearestNeighbors
+-from sklearn.neighbors import LocalOutlierFactor
+-from sklearn.svm import OneClassSVM
+-from sklearn.ensemble import IsolationForest
+-from PyNomaly import loop
+-from models.hbos import Hbos
+-
+-
+-def knn(X, n_neighbors):
+-    '''
+-    Utility function to return k-average, k-median, knn
+-    Since these three functions are similar, so is inluded in the same func
+-    :param X: train data
+-    :param n_neighbors: number of neighbors
+-    :return:
+-    '''
+-    neigh = NearestNeighbors()
+-    neigh.fit(X)
+-
+-    res = neigh.kneighbors(n_neighbors=n_neighbors, return_distance=True)
+-    # k-average, k-median, knn
+-    return np.mean(res[0], axis=1), np.median(res[0], axis=1), res[0][:, -1]
+-
+-
+-def get_TOS_knn(X, y, k_list, feature_list):
+-    knn_clf = ["knn_mean", "knn_median", "knn_kth"]
+-
+-    result_knn = np.zeros([X.shape[0], len(k_list) * len(knn_clf)])
+-    roc_knn = []
+-    prec_knn = []
+-
+-    for i in range(len(k_list)):
+-        k = k_list[i]
+-        k_mean, k_median, k_k = knn(X, n_neighbors=k)
+-        knn_result = [k_mean, k_median, k_k]
+-
+-        for j in range(len(knn_result)):
+-            score_pred = knn_result[j]
+-            clf = knn_clf[j]
+-
+-            roc = np.round(roc_auc_score(y, score_pred), decimals=4)
+-            # apc = np.round(average_precision_score(y, score_pred), decimals=4)
+-            prec_n = np.round(get_precn(y, score_pred), decimals=4)
+-            print('{clf} @ {k} - ROC: {roc} Precision@n: {pren}'.
+-                  format(clf=clf, k=k, roc=roc, pren=prec_n))
+-            feature_list.append(clf + str(k))
+-            roc_knn.append(roc)
+-            prec_knn.append(prec_n)
+-            result_knn[:, i * len(knn_result) + j] = score_pred
+-
+-    print()
+-    return feature_list, roc_knn, prec_knn, result_knn
+-
+-
+-def get_TOS_loop(X, y, k_list, feature_list):
+-    # only compatible with pandas
+-    df_X = pd.DataFrame(X)
+-
+-    result_loop = np.zeros([X.shape[0], len(k_list)])
+-    roc_loop = []
+-    prec_loop = []
+-
+-    for i in range(len(k_list)):
+-        k = k_list[i]
+-        clf = loop.LocalOutlierProbability(df_X, n_neighbors=k).fit()
+-        score_pred = clf.local_outlier_probabilities.astype(float)
+-
+-        roc = np.round(roc_auc_score(y, score_pred), decimals=4)
+-        # apc = np.round(average_precision_score(y, score_pred), decimals=4)
+-        prec_n = np.round(get_precn(y, score_pred), decimals=4)
+-
+-        print('LoOP @ {k} - ROC: {roc} Precision@n: {pren}'.format(k=k,
+-                                                                   roc=roc,
+-                                                                   pren=prec_n))
+-
+-        feature_list.append('loop_' + str(k))
+-        roc_loop.append(roc)
+-        prec_loop.append(prec_n)
+-        result_loop[:, i] = score_pred
+-    print()
+-    return feature_list, roc_loop, prec_loop, result_loop
+-
+-
+-def get_TOS_lof(X, y, k_list, feature_list):
+-    result_lof = np.zeros([X.shape[0], len(k_list)])
+-    roc_lof = []
+-    prec_lof = []
+-
+-    for i in range(len(k_list)):
+-        k = k_list[i]
+-        clf = LocalOutlierFactor(n_neighbors=k)
+-        y_pred = clf.fit_predict(X)
+-        score_pred = clf.negative_outlier_factor_
+-
+-        roc = np.round(roc_auc_score(y, score_pred * -1), decimals=4)
+-        # apc = np.round(average_precision_score(y, score_pred * -1), decimals=4)
+-        prec_n = np.round(get_precn(y, score_pred * -1), decimals=4)
+-        print('LOF @ {k} - ROC: {roc} Precision@n: {pren}'.format(k=k,
+-                                                                  roc=roc,
+-                                                                  pren=prec_n))
+-
+-        feature_list.append('lof_' + str(k))
+-        roc_lof.append(roc)
+-        prec_lof.append(prec_n)
+-        result_lof[:, i] = score_pred * -1
+-    print()
+-    return feature_list, roc_lof, prec_lof, result_lof
+-
+-
+-def get_TOS_hbos(X, y, k_list, feature_list):
+-    result_hbos = np.zeros([X.shape[0], len(k_list)])
+-    roc_hbos = []
+-    prec_hbos = []
+-
+-    k_list = [3, 5, 7, 9, 12, 15, 20, 25, 30, 50]
+-    for i in range(len(k_list)):
+-        k = k_list[i]
+-        clf = Hbos(bins=k, alpha=0.3)
+-        clf.fit(X)
+-        score_pred = clf.decision_scores
+-
+-        roc = np.round(roc_auc_score(y, score_pred), decimals=4)
+-        # apc = np.round(average_precision_score(y, score_pred * -1), decimals=4)
+-        prec_n = np.round(get_precn(y, score_pred), decimals=4)
+-        print('HBOS @ {k} - ROC: {roc} Precision@n: {pren}'.format(k=k,
+-                                                                   roc=roc,
+-                                                                   pren=prec_n))
+-
+-        feature_list.append('hbos_' + str(k))
+-        roc_hbos.append(roc)
+-        prec_hbos.append(prec_n)
+-        result_hbos[:, i] = score_pred
+-    print()
+-    return feature_list, roc_hbos, prec_hbos, result_hbos
+-
+-
+-def get_TOS_svm(X, y, nu_list, feature_list):
+-    result_ocsvm = np.zeros([X.shape[0], len(nu_list)])
+-    roc_ocsvm = []
+-    prec_ocsvm = []
+-
+-    for i in range(len(nu_list)):
+-        nu = nu_list[i]
+-        clf = OneClassSVM(nu=nu)
+-        clf.fit(X)
+-        score_pred = clf.decision_function(X)
+-
+-        roc = np.round(roc_auc_score(y, score_pred * -1), decimals=4)
+-
+-        # apc = np.round(average_precision_score(y, score_pred * -1), decimals=4)
+-        prec_n = np.round(
+-            get_precn(y, score_pred * -1), decimals=4)
+-        print('svm @ {nu} - ROC: {roc} Precision@n: {pren}'.format(nu=nu,
+-                                                                   roc=roc,
+-                                                                   pren=prec_n))
+-        feature_list.append('ocsvm_' + str(nu))
+-        roc_ocsvm.append(roc)
+-        prec_ocsvm.append(prec_n)
+-        result_ocsvm[:, i] = score_pred.reshape(score_pred.shape[0]) * -1
+-    print()
+-    return feature_list, roc_ocsvm, prec_ocsvm, result_ocsvm
+-
+-
+-def get_TOS_iforest(X, y, n_list, feature_list):
+-    result_if = np.zeros([X.shape[0], len(n_list)])
+-    roc_if = []
+-    prec_if = []
+-
+-    for i in range(len(n_list)):
+-        n = n_list[i]
+-        clf = IsolationForest(n_estimators=n)
+-        clf.fit(X)
+-        score_pred = clf.decision_function(X)
+-
+-        roc = np.round(roc_auc_score(y, score_pred * -1), decimals=4)
+-        prec_n = np.round(get_precn(y, y_pred=(score_pred * -1)), decimals=4)
+-
+-        print('Isolation Forest @ {n} - ROC: {roc} Precision@n: {pren}'.format(
+-            n=n,
+-            roc=roc,
+-            pren=prec_n))
+-        feature_list.append('if_' + str(n))
+-        roc_if.append(roc)
+-        prec_if.append(prec_n)
+-        result_if[:, i] = score_pred.reshape(score_pred.shape[0]) * -1
+-    print()
+-    return feature_list, roc_if, prec_if, result_if
++import numpy as np
++import pandas as pd
++from models.utility import get_precn
++from sklearn.metrics import roc_auc_score
++from sklearn.neighbors import NearestNeighbors
++from sklearn.neighbors import LocalOutlierFactor
++from sklearn.svm import OneClassSVM
++from sklearn.ensemble import IsolationForest
++from PyNomaly import loop
++from models.hbos import Hbos
++
++
++def knn(X, n_neighbors):
++    '''
++    Utility function to return k-average, k-median, knn
++    Since these three functions are similar, so is inluded in the same func
++    :param X: train data
++    :param n_neighbors: number of neighbors
++    :return:
++    '''
++    neigh = NearestNeighbors()
++    neigh.fit(X)
++
++    res = neigh.kneighbors(n_neighbors=n_neighbors, return_distance=True)
++    # k-average, k-median, knn
++    return np.mean(res[0], axis=1), np.median(res[0], axis=1), res[0][:, -1]
++
++
++def get_TOS_knn(X, y, k_list, feature_list):
++    knn_clf = ["knn_mean", "knn_median", "knn_kth"]
++
++    result_knn = np.zeros([X.shape[0], len(k_list) * len(knn_clf)])
++    roc_knn = []
++    prec_knn = []
++
++    for i in range(len(k_list)):
++        k = k_list[i]
++        k_mean, k_median, k_k = knn(X, n_neighbors=k)
++        knn_result = [k_mean, k_median, k_k]
++
++        for j in range(len(knn_result)):
++            score_pred = knn_result[j]
++            clf = knn_clf[j]
++
++            roc = np.round(roc_auc_score(y, score_pred), decimals=4)
++            # apc = np.round(average_precision_score(y, score_pred), decimals=4)
++            prec_n = np.round(get_precn(y, score_pred), decimals=4)
++            print('{clf} @ {k} - ROC: {roc} Precision@n: {pren}'.
++                  format(clf=clf, k=k, roc=roc, pren=prec_n))
++            feature_list.append(clf + str(k))
++            roc_knn.append(roc)
++            prec_knn.append(prec_n)
++            result_knn[:, i * len(knn_result) + j] = score_pred
++
++    print()
++    return feature_list, roc_knn, prec_knn, result_knn
++
++
++def get_TOS_loop(X, y, k_list, feature_list):
++    # only compatible with pandas
++    df_X = pd.DataFrame(X)
++
++    result_loop = np.zeros([X.shape[0], len(k_list)])
++    roc_loop = []
++    prec_loop = []
++
++    for i in range(len(k_list)):
++        k = k_list[i]
++        clf = loop.LocalOutlierProbability(df_X, n_neighbors=k).fit()
++        score_pred = clf.local_outlier_probabilities.astype(float)
++
++        roc = np.round(roc_auc_score(y, score_pred), decimals=4)
++        # apc = np.round(average_precision_score(y, score_pred), decimals=4)
++        prec_n = np.round(get_precn(y, score_pred), decimals=4)
++
++        print('LoOP @ {k} - ROC: {roc} Precision@n: {pren}'.format(k=k,
++                                                                   roc=roc,
++                                                                   pren=prec_n))
++
++        feature_list.append('loop_' + str(k))
++        roc_loop.append(roc)
++        prec_loop.append(prec_n)
++        result_loop[:, i] = score_pred
++    print()
++    return feature_list, roc_loop, prec_loop, result_loop
++
++
++def get_TOS_lof(X, y, k_list, feature_list):
++    result_lof = np.zeros([X.shape[0], len(k_list)])
++    roc_lof = []
++    prec_lof = []
++
++    for i in range(len(k_list)):
++        k = k_list[i]
++        clf = LocalOutlierFactor(n_neighbors=k)
++        y_pred = clf.fit_predict(X)
++        score_pred = clf.negative_outlier_factor_
++
++        roc = np.round(roc_auc_score(y, score_pred * -1), decimals=4)
++        # apc = np.round(average_precision_score(y, score_pred * -1), decimals=4)
++        prec_n = np.round(get_precn(y, score_pred * -1), decimals=4)
++        print('LOF @ {k} - ROC: {roc} Precision@n: {pren}'.format(k=k,
++                                                                  roc=roc,
++                                                                  pren=prec_n))
++
++        feature_list.append('lof_' + str(k))
++        roc_lof.append(roc)
++        prec_lof.append(prec_n)
++        result_lof[:, i] = score_pred * -1
++    print()
++    return feature_list, roc_lof, prec_lof, result_lof
++
++
++def get_TOS_hbos(X, y, k_list, feature_list):
++    result_hbos = np.zeros([X.shape[0], len(k_list)])
++    roc_hbos = []
++    prec_hbos = []
++
++    k_list = [3, 5, 7, 9, 12, 15, 20, 25, 30, 50]
++    for i in range(len(k_list)):
++        k = k_list[i]
++        clf = Hbos(bins=k, alpha=0.3)
++        clf.fit(X)
++        score_pred = clf.decision_scores
++
++        roc = np.round(roc_auc_score(y, score_pred), decimals=4)
++        # apc = np.round(average_precision_score(y, score_pred * -1), decimals=4)
++        prec_n = np.round(get_precn(y, score_pred), decimals=4)
++        print('HBOS @ {k} - ROC: {roc} Precision@n: {pren}'.format(k=k,
++                                                                   roc=roc,
++                                                                   pren=prec_n))
++
++        feature_list.append('hbos_' + str(k))
++        roc_hbos.append(roc)
++        prec_hbos.append(prec_n)
++        result_hbos[:, i] = score_pred
++    print()
++    return feature_list, roc_hbos, prec_hbos, result_hbos
++
++
++def get_TOS_svm(X, y, nu_list, feature_list):
++    result_ocsvm = np.zeros([X.shape[0], len(nu_list)])
++    roc_ocsvm = []
++    prec_ocsvm = []
++
++    for i in range(len(nu_list)):
++        nu = nu_list[i]
++        clf = OneClassSVM(nu=nu)
++        clf.fit(X)
++        score_pred = clf.decision_function(X)
++
++        roc = np.round(roc_auc_score(y, score_pred * -1), decimals=4)
++
++        # apc = np.round(average_precision_score(y, score_pred * -1), decimals=4)
++        prec_n = np.round(
++            get_precn(y, score_pred * -1), decimals=4)
++        print('svm @ {nu} - ROC: {roc} Precision@n: {pren}'.format(nu=nu,
++                                                                   roc=roc,
++                                                                   pren=prec_n))
++        feature_list.append('ocsvm_' + str(nu))
++        roc_ocsvm.append(roc)
++        prec_ocsvm.append(prec_n)
++        result_ocsvm[:, i] = score_pred.reshape(score_pred.shape[0]) * -1
++    print()
++    return feature_list, roc_ocsvm, prec_ocsvm, result_ocsvm
++
++
++def get_TOS_iforest(X, y, n_list, feature_list):
++    result_if = np.zeros([X.shape[0], len(n_list)])
++    roc_if = []
++    prec_if = []
++
++    for i in range(len(n_list)):
++        n = n_list[i]
++        clf = IsolationForest(n_estimators=n)
++        clf.fit(X)
++        score_pred = clf.decision_function(X)
++
++        roc = np.round(roc_auc_score(y, score_pred * -1), decimals=4)
++        prec_n = np.round(get_precn(y, y_pred=(score_pred * -1)), decimals=4)
++
++        print('Isolation Forest @ {n} - ROC: {roc} Precision@n: {pren}'.format(
++            n=n,
++            roc=roc,
++            pren=prec_n))
++        feature_list.append('if_' + str(n))
++        roc_if.append(roc)
++        prec_if.append(prec_n)
++        result_if[:, i] = score_pred.reshape(score_pred.shape[0]) * -1
++    print()
++    return feature_list, roc_if, prec_if, result_if
+diff --git a/models/glosh.py b/models/glosh.py
+index da6e682..b5adf6f 100644
+--- a/models/glosh.py
++++ b/models/glosh.py
+@@ -1,38 +1,38 @@
+-import hdbscan
+-import numpy as np
+-from sklearn.preprocessing import StandardScaler
+-from models.utility import get_precn
+-
+-
+-class Glosh(object):
+-    def __init__(self, min_cluster_size=5):
+-        self.min_cluster_size = min_cluster_size
+-
+-    def fit(self, X_train):
+-        self.X_train = X_train
+-
+-    def sample_scores(self, X_test):
+-        # initialize the outputs
+-        pred_score = np.zeros([X_test.shape[0], 1])
+-
+-        for i in range(X_test.shape[0]):
+-            x_i = X_test[i, :]
+-
+-            x_i = np.asarray(x_i).reshape(1, x_i.shape[0])
+-            x_comb = np.concatenate((self.X_train, x_i), axis=0)
+-
+-            x_comb_norm = StandardScaler().fit_transform(x_comb)
+-
+-            clusterer = hdbscan.HDBSCAN()
+-            clusterer.fit(x_comb_norm)
+-
+-            # print(clusterer.outlier_scores_[-1])
+-            # record the current item
+-            pred_score[i, :] = clusterer.outlier_scores_[-1]
+-        return pred_score
+-
+-    def evaluate(self, X_test, y_test):
+-        pred_score = self.sample_scores(X_test)
+-        prec_n = (get_precn(y_test, pred_score))
+-
+-        print("precision@n", prec_n)
++import hdbscan
++import numpy as np
++from sklearn.preprocessing import StandardScaler
++from models.utility import get_precn
++
++
++class Glosh(object):
++    def __init__(self, min_cluster_size=5):
++        self.min_cluster_size = min_cluster_size
++
++    def fit(self, X_train):
++        self.X_train = X_train
++
++    def sample_scores(self, X_test):
++        # initialize the outputs
++        pred_score = np.zeros([X_test.shape[0], 1])
++
++        for i in range(X_test.shape[0]):
++            x_i = X_test[i, :]
++
++            x_i = np.asarray(x_i).reshape(1, x_i.shape[0])
++            x_comb = np.concatenate((self.X_train, x_i), axis=0)
++
++            x_comb_norm = StandardScaler().fit_transform(x_comb)
++
++            clusterer = hdbscan.HDBSCAN()
++            clusterer.fit(x_comb_norm)
++
++            # print(clusterer.outlier_scores_[-1])
++            # record the current item
++            pred_score[i, :] = clusterer.outlier_scores_[-1]
++        return pred_score
++
++    def evaluate(self, X_test, y_test):
++        pred_score = self.sample_scores(X_test)
++        prec_n = (get_precn(y_test, pred_score))
++
++        print("precision@n", prec_n)
+diff --git a/models/hbos.py b/models/hbos.py
+index 915d02b..3160e47 100644
+--- a/models/hbos.py
++++ b/models/hbos.py
+@@ -1,116 +1,116 @@
+-import numpy as np
+-import math
+-from sklearn.preprocessing import MinMaxScaler
+-from scipy.stats import scoreatpercentile
+-
+-class Hbos(object):
+-
+-    def __init__(self, bins=10, alpha=0.3, beta=0.5, contamination=0.05):
+-
+-        self.bins = bins
+-        self.alpha = alpha
+-        self.beta = beta
+-        self.contamination = contamination
+-
+-    def fit(self, X):
+-
+-        self.n, self.d = X.shape[0], X.shape[1]
+-        out_scores = np.zeros([self.n, self.d])
+-
+-        hist = np.zeros([self.bins, self.d])
+-        bin_edges = np.zeros([self.bins + 1, self.d])
+-
+-        # this is actually the fitting
+-        for i in range(self.d):
+-            hist[:, i], bin_edges[:, i] = np.histogram(X[:, i], bins=self.bins,
+-                                                       density=True)
+-            # check the integrity
+-            assert (
+-                math.isclose(np.sum(hist[:, i] * np.diff(bin_edges[:, i])), 1))
+-
+-        # calculate the threshold
+-        for i in range(self.d):
+-            # find histogram assignments of data points
+-            bin_ind = np.digitize(X[:, i], bin_edges[:, i], right=False)
+-
+-            # very important to do scaling. Not necessary to use min max
+-            density_norm = MinMaxScaler().fit_transform(
+-                hist[:, i].reshape(-1, 1))
+-            out_score = np.log(1 / (density_norm + self.alpha))
+-
+-            for j in range(self.n):
+-                # out sample left
+-                if bin_ind[j] == 0:
+-                    dist = np.abs(X[j, i] - bin_edges[0, i])
+-                    bin_width = bin_edges[1, i] - bin_edges[0, i]
+-                    # assign it to bin 0
+-                    if dist < bin_width * self.beta:
+-                        out_scores[j, i] = out_score[bin_ind[j]]
+-                    else:
+-                        out_scores[j, i] = np.max(out_score)
+-
+-                # out sample right
+-                elif bin_ind[j] == bin_edges.shape[0]:
+-                    dist = np.abs(X[j, i] - bin_edges[-1, i])
+-                    bin_width = bin_edges[-1, i] - bin_edges[-2, i]
+-                    # assign it to bin k
+-                    if dist < bin_width * self.beta:
+-                        out_scores[j, i] = out_score[bin_ind[j] - 2]
+-                    else:
+-                        out_scores[j, i] = np.max(out_score)
+-                else:
+-                    out_scores[j, i] = out_score[bin_ind[j] - 1]
+-
+-        out_scores_sum = np.sum(out_scores, axis=1)
+-        self.threshold = scoreatpercentile(out_scores_sum,
+-                                           100 * (1 - self.contamination))
+-        self.hist = hist
+-        self.bin_edges = bin_edges
+-        self.decision_scores = out_scores_sum
+-        self.y_pred = (self.decision_scores > self.threshold).astype('int')
+-
+-    def decision_function(self, X_test):
+-
+-        n_test = X_test.shape[0]
+-        out_scores = np.zeros([n_test, self.d])
+-
+-        for i in range(self.d):
+-            # find histogram assignments of data points
+-            bin_ind = np.digitize(X_test[:, i], self.bin_edges[:, i],
+-                                  right=False)
+-
+-            # very important to do scaling. Not necessary to use minmax
+-            density_norm = MinMaxScaler().fit_transform(
+-                self.hist[:, i].reshape(-1, 1))
+-
+-            out_score = np.log(1 / (density_norm + self.alpha))
+-
+-            for j in range(n_test):
+-                # out sample left
+-                if bin_ind[j] == 0:
+-                    dist = np.abs(X_test[j, i] - self.bin_edges[0, i])
+-                    bin_width = self.bin_edges[1, i] - self.bin_edges[0, i]
+-                    # assign it to bin 0
+-                    if dist < bin_width * self.beta:
+-                        out_scores[j, i] = out_score[bin_ind[j]]
+-                    else:
+-                        out_scores[j, i] = np.max(out_score)
+-
+-                # out sample right
+-                elif bin_ind[j] == self.bin_edges.shape[0]:
+-                    dist = np.abs(X_test[j, i] - self.bin_edges[-1, i])
+-                    bin_width = self.bin_edges[-1, i] - self.bin_edges[-2, i]
+-                    # assign it to bin k
+-                    if dist < bin_width * self.beta:
+-                        out_scores[j, i] = out_score[bin_ind[j] - 2]
+-                    else:
+-                        out_scores[j, i] = np.max(out_score)
+-                else:
+-                    out_scores[j, i] = out_score[bin_ind[j] - 1]
+-
+-        out_scores_sum = np.sum(out_scores, axis=1)
+-        return out_scores_sum
+-
+-    def predict(self, X_test):
+-        pred_score = self.decision_function(X_test)
+-        return (pred_score > self.threshold).astype('int')
++import numpy as np
++import math
++from sklearn.preprocessing import MinMaxScaler
++from scipy.stats import scoreatpercentile
++
++class Hbos(object):
++
++    def __init__(self, bins=10, alpha=0.3, beta=0.5, contamination=0.05):
++
++        self.bins = bins
++        self.alpha = alpha
++        self.beta = beta
++        self.contamination = contamination
++
++    def fit(self, X):
++
++        self.n, self.d = X.shape[0], X.shape[1]
++        out_scores = np.zeros([self.n, self.d])
++
++        hist = np.zeros([self.bins, self.d])
++        bin_edges = np.zeros([self.bins + 1, self.d])
++
++        # this is actually the fitting
++        for i in range(self.d):
++            hist[:, i], bin_edges[:, i] = np.histogram(X[:, i], bins=self.bins,
++                                                       density=True)
++            # check the integrity
++            assert (
++                math.isclose(np.sum(hist[:, i] * np.diff(bin_edges[:, i])), 1))
++
++        # calculate the threshold
++        for i in range(self.d):
++            # find histogram assignments of data points
++            bin_ind = np.digitize(X[:, i], bin_edges[:, i], right=False)
++
++            # very important to do scaling. Not necessary to use min max
++            density_norm = MinMaxScaler().fit_transform(
++                hist[:, i].reshape(-1, 1))
++            out_score = np.log(1 / (density_norm + self.alpha))
++
++            for j in range(self.n):
++                # out sample left
++                if bin_ind[j] == 0:
++                    dist = np.abs(X[j, i] - bin_edges[0, i])
++                    bin_width = bin_edges[1, i] - bin_edges[0, i]
++                    # assign it to bin 0
++                    if dist < bin_width * self.beta:
++                        out_scores[j, i] = out_score[bin_ind[j]]
++                    else:
++                        out_scores[j, i] = np.max(out_score)
++
++                # out sample right
++                elif bin_ind[j] == bin_edges.shape[0]:
++                    dist = np.abs(X[j, i] - bin_edges[-1, i])
++                    bin_width = bin_edges[-1, i] - bin_edges[-2, i]
++                    # assign it to bin k
++                    if dist < bin_width * self.beta:
++                        out_scores[j, i] = out_score[bin_ind[j] - 2]
++                    else:
++                        out_scores[j, i] = np.max(out_score)
++                else:
++                    out_scores[j, i] = out_score[bin_ind[j] - 1]
++
++        out_scores_sum = np.sum(out_scores, axis=1)
++        self.threshold = scoreatpercentile(out_scores_sum,
++                                           100 * (1 - self.contamination))
++        self.hist = hist
++        self.bin_edges = bin_edges
++        self.decision_scores = out_scores_sum
++        self.y_pred = (self.decision_scores > self.threshold).astype('int')
++
++    def decision_function(self, X_test):
++
++        n_test = X_test.shape[0]
++        out_scores = np.zeros([n_test, self.d])
++
++        for i in range(self.d):
++            # find histogram assignments of data points
++            bin_ind = np.digitize(X_test[:, i], self.bin_edges[:, i],
++                                  right=False)
++
++            # very important to do scaling. Not necessary to use minmax
++            density_norm = MinMaxScaler().fit_transform(
++                self.hist[:, i].reshape(-1, 1))
++
++            out_score = np.log(1 / (density_norm + self.alpha))
++
++            for j in range(n_test):
++                # out sample left
++                if bin_ind[j] == 0:
++                    dist = np.abs(X_test[j, i] - self.bin_edges[0, i])
++                    bin_width = self.bin_edges[1, i] - self.bin_edges[0, i]
++                    # assign it to bin 0
++                    if dist < bin_width * self.beta:
++                        out_scores[j, i] = out_score[bin_ind[j]]
++                    else:
++                        out_scores[j, i] = np.max(out_score)
++
++                # out sample right
++                elif bin_ind[j] == self.bin_edges.shape[0]:
++                    dist = np.abs(X_test[j, i] - self.bin_edges[-1, i])
++                    bin_width = self.bin_edges[-1, i] - self.bin_edges[-2, i]
++                    # assign it to bin k
++                    if dist < bin_width * self.beta:
++                        out_scores[j, i] = out_score[bin_ind[j] - 2]
++                    else:
++                        out_scores[j, i] = np.max(out_score)
++                else:
++                    out_scores[j, i] = out_score[bin_ind[j] - 1]
++
++        out_scores_sum = np.sum(out_scores, axis=1)
++        return out_scores_sum
++
++    def predict(self, X_test):
++        pred_score = self.decision_function(X_test)
++        return (pred_score > self.threshold).astype('int')
+diff --git a/models/knn.py b/models/knn.py
+index 63a4429..0e543db 100644
+--- a/models/knn.py
++++ b/models/knn.py
+@@ -1,91 +1,91 @@
+-import numpy as np
+-from sklearn.neighbors import NearestNeighbors
+-from sklearn.neighbors import KDTree
+-from sklearn.exceptions import NotFittedError
+-from scipy.stats import scoreatpercentile
+-
+-
+-class Knn(object):
+-    '''
+-    Knn class for outlier detection
+-    support original knn, average knn, and median knn
+-    '''
+-
+-    def __init__(self, n_neighbors=1, contamination=0.05, method='largest'):
+-        self.n_neighbors = n_neighbors
+-        self.contamination = contamination
+-        self.method = method
+-
+-    def fit(self, X_train):
+-        self.X_train = X_train
+-        self._isfitted = True
+-        self.tree = KDTree(X_train)
+-
+-        neigh = NearestNeighbors()
+-        neigh.fit(self.X_train)
+-
+-        result = neigh.kneighbors(n_neighbors=self.n_neighbors,
+-                                  return_distance=True)
+-        dist_arr = result[0]
+-
+-        if self.method == 'largest':
+-            dist = dist_arr[:, -1]
+-        elif self.method == 'mean':
+-            dist = np.mean(dist_arr, axis=1)
+-        elif self.method == 'median':
+-            dist = np.median(dist_arr, axis=1)
+-
+-        threshold = scoreatpercentile(dist, 100 * (1 - self.contamination))
+-
+-        self.threshold = threshold
+-        self.decision_scores = dist.ravel()
+-        self.y_pred = (self.decision_scores > self.threshold).astype('int')
+-
+-    def decision_function(self, X_test):
+-
+-        if not self._isfitted:
+-            NotFittedError('Knn is not fitted yet')
+-
+-        # initialize the output score
+-        pred_score = np.zeros([X_test.shape[0], 1])
+-
+-        for i in range(X_test.shape[0]):
+-            x_i = X_test[i, :]
+-            x_i = np.asarray(x_i).reshape(1, x_i.shape[0])
+-
+-            # get the distance of the current point
+-            dist_arr, ind_arr = self.tree.query(x_i, k=self.n_neighbors)
+-
+-            if self.method == 'largest':
+-                dist = dist_arr[:, -1]
+-            elif self.method == 'mean':
+-                dist = np.mean(dist_arr, axis=1)
+-            elif self.method == 'median':
+-                dist = np.median(dist_arr, axis=1)
+-
+-            pred_score_i = dist[-1]
+-
+-            # record the current item
+-            pred_score[i, :] = pred_score_i
+-
+-        return pred_score
+-
+-    def predict(self, X_test):
+-
+-        pred_score = self.decision_function(X_test)
+-        return (pred_score > self.threshold).astype('int')
+-
+-
+-##############################################################################
+-# samples = [[-1, 0], [0., 0.], [1., 1], [2., 5.], [3, 1]]
+-#
+-# clf = Knn()
+-# clf.fit(samples)
+-#
+-# scores = clf.decision_function(np.asarray([[2, 3], [6, 8]])).ravel()
+-# assert (scores[0] == [2])
+-# assert (scores[1] == [5])
+-# #
+-# labels = clf.predict(np.asarray([[2, 3], [6, 8]])).ravel()
+-# assert (labels[0] == [0])
+-# assert (labels[1] == [1])
++import numpy as np
++from sklearn.neighbors import NearestNeighbors
++from sklearn.neighbors import KDTree
++from sklearn.exceptions import NotFittedError
++from scipy.stats import scoreatpercentile
++
++
++class Knn(object):
++    '''
++    Knn class for outlier detection
++    support original knn, average knn, and median knn
++    '''
++
++    def __init__(self, n_neighbors=1, contamination=0.05, method='largest'):
++        self.n_neighbors = n_neighbors
++        self.contamination = contamination
++        self.method = method
++
++    def fit(self, X_train):
++        self.X_train = X_train
++        self._isfitted = True
++        self.tree = KDTree(X_train)
++
++        neigh = NearestNeighbors()
++        neigh.fit(self.X_train)
++
++        result = neigh.kneighbors(n_neighbors=self.n_neighbors,
++                                  return_distance=True)
++        dist_arr = result[0]
++
++        if self.method == 'largest':
++            dist = dist_arr[:, -1]
++        elif self.method == 'mean':
++            dist = np.mean(dist_arr, axis=1)
++        elif self.method == 'median':
++            dist = np.median(dist_arr, axis=1)
++
++        threshold = scoreatpercentile(dist, 100 * (1 - self.contamination))
++
++        self.threshold = threshold
++        self.decision_scores = dist.ravel()
++        self.y_pred = (self.decision_scores > self.threshold).astype('int')
++
++    def decision_function(self, X_test):
++
++        if not self._isfitted:
++            NotFittedError('Knn is not fitted yet')
++
++        # initialize the output score
++        pred_score = np.zeros([X_test.shape[0], 1])
++
++        for i in range(X_test.shape[0]):
++            x_i = X_test[i, :]
++            x_i = np.asarray(x_i).reshape(1, x_i.shape[0])
++
++            # get the distance of the current point
++            dist_arr, ind_arr = self.tree.query(x_i, k=self.n_neighbors)
++
++            if self.method == 'largest':
++                dist = dist_arr[:, -1]
++            elif self.method == 'mean':
++                dist = np.mean(dist_arr, axis=1)
++            elif self.method == 'median':
++                dist = np.median(dist_arr, axis=1)
++
++            pred_score_i = dist[-1]
++
++            # record the current item
++            pred_score[i, :] = pred_score_i
++
++        return pred_score
++
++    def predict(self, X_test):
++
++        pred_score = self.decision_function(X_test)
++        return (pred_score > self.threshold).astype('int')
++
++
++##############################################################################
++# samples = [[-1, 0], [0., 0.], [1., 1], [2., 5.], [3, 1]]
++#
++# clf = Knn()
++# clf.fit(samples)
++#
++# scores = clf.decision_function(np.asarray([[2, 3], [6, 8]])).ravel()
++# assert (scores[0] == [2])
++# assert (scores[1] == [5])
++# #
++# labels = clf.predict(np.asarray([[2, 3], [6, 8]])).ravel()
++# assert (labels[0] == [0])
++# assert (labels[1] == [1])
+diff --git a/models/select_TOS.py b/models/select_TOS.py
+index b6e2ad0..0dfe500 100644
+--- a/models/select_TOS.py
++++ b/models/select_TOS.py
+@@ -1,57 +1,57 @@
+-import random
+-import numpy as np
+-from scipy.stats import pearsonr
+-
+-from models.utility import get_top_n
+-
+-
+-def random_select(X, X_train_new_orig, roc_list, p):
+-    s_feature_rand = random.sample(range(0, len(roc_list)), p)
+-    X_train_new_rand = X_train_new_orig[:, s_feature_rand]
+-    X_train_all_rand = np.concatenate((X, X_train_new_rand), axis=1)
+-
+-    # print(s_feature_rand)
+-
+-    return X_train_new_rand, X_train_all_rand
+-
+-
+-def accurate_select(X, X_train_new_orig, roc_list, p):
+-    s_feature_accu = get_top_n(roc_list=roc_list, n=p, top=True)
+-    X_train_new_accu = X_train_new_orig[:, s_feature_accu[0][0:p]]
+-    X_train_all_accu = np.concatenate((X, X_train_new_accu), axis=1)
+-
+-    # print(s_feature_accu)
+-
+-    return X_train_new_accu, X_train_all_accu
+-
+-
+-def balance_select(X, X_train_new_orig, roc_list, p):
+-    s_feature_balance = []
+-    pearson_list = np.zeros([len(roc_list), 1])
+-
+-    # handle the first value
+-    max_value_idx = roc_list.index(max(roc_list))
+-    s_feature_balance.append(max_value_idx)
+-    roc_list[max_value_idx] = -1
+-
+-    for i in range(p - 1):
+-
+-        for j in range(len(roc_list)):
+-            pear = pearsonr(X_train_new_orig[:, max_value_idx],
+-                            X_train_new_orig[:, j])
+-
+-            # update the pearson
+-            pearson_list[j] = np.abs(pearson_list[j]) + np.abs(pear[0])
+-
+-        discounted_roc = np.true_divide(roc_list, pearson_list.transpose())
+-
+-        max_value_idx = np.argmax(discounted_roc)
+-        s_feature_balance.append(max_value_idx)
+-        roc_list[max_value_idx] = -1
+-
+-    X_train_new_balance = X_train_new_orig[:, s_feature_balance]
+-    X_train_all_balance = np.concatenate((X, X_train_new_balance), axis=1)
+-
+-    # print(s_feature_balance)
+-
+-    return X_train_new_balance, X_train_all_balance
++import random
++import numpy as np
++from scipy.stats import pearsonr
++
++from models.utility import get_top_n
++
++
++def random_select(X, X_train_new_orig, roc_list, p):
++    s_feature_rand = random.sample(range(0, len(roc_list)), p)
++    X_train_new_rand = X_train_new_orig[:, s_feature_rand]
++    X_train_all_rand = np.concatenate((X, X_train_new_rand), axis=1)
++
++    # print(s_feature_rand)
++
++    return X_train_new_rand, X_train_all_rand
++
++
++def accurate_select(X, X_train_new_orig, roc_list, p):
++    s_feature_accu = get_top_n(roc_list=roc_list, n=p, top=True)
++    X_train_new_accu = X_train_new_orig[:, s_feature_accu[0][0:p]]
++    X_train_all_accu = np.concatenate((X, X_train_new_accu), axis=1)
++
++    # print(s_feature_accu)
++
++    return X_train_new_accu, X_train_all_accu
++
++
++def balance_select(X, X_train_new_orig, roc_list, p):
++    s_feature_balance = []
++    pearson_list = np.zeros([len(roc_list), 1])
++
++    # handle the first value
++    max_value_idx = roc_list.index(max(roc_list))
++    s_feature_balance.append(max_value_idx)
++    roc_list[max_value_idx] = -1
++
++    for i in range(p - 1):
++
++        for j in range(len(roc_list)):
++            pear = pearsonr(X_train_new_orig[:, max_value_idx],
++                            X_train_new_orig[:, j])
++
++            # update the pearson
++            pearson_list[j] = np.abs(pearson_list[j]) + np.abs(pear[0])
++
++        discounted_roc = np.true_divide(roc_list, pearson_list.transpose())
++
++        max_value_idx = np.argmax(discounted_roc)
++        s_feature_balance.append(max_value_idx)
++        roc_list[max_value_idx] = -1
++
++    X_train_new_balance = X_train_new_orig[:, s_feature_balance]
++    X_train_all_balance = np.concatenate((X, X_train_new_balance), axis=1)
++
++    # print(s_feature_balance)
++
++    return X_train_new_balance, X_train_all_balance
+diff --git a/models/utility.py b/models/utility.py
+index f26a696..d5343c0 100644
+--- a/models/utility.py
++++ b/models/utility.py
+@@ -1,82 +1,82 @@
+-import numpy as np
+-from scipy.stats import scoreatpercentile
+-from sklearn.metrics import precision_score
+-from sklearn.preprocessing import StandardScaler
+-from sklearn.metrics import roc_auc_score
+-
+-
+-def get_precn(y, y_pred):
+-    '''
+-    Utlity function to calculate precision@n
+-    :param y: ground truth
+-    :param y_pred: number of outliers
+-    :return: score
+-    '''
+-    # calculate the percentage of outliers
+-    out_perc = np.count_nonzero(y) / len(y)
+-
+-    threshold = scoreatpercentile(y_pred, 100 * (1 - out_perc))
+-    y_pred = (y_pred > threshold).astype('int')
+-    return precision_score(y, y_pred)
+-
+-
+-def precision_n(y_pred, y, n):
+-    '''
+-    Utlity function to calculate precision@n
+-
+-    :param y_pred: predicted value
+-    :param y: ground truth
+-    :param n: number of outliers
+-    :return: scaler score
+-    '''
+-    y_pred = np.asarray(y_pred)
+-    y = np.asarray(y)
+-
+-    length = y.shape[0]
+-
+-    assert (y_pred.shape == y.shape)
+-    y_sorted = np.partition(y_pred, int(length - n))
+-
+-    threshold = y_sorted[int(length - n)]
+-
+-    y_n = np.greater_equal(y_pred, threshold).astype(int)
+-    #    print(threshold, y_n, precision_score(y, y_n))
+-
+-    return precision_score(y, y_n)
+-
+-
+-def get_top_n(roc_list, n, top=True):
+-    '''
+-    for use of Accurate Selection only
+-    :param roc_list: a li
+-    :param n:
+-    :param top:
+-    :return:
+-    '''
+-    roc_list = np.asarray(roc_list)
+-    length = roc_list.shape[0]
+-
+-    roc_sorted = np.partition(roc_list, length - n)
+-    threshold = roc_sorted[int(length - n)]
+-
+-    if top:
+-        return np.where(np.greater_equal(roc_list, threshold))
+-    else:
+-        return np.where(np.less(roc_list, threshold))
+-
+-
+-def print_baseline(X_train_new_orig, y, roc_list, prec_list):
+-    max_value_idx = roc_list.index(max(roc_list))
+-    print()
+-    print('Highest TOS ROC:', roc_list[max_value_idx])
+-    print('Highest TOS Precison@n', max(prec_list))
+-
+-    # normalized score
+-    X_train_all_norm = StandardScaler().fit_transform(X_train_new_orig)
+-    X_train_all_norm_mean = np.mean(X_train_all_norm, axis=1)
+-
+-    roc = np.round(roc_auc_score(y, X_train_all_norm_mean), decimals=4)
+-    prec_n = np.round(get_precn(y, X_train_all_norm_mean), decimals=4)
+-
+-    print('Average TOS ROC:', roc)
+-    print('Average TOS Precision@n', prec_n)
++import numpy as np
++from scipy.stats import scoreatpercentile
++from sklearn.metrics import precision_score
++from sklearn.preprocessing import StandardScaler
++from sklearn.metrics import roc_auc_score
++
++
++def get_precn(y, y_pred):
++    '''
++    Utlity function to calculate precision@n
++    :param y: ground truth
++    :param y_pred: number of outliers
++    :return: score
++    '''
++    # calculate the percentage of outliers
++    out_perc = np.count_nonzero(y) / len(y)
++
++    threshold = scoreatpercentile(y_pred, 100 * (1 - out_perc))
++    y_pred = (y_pred > threshold).astype('int')
++    return precision_score(y, y_pred)
++
++
++def precision_n(y_pred, y, n):
++    '''
++    Utlity function to calculate precision@n
++
++    :param y_pred: predicted value
++    :param y: ground truth
++    :param n: number of outliers
++    :return: scaler score
++    '''
++    y_pred = np.asarray(y_pred)
++    y = np.asarray(y)
++
++    length = y.shape[0]
++
++    assert (y_pred.shape == y.shape)
++    y_sorted = np.partition(y_pred, int(length - n))
++
++    threshold = y_sorted[int(length - n)]
++
++    y_n = np.greater_equal(y_pred, threshold).astype(int)
++    #    print(threshold, y_n, precision_score(y, y_n))
++
++    return precision_score(y, y_n)
++
++
++def get_top_n(roc_list, n, top=True):
++    '''
++    for use of Accurate Selection only
++    :param roc_list: a li
++    :param n:
++    :param top:
++    :return:
++    '''
++    roc_list = np.asarray(roc_list)
++    length = roc_list.shape[0]
++
++    roc_sorted = np.partition(roc_list, length - n)
++    threshold = roc_sorted[int(length - n)]
++
++    if top:
++        return np.where(np.greater_equal(roc_list, threshold))
++    else:
++        return np.where(np.less(roc_list, threshold))
++
++
++def print_baseline(X_train_new_orig, y, roc_list, prec_list):
++    max_value_idx = roc_list.index(max(roc_list))
++    print()
++    print('Highest TOS ROC:', roc_list[max_value_idx])
++    print('Highest TOS Precison@n', max(prec_list))
++
++    # normalized score
++    X_train_all_norm = StandardScaler().fit_transform(X_train_new_orig)
++    X_train_all_norm_mean = np.mean(X_train_all_norm, axis=1)
++
++    roc = np.round(roc_auc_score(y, X_train_all_norm_mean), decimals=4)
++    prec_n = np.round(get_precn(y, X_train_all_norm_mean), decimals=4)
++
++    print('Average TOS ROC:', roc)
++    print('Average TOS Precision@n', prec_n)
+diff --git a/plots.py b/plots.py
+index 5264d41..351d641 100644
+--- a/plots.py
++++ b/plots.py
+@@ -1,116 +1,116 @@
+-import os
+-import matplotlib.pyplot as plt
+-import numpy as np
+-
+-# initialize the results of the experiements
+-# arrhythmia
+-prc_gr_arr = [0.5606, 0.5976, 0.5986, 0.6053, 0.6109, 0.6219, 0.6076, 0.6115]
+-prc_ac_arr = [0.5606, 0.5976, 0.5719, 0.5961, 0.6041, 0.5792, 0.6019, 0.6115]
+-prc_rd_arr = [0.5606, 0.5993, 0.5788, 0.6356, 0.5908, 0.6094, 0.6202, 0.6115]
+-
+-# letter
+-prc_gr_lt = [0.6003, 0.7300, 0.7234, 0.7199, 0.7169, 0.7285, 0.7323, 0.7376]
+-prc_ac_lt = [0.6003, 0.7300, 0.7210, 0.7272, 0.7477, 0.7302, 0.7308, 0.7376]
+-prc_rd_lt = [0.6003, 0.6653, 0.7140, 0.7248, 0.7397, 0.7302, 0.7232, 0.7376]
+-
+-# cardio
+-prc_gr_car = [0.9304, 0.9290, 0.9374, 0.9385, 0.9296, 0.9351, 0.9327, 0.9332]
+-prc_ac_car = [0.9304, 0.9290, 0.9314, 0.9315, 0.9337, 0.9354, 0.9331, 0.9332]
+-prc_rd_car = [0.9304, 0.9297, 0.9342, 0.9364, 0.9315, 0.9267, 0.9248, 0.9332]
+-
+-# speech
+-prc_gr_sp = [0.1455, 0.2658, 0.2733, 0.3203, 0.3290, 0.3107, 0.3355, 0.2492]
+-prc_ac_sp = [0.1455, 0.2658, 0.2367, 0.2630, 0.3103, 0.2983, 0.3255, 0.2492]
+-prc_rd_sp = [0.1455, 0.1356, 0.1814, 0.2101, 0.3194, 0.3053, 0.2940, 0.2492]
+-
+-# mammography
+-prc_gr_ma = [0.6974, 0.6853, 0.6719, 0.6720, 0.6620, 0.6717, 0.6687, 0.6673]
+-prc_ac_ma = [0.6974, 0.6853, 0.6915, 0.6841, 0.6965, 0.6631, 0.6655, 0.6673]
+-prc_rd_ma = [0.6974, 0.6812, 0.6823, 0.6649, 0.6693, 0.6619, 0.6654, 0.6673]
+-
+-# x-axis
+-x = [0, 1, 5, 10, 30, 50, 70, 100]
+-
+-# main plots
+-fig = plt.figure(figsize=(8, 10))
+-lw = 2
+-
+-ax = fig.add_subplot(511)
+-
+-plt.plot(x, prc_rd_arr, color='black', linestyle='-.', marker='s',
+-         lw=lw, label='Random Selection')
+-plt.plot(x, prc_gr_arr, color='blue', linestyle='--', marker='^',
+-         lw=lw, label='Balance Selection')
+-plt.plot(x, prc_ac_arr, color='red', linestyle='-', marker='o',
+-         lw=lw, label='Accurate Selection')
+-
+-plt.xlim([-0.5, 100.5])
+-plt.xticks(np.arange(0, 100, 5))
+-plt.ylabel('Precision@n', fontsize=12)
+-plt.title('Arrhythmia', fontsize=12)
+-plt.legend(loc="lower right")
+-
+-#########################################################################
+-ax = fig.add_subplot(512)
+-plt.plot(x, prc_rd_lt, color='black', linestyle='-.', marker='s',
+-         lw=lw, label='Random Selection')
+-plt.plot(x, prc_gr_lt, color='blue', linestyle='--', marker='^',
+-         lw=lw, label='Balance Selection')
+-plt.plot(x, prc_ac_lt, color='red', linestyle='--', marker='o',
+-         lw=lw, label='Accurate Selection')
+-
+-plt.xlim([-0.5, 100.5])
+-plt.xticks(np.arange(0, 100, 5))
+-plt.ylabel('Precision@n', fontsize=12)
+-plt.title('Letter', fontsize=12)
+-plt.legend(loc="lower right")
+-
+-#########################################################################
+-ax = fig.add_subplot(513)
+-plt.plot(x, prc_rd_car, color='black', linestyle='-.', marker='s',
+-         lw=lw, label='Random Selection')
+-plt.plot(x, prc_gr_car, color='blue', linestyle='--', marker='^',
+-         lw=lw, label='Balance Selection')
+-plt.plot(x, prc_ac_car, color='red', linestyle='--', marker='o',
+-         lw=lw, label='Accurate Selection')
+-
+-plt.xlim([-0.5, 100.5])
+-plt.xticks(np.arange(0, 100, 5))
+-plt.ylabel('Precision@n', fontsize=12)
+-plt.title('Cardio', fontsize=12)
+-plt.legend(loc="lower right")
+-
+-#########################################################################
+-ax = fig.add_subplot(514)
+-plt.plot(x, prc_rd_sp, color='black', linestyle='-.', marker='s',
+-         lw=lw, label='Random Selection')
+-plt.plot(x, prc_gr_sp, color='blue', linestyle='--', marker='^',
+-         lw=lw, label='Balance Selection')
+-plt.plot(x, prc_ac_sp, color='red', linestyle='--', marker='o',
+-         lw=lw, label='Accurate Selection')
+-
+-plt.xlim([-0.5, 100.5])
+-plt.xticks(np.arange(0, 100, 5))
+-plt.ylabel('Precision@n', fontsize=12)
+-plt.title('Speech', fontsize=12)
+-plt.legend(loc="lower right")
+-#########################################################################
+-ax = fig.add_subplot(515)
+-plt.plot(x, prc_rd_ma, color='black', linestyle='-.', marker='s',
+-         lw=lw, label='Random Selection')
+-plt.plot(x, prc_gr_ma, color='blue', linestyle='--', marker='^',
+-         lw=lw, label='Balance Selection')
+-plt.plot(x, prc_ac_ma, color='red', linestyle='--', marker='o',
+-         lw=lw, label='Accurate Selection')
+-
+-plt.xlim([-0.5, 100.5])
+-plt.xticks(np.arange(0, 100, 5))
+-plt.xlabel('Number of Selected ODS')
+-plt.ylabel('Precision@n', fontsize=12)
+-plt.title('Mammography', fontsize=12)
+-plt.legend(loc="upper right")
+-
+-#########################################################################
+-plt.tight_layout()
+-plt.savefig(os.path.join('figs', 'results.png'), dpi=300)
+-plt.show()
++import os
++import matplotlib.pyplot as plt
++import numpy as np
++
++# initialize the results of the experiements
++# arrhythmia
++prc_gr_arr = [0.5606, 0.5976, 0.5986, 0.6053, 0.6109, 0.6219, 0.6076, 0.6115]
++prc_ac_arr = [0.5606, 0.5976, 0.5719, 0.5961, 0.6041, 0.5792, 0.6019, 0.6115]
++prc_rd_arr = [0.5606, 0.5993, 0.5788, 0.6356, 0.5908, 0.6094, 0.6202, 0.6115]
++
++# letter
++prc_gr_lt = [0.6003, 0.7300, 0.7234, 0.7199, 0.7169, 0.7285, 0.7323, 0.7376]
++prc_ac_lt = [0.6003, 0.7300, 0.7210, 0.7272, 0.7477, 0.7302, 0.7308, 0.7376]
++prc_rd_lt = [0.6003, 0.6653, 0.7140, 0.7248, 0.7397, 0.7302, 0.7232, 0.7376]
++
++# cardio
++prc_gr_car = [0.9304, 0.9290, 0.9374, 0.9385, 0.9296, 0.9351, 0.9327, 0.9332]
++prc_ac_car = [0.9304, 0.9290, 0.9314, 0.9315, 0.9337, 0.9354, 0.9331, 0.9332]
++prc_rd_car = [0.9304, 0.9297, 0.9342, 0.9364, 0.9315, 0.9267, 0.9248, 0.9332]
++
++# speech
++prc_gr_sp = [0.1455, 0.2658, 0.2733, 0.3203, 0.3290, 0.3107, 0.3355, 0.2492]
++prc_ac_sp = [0.1455, 0.2658, 0.2367, 0.2630, 0.3103, 0.2983, 0.3255, 0.2492]
++prc_rd_sp = [0.1455, 0.1356, 0.1814, 0.2101, 0.3194, 0.3053, 0.2940, 0.2492]
++
++# mammography
++prc_gr_ma = [0.6974, 0.6853, 0.6719, 0.6720, 0.6620, 0.6717, 0.6687, 0.6673]
++prc_ac_ma = [0.6974, 0.6853, 0.6915, 0.6841, 0.6965, 0.6631, 0.6655, 0.6673]
++prc_rd_ma = [0.6974, 0.6812, 0.6823, 0.6649, 0.6693, 0.6619, 0.6654, 0.6673]
++
++# x-axis
++x = [0, 1, 5, 10, 30, 50, 70, 100]
++
++# main plots
++fig = plt.figure(figsize=(8, 10))
++lw = 2
++
++ax = fig.add_subplot(511)
++
++plt.plot(x, prc_rd_arr, color='black', linestyle='-.', marker='s',
++         lw=lw, label='Random Selection')
++plt.plot(x, prc_gr_arr, color='blue', linestyle='--', marker='^',
++         lw=lw, label='Balance Selection')
++plt.plot(x, prc_ac_arr, color='red', linestyle='-', marker='o',
++         lw=lw, label='Accurate Selection')
++
++plt.xlim([-0.5, 100.5])
++plt.xticks(np.arange(0, 100, 5))
++plt.ylabel('Precision@n', fontsize=12)
++plt.title('Arrhythmia', fontsize=12)
++plt.legend(loc="lower right")
++
++#########################################################################
++ax = fig.add_subplot(512)
++plt.plot(x, prc_rd_lt, color='black', linestyle='-.', marker='s',
++         lw=lw, label='Random Selection')
++plt.plot(x, prc_gr_lt, color='blue', linestyle='--', marker='^',
++         lw=lw, label='Balance Selection')
++plt.plot(x, prc_ac_lt, color='red', linestyle='--', marker='o',
++         lw=lw, label='Accurate Selection')
++
++plt.xlim([-0.5, 100.5])
++plt.xticks(np.arange(0, 100, 5))
++plt.ylabel('Precision@n', fontsize=12)
++plt.title('Letter', fontsize=12)
++plt.legend(loc="lower right")
++
++#########################################################################
++ax = fig.add_subplot(513)
++plt.plot(x, prc_rd_car, color='black', linestyle='-.', marker='s',
++         lw=lw, label='Random Selection')
++plt.plot(x, prc_gr_car, color='blue', linestyle='--', marker='^',
++         lw=lw, label='Balance Selection')
++plt.plot(x, prc_ac_car, color='red', linestyle='--', marker='o',
++         lw=lw, label='Accurate Selection')
++
++plt.xlim([-0.5, 100.5])
++plt.xticks(np.arange(0, 100, 5))
++plt.ylabel('Precision@n', fontsize=12)
++plt.title('Cardio', fontsize=12)
++plt.legend(loc="lower right")
++
++#########################################################################
++ax = fig.add_subplot(514)
++plt.plot(x, prc_rd_sp, color='black', linestyle='-.', marker='s',
++         lw=lw, label='Random Selection')
++plt.plot(x, prc_gr_sp, color='blue', linestyle='--', marker='^',
++         lw=lw, label='Balance Selection')
++plt.plot(x, prc_ac_sp, color='red', linestyle='--', marker='o',
++         lw=lw, label='Accurate Selection')
++
++plt.xlim([-0.5, 100.5])
++plt.xticks(np.arange(0, 100, 5))
++plt.ylabel('Precision@n', fontsize=12)
++plt.title('Speech', fontsize=12)
++plt.legend(loc="lower right")
++#########################################################################
++ax = fig.add_subplot(515)
++plt.plot(x, prc_rd_ma, color='black', linestyle='-.', marker='s',
++         lw=lw, label='Random Selection')
++plt.plot(x, prc_gr_ma, color='blue', linestyle='--', marker='^',
++         lw=lw, label='Balance Selection')
++plt.plot(x, prc_ac_ma, color='red', linestyle='--', marker='o',
++         lw=lw, label='Accurate Selection')
++
++plt.xlim([-0.5, 100.5])
++plt.xticks(np.arange(0, 100, 5))
++plt.xlabel('Number of Selected ODS')
++plt.ylabel('Precision@n', fontsize=12)
++plt.title('Mammography', fontsize=12)
++plt.legend(loc="upper right")
++
++#########################################################################
++plt.tight_layout()
++plt.savefig(os.path.join('figs', 'results.png'), dpi=300)
++plt.show()
+diff --git a/requirements.txt b/requirements.txt
+index 8ecfb78..83b8127 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -5,4 +5,5 @@ pandas>=0.21.0
+ PyNomaly>=0.1.7
+ scikit_learn>=0.19.1
+ scipy>=0.19.1
+-xgboost>=0.7
+\ No newline at end of file
++xgboost>=0.7
++pyod
+\ No newline at end of file
+diff --git a/xgbod_cifar10.py b/xgbod_cifar10.py
+new file mode 100644
+index 0000000..d997aae
+--- /dev/null
++++ b/xgbod_cifar10.py
+@@ -0,0 +1,98 @@
++# -*- coding: utf-8 -*-
++"""Example of using XGBOD for outlier detection with PCA for dimensionality reduction"""
++
++from __future__ import division, print_function
++import os
++import numpy as np
++from scipy.io import loadmat
++from sklearn.decomposition import PCA
++from sklearn.preprocessing import StandardScaler
++from sklearn.metrics import roc_auc_score, precision_score, recall_score, f1_score
++from pyod.models.xgbod import XGBOD
++
++if __name__ == "__main__":
++    train_data_batches, train_data_labels = [], []
++    for batch in range(1, 6):  # CIFAR-10 has 5 training batches
++        print(f"[+] Loading dataset batch: {batch}")
++        data_dict = loadmat(f'datasets/cifar-10-batches-mat/data_batch_{batch}.mat')
++        train_data_batches.append(data_dict['data'])
++        train_data_labels.append(data_dict['labels'].flatten())
++
++    train_set = {
++        'images': np.concatenate(train_data_batches, axis=0),
++        'labels': np.concatenate(train_data_labels, axis=0)
++    }
++
++    data_dict = loadmat('datasets/cifar-10-batches-mat/test_batch.mat')
++    print("[+] Loaded the test dataset")
++    test_set = {
++        'images': data_dict['data'],
++        'labels': data_dict['labels'].flatten()
++    }
++
++    X_train = train_set['images'] / 255.0  
++    y_train = train_set['labels']
++    X_test = test_set['images'] / 255.0
++    y_test = test_set['labels']
++
++    y_train_binary = (y_train != 0).astype(int)
++    y_test_binary = (y_test != 0).astype(int)
++    scaler = StandardScaler()
++    X_train = scaler.fit_transform(X_train)
++    X_test = scaler.transform(X_test)
++
++    n_components = 100
++    print(f"[+] Applying PCA with {n_components} components")
++    pca = PCA(n_components=n_components)
++    X_train = pca.fit_transform(X_train)
++    X_test = pca.transform(X_test)
++    print(f"[+] PCA applied: Train shape: {X_train.shape}, Test shape: {X_test.shape}")
++
++    clf = XGBOD(
++        random_state=42,
++        verbosity=1,
++        tree_method='hist',
++        device='cuda',
++        n_jobs=-1,
++        n_estimators=20
++    )
++
++    print("[+] Training XGBOD model...")
++    clf.fit(X_train, y_train_binary)
++    print("[+] Model training completed.")
++
++    y_train_pred = clf.labels_
++    y_train_scores = clf.decision_scores_
++
++    y_test_pred = clf.predict(X_test)
++    y_test_scores = clf.decision_function(X_test)
++
++    print("\n=== Evaluation Metrics ===")
++
++    train_roc = roc_auc_score(y_train_binary, y_train_scores)
++    train_precision = precision_score(y_train_binary, y_train_pred)
++    train_recall = recall_score(y_train_binary, y_train_pred)
++    train_f1 = f1_score(y_train_binary, y_train_pred)
++
++    print("\nOn Training Data:")
++    print(f"ROC AUC: {train_roc:.4f}")
++    print(f"Precision: {train_precision:.4f}")
++    print(f"Recall: {train_recall:.4f}")
++    print(f"F1 Score: {train_f1:.4f}")
++
++    test_roc = roc_auc_score(y_test_binary, y_test_scores)
++    test_precision = precision_score(y_test_binary, y_test_pred)
++    test_recall = recall_score(y_test_binary, y_test_pred)
++    test_f1 = f1_score(y_test_binary, y_test_pred)
++
++    print("\nOn Test Data:")
++    print(f"ROC AUC: {test_roc:.4f}")
++    print(f"Precision: {test_precision:.4f}")
++    print(f"Recall: {test_recall:.4f}")
++    print(f"F1 Score: {test_f1:.4f}")
++
++    print("\n=== Prediction Summary ===")
++    print(f"Test Data Predicted Labels: {y_test_pred}")
++    print(f"Total Predictions: {len(y_test_pred)}")
++    np.savetxt("xgbod_out.txt", y_test_pred, fmt="%d")
++    print("Predicted labels saved to xgbod_out.txt")
+diff --git a/xgbod_demo.py b/xgbod_demo.py
+index 6b128d8..f3f3fc7 100644
+--- a/xgbod_demo.py
++++ b/xgbod_demo.py
+@@ -1,216 +1,216 @@
+-'''
+-Demo codes for XGBOD.
+-Author: Yue Zhao
+-
+-notes: the demo code simulates the use of XGBOD with some changes to expedite
+-the execution. Use the full code for the production.
+-
+-'''
+-import os
+-import random
+-import scipy.io as scio
+-import numpy as np
+-
+-from sklearn.preprocessing import StandardScaler, normalize
+-from sklearn.metrics import roc_auc_score
+-from sklearn.model_selection import train_test_split
+-from sklearn.linear_model import LogisticRegression
+-
+-from xgboost.sklearn import XGBClassifier
+-from imblearn.ensemble import BalancedBaggingClassifier
+-from models.utility import get_precn, print_baseline
+-from models.generate_TOS import get_TOS_knn
+-from models.generate_TOS import get_TOS_loop
+-from models.generate_TOS import get_TOS_lof
+-from models.generate_TOS import get_TOS_svm
+-from models.generate_TOS import get_TOS_iforest
+-from models.generate_TOS import get_TOS_hbos
+-from models.select_TOS import random_select, accurate_select, balance_select
+-
+-# load data file
+-# mat = scio.loadmat(os.path.join('datasets', 'speech.mat'))
+-mat = scio.loadmat(os.path.join('datasets', 'arrhythmia.mat'))
+-# mat = scio.loadmat(os.path.join('datasets', 'cardio.mat'))
+-# mat = scio.loadmat(os.path.join('datasets', 'letter.mat'))
+-# mat = scio.loadmat(os.path.join('datasets', 'mammography.mat'))
+-
+-X = mat['X']
+-y = mat['y']
+-
+-# use unit norm vector X improves knn, LoOP, and LOF results
+-scaler = StandardScaler().fit(X)
+-# X_norm = scaler.transform(X)
+-X_norm = normalize(X)
+-feature_list = []
+-
+-# Running KNN-base algorithms to generate addtional features
+-
+-# predefined range of k
+-k_range = [1, 2, 3, 4, 5, 10, 15, 20, 30, 40, 50, 60, 70, 80, 90, 100, 150,
+-           200, 250]
+-# predefined range of k to be used with LoOP due to high complexity
+-k_range_short = [1, 3, 5, 10]
+-
+-# validate the value of k
+-k_range = [k for k in k_range if k < X.shape[0]]
+-
+-# predefined range of nu for one-class svm
+-nu_range = [0.01, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.99]
+-
+-# predefined range for number of estimators in isolation forests
+-n_range = [10, 20, 50, 70, 100, 150, 200, 250]
+-##############################################################################
+-
+-# Generate TOS using KNN based algorithms
+-feature_list, roc_knn, prc_n_knn, result_knn = get_TOS_knn(X_norm, y, k_range,
+-                                                           feature_list)
+-# Generate TOS using LoOP
+-feature_list, roc_loop, prc_n_loop, result_loop = get_TOS_loop(X, y,
+-                                                               k_range_short,
+-                                                               feature_list)
+-# Generate TOS using LOF
+-feature_list, roc_lof, prc_n_lof, result_lof = get_TOS_lof(X_norm, y, k_range,
+-                                                           feature_list)
+-# Generate TOS using one class svm
+-feature_list, roc_ocsvm, prc_n_ocsvm, result_ocsvm = get_TOS_svm(X, y,
+-                                                                 nu_range,
+-                                                                 feature_list)
+-# Generate TOS using isolation forests
+-feature_list, roc_if, prc_n_if, result_if = get_TOS_iforest(X, y, n_range,
+-                                                            feature_list)
+-
+-# Generate TOS using isolation forests
+-feature_list, roc_hbos, prc_n_hbos, result_hbos = get_TOS_hbos(X, y, k_range,
+-                                                            feature_list)
+-##############################################################################
+-# combine the feature space by concanating various TOS
+-X_train_new_orig = np.concatenate(
+-    (result_knn, result_loop, result_lof, result_ocsvm, result_if), axis=1)
+-
+-X_train_all_orig = np.concatenate((X, X_train_new_orig), axis=1)
+-
+-# combine ROC and Precision@n list
+-roc_list = roc_knn + roc_loop + roc_lof + roc_ocsvm + roc_if
+-prc_n_list = prc_n_knn + prc_n_loop + prc_n_lof + prc_n_ocsvm + prc_n_if
+-
+-# get the results of baselines
+-print_baseline(X_train_new_orig, y, roc_list, prc_n_list)
+-
+-##############################################################################
+-# select TOS using different methods
+-
+-p = 10  # number of selected TOS
+-
+-# random selection
+-# please be noted the actual random selection happens within the
+-# train-test split, with p repetitions.
+-X_train_new_rand, X_train_all_rand = random_select(X, X_train_new_orig,
+-                                                   roc_list, p)
+-# accurate selection
+-X_train_new_accu, X_train_all_accu = accurate_select(X, X_train_new_orig,
+-                                                     roc_list, p)
+-# balance selection
+-X_train_new_bal, X_train_all_bal = balance_select(X, X_train_new_orig,
+-                                                  roc_list, p)
+-
+-###############################################################################
+-# build various classifiers
+-
+-# it is noted that the data split should happen as the first stage
+-# test data should not be exposed. However, with a relatively large number of
+-# repetitions, the demo code would generate a similar result.
+-
+-# the full code uses the containers to save the intermediate TOS models. The
+-# codes would be shared after the cleanup.
+-
+-ite = 30  # number of iterations
+-test_size = 0.4  # training = 60%, testing = 40%
+-result_dict = {}
+-
+-clf_list = [XGBClassifier(), LogisticRegression(penalty="l1"),
+-            LogisticRegression(penalty="l2")]
+-clf_name_list = ['xgb', 'lr1', 'lr2']
+-
+-# initialize the result dictionary
+-for clf_name in clf_name_list:
+-    result_dict[clf_name + 'ROC' + 'o'] = []
+-    result_dict[clf_name + 'ROC' + 's'] = []
+-    result_dict[clf_name + 'ROC' + 'n'] = []
+-
+-    result_dict[clf_name + 'PRC@n' + 'o'] = []
+-    result_dict[clf_name + 'PRC@n' + 's'] = []
+-    result_dict[clf_name + 'PRC@n' + 'n'] = []
+-
+-for i in range(ite):
+-    s_feature_rand = random.sample(range(0, len(roc_list)), p)
+-    X_train_new_rand = X_train_new_orig[:, s_feature_rand]
+-    X_train_all_rand = np.concatenate((X, X_train_new_rand), axis=1)
+-
+-    original_len = X.shape[1]
+-
+-    # use all TOS
+-    X_train, X_test, y_train, y_test = train_test_split(X_train_all_orig, y,
+-                                                        test_size=test_size)
+-    # # use Random Selection
+-    # X_train, X_test, y_train, y_test = train_test_split(X_train_all_rand, y,
+-    #                                                     test_size=test_size)
+-    # # use Accurate Selection
+-    # X_train, X_test, y_train, y_test = train_test_split(X_train_all_accu, y,
+-    #                                                     test_size=test_size)
+-    # # use Balance Selection
+-    # X_train, X_test, y_train, y_test = train_test_split(X_train_all_bal, y,
+-    #                                                     test_size=test_size)
+-
+-    # use original features
+-    X_train_o = X_train[:, 0:original_len]
+-    X_test_o = X_test[:, 0:original_len]
+-
+-    X_train_n = X_train[:, original_len:]
+-    X_test_n = X_test[:, original_len:]
+-
+-    for clf, clf_name in zip(clf_list, clf_name_list):
+-        print('processing', clf_name, 'round', i + 1)
+-        if clf_name != 'xgb':
+-            clf = BalancedBaggingClassifier(base_estimator=clf,
+-                                            ratio='auto',
+-                                            replacement=False)
+-
+-        # fully supervised
+-        clf.fit(X_train_o, y_train.ravel())
+-        y_pred = clf.predict_proba(X_test_o)
+-
+-        roc_score = roc_auc_score(y_test, y_pred[:, 1])
+-        prec_n = get_precn(y_test, y_pred[:, 1])
+-
+-        result_dict[clf_name + 'ROC' + 'o'].append(roc_score)
+-        result_dict[clf_name + 'PRC@n' + 'o'].append(prec_n)
+-
+-        # unsupervised
+-        clf.fit(X_train_n, y_train.ravel())
+-        y_pred = clf.predict_proba(X_test_n)
+-
+-        roc_score = roc_auc_score(y_test, y_pred[:, 1])
+-        prec_n = get_precn(y_test, y_pred[:, 1])
+-
+-        result_dict[clf_name + 'ROC' + 'n'].append(roc_score)
+-        result_dict[clf_name + 'PRC@n' + 'n'].append(prec_n)
+-
+-        # semi-supervised
+-        clf.fit(X_train, y_train.ravel())
+-        y_pred = clf.predict_proba(X_test)
+-
+-        roc_score = roc_auc_score(y_test, y_pred[:, 1])
+-        prec_n = get_precn(y_test, y_pred[:, 1])
+-
+-        result_dict[clf_name + 'ROC' + 's'].append(roc_score)
+-        result_dict[clf_name + 'PRC@n' + 's'].append(prec_n)
+-
+-for eva in ['ROC', 'PRC@n']:
+-    print()
+-    for clf_name in clf_name_list:
+-        print(np.round(np.mean(result_dict[clf_name + eva + 'o']), decimals=4),
+-              eva, clf_name, 'original features')
+-        print(np.round(np.mean(result_dict[clf_name + eva + 'n']), decimals=4),
+-              eva, clf_name, 'TOS only')
+-        print(np.round(np.mean(result_dict[clf_name + eva + 's']), decimals=4),
+-              eva, clf_name, 'original feature + TOS')
++'''
++Demo codes for XGBOD.
++Author: Yue Zhao
++
++notes: the demo code simulates the use of XGBOD with some changes to expedite
++the execution. Use the full code for the production.
++
++'''
++import os
++import random
++import scipy.io as scio
++import numpy as np
++
++from sklearn.preprocessing import StandardScaler, normalize
++from sklearn.metrics import roc_auc_score
++from sklearn.model_selection import train_test_split
++from sklearn.linear_model import LogisticRegression
++
++from xgboost.sklearn import XGBClassifier
++from imblearn.ensemble import BalancedBaggingClassifier
++from models.utility import get_precn, print_baseline
++from models.generate_TOS import get_TOS_knn
++from models.generate_TOS import get_TOS_loop
++from models.generate_TOS import get_TOS_lof
++from models.generate_TOS import get_TOS_svm
++from models.generate_TOS import get_TOS_iforest
++from models.generate_TOS import get_TOS_hbos
++from models.select_TOS import random_select, accurate_select, balance_select
++
++# load data file
++# mat = scio.loadmat(os.path.join('datasets', 'speech.mat'))
++mat = scio.loadmat(os.path.join('datasets', 'arrhythmia.mat'))
++# mat = scio.loadmat(os.path.join('datasets', 'cardio.mat'))
++# mat = scio.loadmat(os.path.join('datasets', 'letter.mat'))
++# mat = scio.loadmat(os.path.join('datasets', 'mammography.mat'))
++
++X = mat['X']
++y = mat['y']
++
++# use unit norm vector X improves knn, LoOP, and LOF results
++scaler = StandardScaler().fit(X)
++# X_norm = scaler.transform(X)
++X_norm = normalize(X)
++feature_list = []
++
++# Running KNN-base algorithms to generate addtional features
++
++# predefined range of k
++k_range = [1, 2, 3, 4, 5, 10, 15, 20, 30, 40, 50, 60, 70, 80, 90, 100, 150,
++           200, 250]
++# predefined range of k to be used with LoOP due to high complexity
++k_range_short = [1, 3, 5, 10]
++
++# validate the value of k
++k_range = [k for k in k_range if k < X.shape[0]]
++
++# predefined range of nu for one-class svm
++nu_range = [0.01, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.99]
++
++# predefined range for number of estimators in isolation forests
++n_range = [10, 20, 50, 70, 100, 150, 200, 250]
++##############################################################################
++
++# Generate TOS using KNN based algorithms
++feature_list, roc_knn, prc_n_knn, result_knn = get_TOS_knn(X_norm, y, k_range,
++                                                           feature_list)
++# Generate TOS using LoOP
++feature_list, roc_loop, prc_n_loop, result_loop = get_TOS_loop(X, y,
++                                                               k_range_short,
++                                                               feature_list)
++# Generate TOS using LOF
++feature_list, roc_lof, prc_n_lof, result_lof = get_TOS_lof(X_norm, y, k_range,
++                                                           feature_list)
++# Generate TOS using one class svm
++feature_list, roc_ocsvm, prc_n_ocsvm, result_ocsvm = get_TOS_svm(X, y,
++                                                                 nu_range,
++                                                                 feature_list)
++# Generate TOS using isolation forests
++feature_list, roc_if, prc_n_if, result_if = get_TOS_iforest(X, y, n_range,
++                                                            feature_list)
++
++# Generate TOS using isolation forests
++feature_list, roc_hbos, prc_n_hbos, result_hbos = get_TOS_hbos(X, y, k_range,
++                                                            feature_list)
++##############################################################################
++# combine the feature space by concanating various TOS
++X_train_new_orig = np.concatenate(
++    (result_knn, result_loop, result_lof, result_ocsvm, result_if), axis=1)
++
++X_train_all_orig = np.concatenate((X, X_train_new_orig), axis=1)
++
++# combine ROC and Precision@n list
++roc_list = roc_knn + roc_loop + roc_lof + roc_ocsvm + roc_if
++prc_n_list = prc_n_knn + prc_n_loop + prc_n_lof + prc_n_ocsvm + prc_n_if
++
++# get the results of baselines
++print_baseline(X_train_new_orig, y, roc_list, prc_n_list)
++
++##############################################################################
++# select TOS using different methods
++
++p = 10  # number of selected TOS
++
++# random selection
++# please be noted the actual random selection happens within the
++# train-test split, with p repetitions.
++X_train_new_rand, X_train_all_rand = random_select(X, X_train_new_orig,
++                                                   roc_list, p)
++# accurate selection
++X_train_new_accu, X_train_all_accu = accurate_select(X, X_train_new_orig,
++                                                     roc_list, p)
++# balance selection
++X_train_new_bal, X_train_all_bal = balance_select(X, X_train_new_orig,
++                                                  roc_list, p)
++
++###############################################################################
++# build various classifiers
++
++# it is noted that the data split should happen as the first stage
++# test data should not be exposed. However, with a relatively large number of
++# repetitions, the demo code would generate a similar result.
++
++# the full code uses the containers to save the intermediate TOS models. The
++# codes would be shared after the cleanup.
++
++ite = 30  # number of iterations
++test_size = 0.4  # training = 60%, testing = 40%
++result_dict = {}
++
++clf_list = [XGBClassifier(), LogisticRegression(penalty="l1"),
++            LogisticRegression(penalty="l2")]
++clf_name_list = ['xgb', 'lr1', 'lr2']
++
++# initialize the result dictionary
++for clf_name in clf_name_list:
++    result_dict[clf_name + 'ROC' + 'o'] = []
++    result_dict[clf_name + 'ROC' + 's'] = []
++    result_dict[clf_name + 'ROC' + 'n'] = []
++
++    result_dict[clf_name + 'PRC@n' + 'o'] = []
++    result_dict[clf_name + 'PRC@n' + 's'] = []
++    result_dict[clf_name + 'PRC@n' + 'n'] = []
++
++for i in range(ite):
++    s_feature_rand = random.sample(range(0, len(roc_list)), p)
++    X_train_new_rand = X_train_new_orig[:, s_feature_rand]
++    X_train_all_rand = np.concatenate((X, X_train_new_rand), axis=1)
++
++    original_len = X.shape[1]
++
++    # use all TOS
++    X_train, X_test, y_train, y_test = train_test_split(X_train_all_orig, y,
++                                                        test_size=test_size)
++    # # use Random Selection
++    # X_train, X_test, y_train, y_test = train_test_split(X_train_all_rand, y,
++    #                                                     test_size=test_size)
++    # # use Accurate Selection
++    # X_train, X_test, y_train, y_test = train_test_split(X_train_all_accu, y,
++    #                                                     test_size=test_size)
++    # # use Balance Selection
++    # X_train, X_test, y_train, y_test = train_test_split(X_train_all_bal, y,
++    #                                                     test_size=test_size)
++
++    # use original features
++    X_train_o = X_train[:, 0:original_len]
++    X_test_o = X_test[:, 0:original_len]
++
++    X_train_n = X_train[:, original_len:]
++    X_test_n = X_test[:, original_len:]
++
++    for clf, clf_name in zip(clf_list, clf_name_list):
++        print('processing', clf_name, 'round', i + 1)
++        if clf_name != 'xgb':
++            clf = BalancedBaggingClassifier(base_estimator=clf,
++                                            ratio='auto',
++                                            replacement=False)
++
++        # fully supervised
++        clf.fit(X_train_o, y_train.ravel())
++        y_pred = clf.predict_proba(X_test_o)
++
++        roc_score = roc_auc_score(y_test, y_pred[:, 1])
++        prec_n = get_precn(y_test, y_pred[:, 1])
++
++        result_dict[clf_name + 'ROC' + 'o'].append(roc_score)
++        result_dict[clf_name + 'PRC@n' + 'o'].append(prec_n)
++
++        # unsupervised
++        clf.fit(X_train_n, y_train.ravel())
++        y_pred = clf.predict_proba(X_test_n)
++
++        roc_score = roc_auc_score(y_test, y_pred[:, 1])
++        prec_n = get_precn(y_test, y_pred[:, 1])
++
++        result_dict[clf_name + 'ROC' + 'n'].append(roc_score)
++        result_dict[clf_name + 'PRC@n' + 'n'].append(prec_n)
++
++        # semi-supervised
++        clf.fit(X_train, y_train.ravel())
++        y_pred = clf.predict_proba(X_test)
++
++        roc_score = roc_auc_score(y_test, y_pred[:, 1])
++        prec_n = get_precn(y_test, y_pred[:, 1])
++
++        result_dict[clf_name + 'ROC' + 's'].append(roc_score)
++        result_dict[clf_name + 'PRC@n' + 's'].append(prec_n)
++
++for eva in ['ROC', 'PRC@n']:
++    print()
++    for clf_name in clf_name_list:
++        print(np.round(np.mean(result_dict[clf_name + eva + 'o']), decimals=4),
++              eva, clf_name, 'original features')
++        print(np.round(np.mean(result_dict[clf_name + eva + 'n']), decimals=4),
++              eva, clf_name, 'TOS only')
++        print(np.round(np.mean(result_dict[clf_name + eva + 's']), decimals=4),
++              eva, clf_name, 'original feature + TOS')
+diff --git a/xgbod_full.py b/xgbod_full.py
+index 273289c..b833c21 100644
+--- a/xgbod_full.py
++++ b/xgbod_full.py
+@@ -1,345 +1,345 @@
+-import os
+-import pandas as pd
+-import numpy as np
+-import scipy.io as scio
+-
+-from sklearn.preprocessing import StandardScaler, Normalizer
+-from sklearn.model_selection import train_test_split
+-from sklearn.metrics import roc_auc_score
+-from sklearn.neighbors import LocalOutlierFactor
+-from sklearn.linear_model import LogisticRegression
+-from sklearn.ensemble import IsolationForest
+-from sklearn.svm import OneClassSVM
+-
+-from xgboost.sklearn import XGBClassifier
+-from imblearn.ensemble import BalancedBaggingClassifier
+-from PyNomaly import loop
+-
+-from models.knn import Knn
+-from models.utility import get_precn, print_baseline
+-
+-# use one dataset at a time; more datasets could be added to /datasets folder
+-# the experiment codes use a bit more setting up, otherwise the
+-# exact reproduction is infeasible. Clean-up codes are going to be moved
+-
+-# load data file
+-mat = scio.loadmat(os.path.join('datasets', 'letter.mat'))
+-ite = 30  # number of iterations
+-test_size = 0.4  # training = 60%, testing = 40%
+-
+-X_orig = mat['X']
+-y_orig = mat['y']
+-
+-# outlier percentage
+-out_perc = np.count_nonzero(y_orig) / len(y_orig)
+-
+-# define classifiers to use
+-clf_list = [XGBClassifier(), LogisticRegression(penalty="l1"),
+-            LogisticRegression(penalty="l2")]
+-clf_name_list = ['xgb', 'lr1', 'lr2']
+-
+-# initialize the container to store the results
+-result_dict = {}
+-
+-# initialize the result dictionary
+-for clf_name in clf_name_list:
+-    result_dict[clf_name + 'roc' + 'o'] = []
+-    result_dict[clf_name + 'roc' + 's'] = []
+-    result_dict[clf_name + 'roc' + 'n'] = []
+-
+-    result_dict[clf_name + 'precn' + 'o'] = []
+-    result_dict[clf_name + 'precn' + 's'] = []
+-    result_dict[clf_name + 'precn' + 'n'] = []
+-
+-for t in range(ite):
+-
+-    print('\nProcessing trial', t + 1, 'out of', ite)
+-
+-    # split X and y for training and validation
+-    X, X_test, y, y_test = train_test_split(X_orig, y_orig,
+-                                            test_size=test_size)
+-
+-    # reserve the normalized data
+-    scaler = Normalizer().fit(X)
+-    X_norm = scaler.transform(X)
+-    X_test_norm = scaler.transform(X_test)
+-
+-    feature_list = []
+-
+-    # predefined range of K
+-    k_list_pre = [1, 2, 3, 4, 5, 10, 15, 20, 30, 40, 50, 60, 70, 80, 90,
+-                  100, 150, 200, 250]
+-    # trim the list in case of small sample size
+-    k_list = [k for k in k_list_pre if k < X.shape[0]]
+-
+-    ###########################################################################
+-    train_knn = np.zeros([X.shape[0], len(k_list)])
+-    test_knn = np.zeros([X_test.shape[0], len(k_list)])
+-
+-    roc_knn = []
+-    prec_n_knn = []
+-
+-    for i in range(len(k_list)):
+-        k = k_list[i]
+-
+-        clf = Knn(n_neighbors=k, contamination=out_perc, method='largest')
+-        clf.fit(X_norm)
+-        train_score = clf.decision_scores
+-        pred_score = clf.decision_function(X_test_norm)
+-
+-        roc = np.round(roc_auc_score(y_test, pred_score), decimals=4)
+-        prec_n = np.round(get_precn(y_test, pred_score), decimals=4)
+-        print('knn roc pren @ {k} is {roc} {pren}'.format(k=k, roc=roc,
+-                                                          pren=prec_n))
+-
+-        feature_list.append('knn_' + str(k))
+-        roc_knn.append(roc)
+-        prec_n_knn.append(prec_n)
+-
+-        train_knn[:, i] = train_score
+-        test_knn[:, i] = pred_score.ravel()
+-    ###########################################################################
+-
+-    train_knn_mean = np.zeros([X.shape[0], len(k_list)])
+-    test_knn_mean = np.zeros([X_test.shape[0], len(k_list)])
+-
+-    roc_knn_mean = []
+-    prec_n_knn_mean = []
+-    for i in range(len(k_list)):
+-        k = k_list[i]
+-
+-        clf = Knn(n_neighbors=k, contamination=out_perc, method='mean')
+-        clf.fit(X_norm)
+-        train_score = clf.decision_scores
+-        pred_score = clf.decision_function(X_test_norm)
+-
+-        roc = np.round(roc_auc_score(y_test, pred_score), decimals=4)
+-        prec_n = np.round(get_precn(y_test, pred_score), decimals=4)
+-        print('knn_mean roc pren @ {k} is {roc} {pren}'.format(k=k, roc=roc,
+-                                                               pren=prec_n))
+-
+-        feature_list.append('knn_mean_' + str(k))
+-        roc_knn_mean.append(roc)
+-        prec_n_knn_mean.append(prec_n)
+-
+-        train_knn_mean[:, i] = train_score
+-        test_knn_mean[:, i] = pred_score.ravel()
+-    ###########################################################################
+-
+-    train_knn_median = np.zeros([X.shape[0], len(k_list)])
+-    test_knn_median = np.zeros([X_test.shape[0], len(k_list)])
+-
+-    roc_knn_median = []
+-    prec_n_knn_median = []
+-    for i in range(len(k_list)):
+-        k = k_list[i]
+-
+-        clf = Knn(n_neighbors=k, contamination=out_perc, method='median')
+-        clf.fit(X_norm)
+-        train_score = clf.decision_scores
+-        pred_score = clf.decision_function(X_test_norm)
+-
+-        roc = np.round(roc_auc_score(y_test, pred_score), decimals=4)
+-        prec_n = np.round(get_precn(y_test, pred_score), decimals=4)
+-        print('knn_median roc pren @ {k} is {roc} {pren}'.format(k=k, roc=roc,
+-                                                                 pren=prec_n))
+-
+-        feature_list.append('knn_median_' + str(k))
+-        roc_knn_median.append(roc)
+-        prec_n_knn_median.append(prec_n)
+-
+-        train_knn_median[:, i] = train_score
+-        test_knn_median[:, i] = pred_score.ravel()
+-    ###########################################################################
+-
+-    train_lof = np.zeros([X.shape[0], len(k_list)])
+-    test_lof = np.zeros([X_test.shape[0], len(k_list)])
+-
+-    roc_lof = []
+-    prec_n_lof = []
+-
+-    for i in range(len(k_list)):
+-        k = k_list[i]
+-        clf = LocalOutlierFactor(n_neighbors=k)
+-        clf.fit(X_norm)
+-
+-        # save the train sets
+-        train_score = clf.negative_outlier_factor_ * -1
+-        # flip the score
+-        pred_score = clf._decision_function(X_test_norm) * -1
+-
+-        roc = np.round(roc_auc_score(y_test, pred_score), decimals=4)
+-        prec_n = np.round(get_precn(y_test, pred_score), decimals=4)
+-        print('lof roc pren @ {k} is {roc} {pren}'.format(k=k, roc=roc,
+-                                                          pren=prec_n))
+-        feature_list.append('lof_' + str(k))
+-        roc_lof.append(roc)
+-        prec_n_lof.append(prec_n)
+-
+-        train_lof[:, i] = train_score
+-        test_lof[:, i] = pred_score
+-
+-    ###########################################################################
+-    # Noted that LoOP is not really used for prediction since its high
+-    # computational complexity
+-    # However, it is included to demonstrate the effectiveness of XGBOD only
+-
+-    df_X = pd.DataFrame(np.concatenate([X_norm, X_test_norm], axis=0))
+-
+-    # predefined range of K
+-    k_list = [1, 5, 10, 20]
+-
+-    train_loop = np.zeros([X.shape[0], len(k_list)])
+-    test_loop = np.zeros([X_test.shape[0], len(k_list)])
+-
+-    roc_loop = []
+-    prec_n_loop = []
+-
+-    for i in range(len(k_list)):
+-        k = k_list[i]
+-        clf = loop.LocalOutlierProbability(df_X, n_neighbors=k).fit()
+-        score = clf.local_outlier_probabilities.astype(float)
+-
+-        # save the train sets
+-        train_score = score[0:X.shape[0]]
+-        # flip the score
+-        pred_score = score[X.shape[0]:]
+-
+-        roc = np.round(roc_auc_score(y_test, pred_score), decimals=4)
+-        prec_n = np.round(get_precn(y_test, pred_score), decimals=4)
+-        print('loop roc pren @ {k} is {roc} {pren}'.format(k=k, roc=roc,
+-                                                           pren=prec_n))
+-        feature_list.append('loop_' + str(k))
+-        roc_loop.append(roc)
+-        prec_n_loop.append(prec_n)
+-
+-        train_loop[:, i] = train_score
+-        test_loop[:, i] = pred_score
+-
+-    ##########################################################################
+-    nu_list = [0.01, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.99]
+-
+-    train_svm = np.zeros([X.shape[0], len(nu_list)])
+-    test_svm = np.zeros([X_test.shape[0], len(nu_list)])
+-
+-    roc_svm = []
+-    prec_n_svm = []
+-
+-    for i in range(len(nu_list)):
+-        nu = nu_list[i]
+-
+-        clf = OneClassSVM(nu=nu)
+-        clf.fit(X)
+-
+-        train_score = clf.decision_function(X) * -1
+-        pred_score = clf.decision_function(X_test) * -1
+-
+-        roc = np.round(roc_auc_score(y_test, pred_score), decimals=4)
+-        prec_n = np.round(get_precn(y_test, pred_score), decimals=4)
+-        print('svm roc / pren @ {nu} is {roc} {pren}'.format(nu=nu, roc=roc,
+-                                                             pren=prec_n))
+-
+-        feature_list.append('svm_' + str(nu))
+-        roc_svm.append(roc)
+-        prec_n_svm.append(prec_n)
+-
+-        train_svm[:, i] = train_score.ravel()
+-        test_svm[:, i] = pred_score.ravel()
+-    ###########################################################################
+-
+-    n_list = [10, 20, 50, 70, 100, 150, 200, 250]
+-
+-    train_if = np.zeros([X.shape[0], len(n_list)])
+-    test_if = np.zeros([X_test.shape[0], len(n_list)])
+-
+-    roc_if = []
+-    prec_n_if = []
+-
+-    for i in range(len(n_list)):
+-        n = n_list[i]
+-        clf = IsolationForest(n_estimators=n)
+-        clf.fit(X)
+-        train_score = clf.decision_function(X) * -1
+-        pred_score = clf.decision_function(X_test) * -1
+-
+-        roc = np.round(roc_auc_score(y_test, pred_score), decimals=4)
+-        prec_n = np.round(get_precn(y_test, pred_score), decimals=4)
+-        print('if roc / pren @ {n} is {roc} {pren}'.format(n=n, roc=roc,
+-                                                           pren=prec_n))
+-
+-        feature_list.append('if_' + str(n))
+-        roc_if.append(roc)
+-        prec_n_if.append(prec_n)
+-
+-        train_if[:, i] = train_score
+-        test_if[:, i] = pred_score
+-
+-    #########################################################################
+-    X_train_new = np.concatenate((train_knn, train_knn_mean, train_knn_median,
+-                                  train_lof, train_loop, train_svm, train_if),
+-                                 axis=1)
+-    X_test_new = np.concatenate((test_knn, test_knn_mean, test_knn_median,
+-                                 test_lof, test_loop, test_svm, test_if),
+-                                axis=1)
+-
+-    X_train_all = np.concatenate((X, X_train_new), axis=1)
+-    X_test_all = np.concatenate((X_test, X_test_new), axis=1)
+-
+-    roc_list = roc_knn + roc_knn_mean + roc_knn_median + roc_lof + roc_loop + roc_svm + roc_if
+-    prec_n_list = prec_n_knn + prec_n_knn_mean + prec_n_knn_median + prec_n_lof + prec_n_loop + prec_n_svm + prec_n_if
+-
+-    # get the results of baselines
+-    print_baseline(X_test_new, y_test, roc_list, prec_n_list)
+-
+-    ###########################################################################
+-    # select TOS using different methods
+-
+-    p = 10  # number of selected TOS
+-    # TODO: supplement the cleaned up version for selection methods
+-
+-    ##############################################################################
+-    for clf, clf_name in zip(clf_list, clf_name_list):
+-        print('processing', clf_name)
+-        if clf_name != 'xgb':
+-            clf = BalancedBaggingClassifier(base_estimator=clf,
+-                                            ratio='auto',
+-                                            replacement=False)
+-        # fully supervised
+-        clf.fit(X, y.ravel())
+-        y_pred = clf.predict_proba(X_test)
+-
+-        roc_score = roc_auc_score(y_test, y_pred[:, 1])
+-        prec_n = get_precn(y_test, y_pred[:, 1])
+-
+-        result_dict[clf_name + 'roc' + 'o'].append(roc_score)
+-        result_dict[clf_name + 'precn' + 'o'].append(prec_n)
+-
+-        # unsupervised
+-        clf.fit(X_train_new, y.ravel())
+-        y_pred = clf.predict_proba(X_test_new)
+-
+-        roc_score = roc_auc_score(y_test, y_pred[:, 1])
+-        prec_n = get_precn(y_test, y_pred[:, 1])
+-
+-        result_dict[clf_name + 'roc' + 'n'].append(roc_score)
+-        result_dict[clf_name + 'precn' + 'n'].append(prec_n)
+-
+-        # semi-supervised
+-        clf.fit(X_train_all, y.ravel())
+-        y_pred = clf.predict_proba(X_test_all)
+-
+-        roc_score = roc_auc_score(y_test, y_pred[:, 1])
+-        prec_n = get_precn(y_test, y_pred[:, 1])
+-
+-        result_dict[clf_name + 'roc' + 's'].append(roc_score)
+-        result_dict[clf_name + 'precn' + 's'].append(prec_n)
+-
+-for eva in ['roc', 'precn']:
+-    print()
+-    for clf_name in clf_name_list:
+-        print(np.round(np.mean(result_dict[clf_name + eva + 'o']), decimals=4),
+-              eva, clf_name, 'old')
+-        print(np.round(np.mean(result_dict[clf_name + eva + 'n']), decimals=4),
+-              eva, clf_name, 'new')
+-        print(np.round(np.mean(result_dict[clf_name + eva + 's']), decimals=4),
+-              eva, clf_name, 'all')
++import os
++import pandas as pd
++import numpy as np
++import scipy.io as scio
++
++from sklearn.preprocessing import StandardScaler, Normalizer
++from sklearn.model_selection import train_test_split
++from sklearn.metrics import roc_auc_score
++from sklearn.neighbors import LocalOutlierFactor
++from sklearn.linear_model import LogisticRegression
++from sklearn.ensemble import IsolationForest
++from sklearn.svm import OneClassSVM
++
++from xgboost.sklearn import XGBClassifier
++from imblearn.ensemble import BalancedBaggingClassifier
++from PyNomaly import loop
++
++from models.knn import Knn
++from models.utility import get_precn, print_baseline
++
++# use one dataset at a time; more datasets could be added to /datasets folder
++# the experiment codes use a bit more setting up, otherwise the
++# exact reproduction is infeasible. Clean-up codes are going to be moved
++
++# load data file
++mat = scio.loadmat(os.path.join('datasets', 'letter.mat'))
++ite = 30  # number of iterations
++test_size = 0.4  # training = 60%, testing = 40%
++
++X_orig = mat['X']
++y_orig = mat['y']
++
++# outlier percentage
++out_perc = np.count_nonzero(y_orig) / len(y_orig)
++
++# define classifiers to use
++clf_list = [XGBClassifier(), LogisticRegression(penalty="l1"),
++            LogisticRegression(penalty="l2")]
++clf_name_list = ['xgb', 'lr1', 'lr2']
++
++# initialize the container to store the results
++result_dict = {}
++
++# initialize the result dictionary
++for clf_name in clf_name_list:
++    result_dict[clf_name + 'roc' + 'o'] = []
++    result_dict[clf_name + 'roc' + 's'] = []
++    result_dict[clf_name + 'roc' + 'n'] = []
++
++    result_dict[clf_name + 'precn' + 'o'] = []
++    result_dict[clf_name + 'precn' + 's'] = []
++    result_dict[clf_name + 'precn' + 'n'] = []
++
++for t in range(ite):
++
++    print('\nProcessing trial', t + 1, 'out of', ite)
++
++    # split X and y for training and validation
++    X, X_test, y, y_test = train_test_split(X_orig, y_orig,
++                                            test_size=test_size)
++
++    # reserve the normalized data
++    scaler = Normalizer().fit(X)
++    X_norm = scaler.transform(X)
++    X_test_norm = scaler.transform(X_test)
++
++    feature_list = []
++
++    # predefined range of K
++    k_list_pre = [1, 2, 3, 4, 5, 10, 15, 20, 30, 40, 50, 60, 70, 80, 90,
++                  100, 150, 200, 250]
++    # trim the list in case of small sample size
++    k_list = [k for k in k_list_pre if k < X.shape[0]]
++
++    ###########################################################################
++    train_knn = np.zeros([X.shape[0], len(k_list)])
++    test_knn = np.zeros([X_test.shape[0], len(k_list)])
++
++    roc_knn = []
++    prec_n_knn = []
++
++    for i in range(len(k_list)):
++        k = k_list[i]
++
++        clf = Knn(n_neighbors=k, contamination=out_perc, method='largest')
++        clf.fit(X_norm)
++        train_score = clf.decision_scores
++        pred_score = clf.decision_function(X_test_norm)
++
++        roc = np.round(roc_auc_score(y_test, pred_score), decimals=4)
++        prec_n = np.round(get_precn(y_test, pred_score), decimals=4)
++        print('knn roc pren @ {k} is {roc} {pren}'.format(k=k, roc=roc,
++                                                          pren=prec_n))
++
++        feature_list.append('knn_' + str(k))
++        roc_knn.append(roc)
++        prec_n_knn.append(prec_n)
++
++        train_knn[:, i] = train_score
++        test_knn[:, i] = pred_score.ravel()
++    ###########################################################################
++
++    train_knn_mean = np.zeros([X.shape[0], len(k_list)])
++    test_knn_mean = np.zeros([X_test.shape[0], len(k_list)])
++
++    roc_knn_mean = []
++    prec_n_knn_mean = []
++    for i in range(len(k_list)):
++        k = k_list[i]
++
++        clf = Knn(n_neighbors=k, contamination=out_perc, method='mean')
++        clf.fit(X_norm)
++        train_score = clf.decision_scores
++        pred_score = clf.decision_function(X_test_norm)
++
++        roc = np.round(roc_auc_score(y_test, pred_score), decimals=4)
++        prec_n = np.round(get_precn(y_test, pred_score), decimals=4)
++        print('knn_mean roc pren @ {k} is {roc} {pren}'.format(k=k, roc=roc,
++                                                               pren=prec_n))
++
++        feature_list.append('knn_mean_' + str(k))
++        roc_knn_mean.append(roc)
++        prec_n_knn_mean.append(prec_n)
++
++        train_knn_mean[:, i] = train_score
++        test_knn_mean[:, i] = pred_score.ravel()
++    ###########################################################################
++
++    train_knn_median = np.zeros([X.shape[0], len(k_list)])
++    test_knn_median = np.zeros([X_test.shape[0], len(k_list)])
++
++    roc_knn_median = []
++    prec_n_knn_median = []
++    for i in range(len(k_list)):
++        k = k_list[i]
++
++        clf = Knn(n_neighbors=k, contamination=out_perc, method='median')
++        clf.fit(X_norm)
++        train_score = clf.decision_scores
++        pred_score = clf.decision_function(X_test_norm)
++
++        roc = np.round(roc_auc_score(y_test, pred_score), decimals=4)
++        prec_n = np.round(get_precn(y_test, pred_score), decimals=4)
++        print('knn_median roc pren @ {k} is {roc} {pren}'.format(k=k, roc=roc,
++                                                                 pren=prec_n))
++
++        feature_list.append('knn_median_' + str(k))
++        roc_knn_median.append(roc)
++        prec_n_knn_median.append(prec_n)
++
++        train_knn_median[:, i] = train_score
++        test_knn_median[:, i] = pred_score.ravel()
++    ###########################################################################
++
++    train_lof = np.zeros([X.shape[0], len(k_list)])
++    test_lof = np.zeros([X_test.shape[0], len(k_list)])
++
++    roc_lof = []
++    prec_n_lof = []
++
++    for i in range(len(k_list)):
++        k = k_list[i]
++        clf = LocalOutlierFactor(n_neighbors=k)
++        clf.fit(X_norm)
++
++        # save the train sets
++        train_score = clf.negative_outlier_factor_ * -1
++        # flip the score
++        pred_score = clf._decision_function(X_test_norm) * -1
++
++        roc = np.round(roc_auc_score(y_test, pred_score), decimals=4)
++        prec_n = np.round(get_precn(y_test, pred_score), decimals=4)
++        print('lof roc pren @ {k} is {roc} {pren}'.format(k=k, roc=roc,
++                                                          pren=prec_n))
++        feature_list.append('lof_' + str(k))
++        roc_lof.append(roc)
++        prec_n_lof.append(prec_n)
++
++        train_lof[:, i] = train_score
++        test_lof[:, i] = pred_score
++
++    ###########################################################################
++    # Noted that LoOP is not really used for prediction since its high
++    # computational complexity
++    # However, it is included to demonstrate the effectiveness of XGBOD only
++
++    df_X = pd.DataFrame(np.concatenate([X_norm, X_test_norm], axis=0))
++
++    # predefined range of K
++    k_list = [1, 5, 10, 20]
++
++    train_loop = np.zeros([X.shape[0], len(k_list)])
++    test_loop = np.zeros([X_test.shape[0], len(k_list)])
++
++    roc_loop = []
++    prec_n_loop = []
++
++    for i in range(len(k_list)):
++        k = k_list[i]
++        clf = loop.LocalOutlierProbability(df_X, n_neighbors=k).fit()
++        score = clf.local_outlier_probabilities.astype(float)
++
++        # save the train sets
++        train_score = score[0:X.shape[0]]
++        # flip the score
++        pred_score = score[X.shape[0]:]
++
++        roc = np.round(roc_auc_score(y_test, pred_score), decimals=4)
++        prec_n = np.round(get_precn(y_test, pred_score), decimals=4)
++        print('loop roc pren @ {k} is {roc} {pren}'.format(k=k, roc=roc,
++                                                           pren=prec_n))
++        feature_list.append('loop_' + str(k))
++        roc_loop.append(roc)
++        prec_n_loop.append(prec_n)
++
++        train_loop[:, i] = train_score
++        test_loop[:, i] = pred_score
++
++    ##########################################################################
++    nu_list = [0.01, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.99]
++
++    train_svm = np.zeros([X.shape[0], len(nu_list)])
++    test_svm = np.zeros([X_test.shape[0], len(nu_list)])
++
++    roc_svm = []
++    prec_n_svm = []
++
++    for i in range(len(nu_list)):
++        nu = nu_list[i]
++
++        clf = OneClassSVM(nu=nu)
++        clf.fit(X)
++
++        train_score = clf.decision_function(X) * -1
++        pred_score = clf.decision_function(X_test) * -1
++
++        roc = np.round(roc_auc_score(y_test, pred_score), decimals=4)
++        prec_n = np.round(get_precn(y_test, pred_score), decimals=4)
++        print('svm roc / pren @ {nu} is {roc} {pren}'.format(nu=nu, roc=roc,
++                                                             pren=prec_n))
++
++        feature_list.append('svm_' + str(nu))
++        roc_svm.append(roc)
++        prec_n_svm.append(prec_n)
++
++        train_svm[:, i] = train_score.ravel()
++        test_svm[:, i] = pred_score.ravel()
++    ###########################################################################
++
++    n_list = [10, 20, 50, 70, 100, 150, 200, 250]
++
++    train_if = np.zeros([X.shape[0], len(n_list)])
++    test_if = np.zeros([X_test.shape[0], len(n_list)])
++
++    roc_if = []
++    prec_n_if = []
++
++    for i in range(len(n_list)):
++        n = n_list[i]
++        clf = IsolationForest(n_estimators=n)
++        clf.fit(X)
++        train_score = clf.decision_function(X) * -1
++        pred_score = clf.decision_function(X_test) * -1
++
++        roc = np.round(roc_auc_score(y_test, pred_score), decimals=4)
++        prec_n = np.round(get_precn(y_test, pred_score), decimals=4)
++        print('if roc / pren @ {n} is {roc} {pren}'.format(n=n, roc=roc,
++                                                           pren=prec_n))
++
++        feature_list.append('if_' + str(n))
++        roc_if.append(roc)
++        prec_n_if.append(prec_n)
++
++        train_if[:, i] = train_score
++        test_if[:, i] = pred_score
++
++    #########################################################################
++    X_train_new = np.concatenate((train_knn, train_knn_mean, train_knn_median,
++                                  train_lof, train_loop, train_svm, train_if),
++                                 axis=1)
++    X_test_new = np.concatenate((test_knn, test_knn_mean, test_knn_median,
++                                 test_lof, test_loop, test_svm, test_if),
++                                axis=1)
++
++    X_train_all = np.concatenate((X, X_train_new), axis=1)
++    X_test_all = np.concatenate((X_test, X_test_new), axis=1)
++
++    roc_list = roc_knn + roc_knn_mean + roc_knn_median + roc_lof + roc_loop + roc_svm + roc_if
++    prec_n_list = prec_n_knn + prec_n_knn_mean + prec_n_knn_median + prec_n_lof + prec_n_loop + prec_n_svm + prec_n_if
++
++    # get the results of baselines
++    print_baseline(X_test_new, y_test, roc_list, prec_n_list)
++
++    ###########################################################################
++    # select TOS using different methods
++
++    p = 10  # number of selected TOS
++    # TODO: supplement the cleaned up version for selection methods
++
++    ##############################################################################
++    for clf, clf_name in zip(clf_list, clf_name_list):
++        print('processing', clf_name)
++        if clf_name != 'xgb':
++            clf = BalancedBaggingClassifier(base_estimator=clf,
++                                            ratio='auto',
++                                            replacement=False)
++        # fully supervised
++        clf.fit(X, y.ravel())
++        y_pred = clf.predict_proba(X_test)
++
++        roc_score = roc_auc_score(y_test, y_pred[:, 1])
++        prec_n = get_precn(y_test, y_pred[:, 1])
++
++        result_dict[clf_name + 'roc' + 'o'].append(roc_score)
++        result_dict[clf_name + 'precn' + 'o'].append(prec_n)
++
++        # unsupervised
++        clf.fit(X_train_new, y.ravel())
++        y_pred = clf.predict_proba(X_test_new)
++
++        roc_score = roc_auc_score(y_test, y_pred[:, 1])
++        prec_n = get_precn(y_test, y_pred[:, 1])
++
++        result_dict[clf_name + 'roc' + 'n'].append(roc_score)
++        result_dict[clf_name + 'precn' + 'n'].append(prec_n)
++
++        # semi-supervised
++        clf.fit(X_train_all, y.ravel())
++        y_pred = clf.predict_proba(X_test_all)
++
++        roc_score = roc_auc_score(y_test, y_pred[:, 1])
++        prec_n = get_precn(y_test, y_pred[:, 1])
++
++        result_dict[clf_name + 'roc' + 's'].append(roc_score)
++        result_dict[clf_name + 'precn' + 's'].append(prec_n)
++
++for eva in ['roc', 'precn']:
++    print()
++    for clf_name in clf_name_list:
++        print(np.round(np.mean(result_dict[clf_name + eva + 'o']), decimals=4),
++              eva, clf_name, 'old')
++        print(np.round(np.mean(result_dict[clf_name + eva + 'n']), decimals=4),
++              eva, clf_name, 'new')
++        print(np.round(np.mean(result_dict[clf_name + eva + 's']), decimals=4),
++              eva, clf_name, 'all')
+diff --git a/xgbod_main.py b/xgbod_main.py
+new file mode 100644
+index 0000000..6e4a0cf
+--- /dev/null
++++ b/xgbod_main.py
+@@ -0,0 +1,92 @@
++# -*- coding: utf-8 -*-
++"""Example of using XGBOD for outlier detection with PCA for dimensionality reduction"""
++# Author: Yue Zhao <zhaoy@cmu.edu>
++# License: BSD 2 clause
++
++from __future__ import division
++from __future__ import print_function
++
++import os
++import numpy as np
++from scipy.io import loadmat
++from sklearn.decomposition import PCA
++from sklearn.model_selection import train_test_split
++from sklearn.preprocessing import StandardScaler
++from pyod.models.xgbod import XGBOD
++from pyod.utils.data import evaluate_print
++
++if __name__ == "__main__":
++    # Load CIFAR-10 dataset
++    train_data_batches, train_data_labels = [], []
++    for batch in range(1, 6):  # CIFAR-10 typically has 5 training batches
++        print(f"[+] Loading dataset batch: {batch}")
++        data_dict = loadmat(f'datasets/cifar-10-batches-mat/data_batch_{batch}.mat')
++        train_data_batches.append(data_dict['data'])
++        train_data_labels.append(data_dict['labels'].flatten())
++
++    train_set = {
++        'images': np.concatenate(train_data_batches, axis=0),
++        'labels': np.concatenate(train_data_labels, axis=0)
++    }
++
++    data_dict = loadmat('datasets/cifar-10-batches-mat/test_batch.mat')
++    print("[+] Loaded the test dataset")
++    test_set = {
++        'images': data_dict['data'],
++        'labels': data_dict['labels'].flatten()
++    }
++
++    X_train = train_set['images'] / 255.0  # Normalize to [0, 1]
++    y_train = train_set['labels']
++    X_test = test_set['images'] / 255.0
++    y_test = test_set['labels']
++
++    # Standardize features (mean=0, variance=1) for PCA
++    scaler = StandardScaler()
++    X_train = scaler.fit_transform(X_train)
++    X_test = scaler.transform(X_test)
++
++    # Apply PCA for dimensionality reduction
++    n_components = 100  # You can adjust this or use n_components=0.95 for variance-based selection
++    print(f"[+] Applying PCA to reduce dimensions to {n_components} components")
++    pca = PCA(n_components=n_components)
++    X_train = pca.fit_transform(X_train)
++    X_test = pca.transform(X_test)
++    print(f"[+] PCA applied: New training shape: {X_train.shape}, New test shape: {X_test.shape}")
++
++    # Initialize and train XGBOD with GPU support
++    clf_name = 'XGBOD'
++    clf = XGBOD(
++        random_state=42,
++        verbosity=1,
++        tree_method='hist',
++        device='cuda',
++        n_jobs=-1,  # Use all available cores
++        n_estimators=20  # Reduce estimators for faster training
++    )
++
++    print("[+] Training XGBOD model...")
++    clf.fit(X_train, y_train)
++    print("[+] Model training completed.")
++
++    # Predictions and outlier scores
++    y_train_pred = clf.labels_
++    print(f"y train pred: {y_train_pred}")
++    y_train_scores = clf.decision_scores_
++    print(f"y train scores: {y_train_scores}")
++
++    print("predicting for test")
++    y_test_pred = clf.predict(X_test)
++    print(f"y_test_pred: {y_test_pred}")
++    y_test_scores = clf.decision_function(X_test)
++    print(f"test_score {y_test_scores}")
++    print("Exiting.....")
++
++    # Evaluation
++    print("\nOn Training Data:")
++    evaluate_print(clf_name, y_train, y_train_scores)
++
++    print("\nOn Test Data:")
++    evaluate_print(clf_name, y_test, y_test_scores)
++    print(f"Test Data Predicted Labels:\n{y_test_pred}")
++    print(f"Total Predictions: {len(y_test_pred)}")

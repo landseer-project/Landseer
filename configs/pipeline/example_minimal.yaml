@@ -1,0 +1,23 @@
+# Pair with configs/tools/example_minimal.yaml
+
+dataset:
+  name: cifar10
+  variant: clean
+
+model:
+  script: configs/model/config_model_resnet20.py
+  framework: pytorch
+
+pipeline:
+  pre_training:
+    tools:
+      - pre_noop
+  during_training:
+    tools:
+      - in_noop
+  post_training:
+    tools:
+      - post_noop
+  deployment:
+    tools:
+      - deploy_noop

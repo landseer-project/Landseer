@@ -2,229 +2,80 @@
 
 ## Overview
 
-Landseer is a modular framework to systematically explore, compose, and evaluate machine learning defenses across a range of threat models. While many existing defenses target narrow threat categories (robustness, privacy, fairness, etc.), Landseer allows researchers and practitioners to analyze how multiple defenses interact when combined across the entire ML pipeline. The framework supports seamless integration of multiple defense stages and includes an automated evaluation engine that tests system performance and robustness across a variety of attack scenarios.
+Landseer composes and evaluates ML defenses across pipeline stages (pre-training, during-training, post-training, deployment) with Docker-isolated tools and an evaluation engine.
 
-## Key Features
+**Python:** [Poetry](https://python-poetry.org/) only (`poetry install`)
+**Container tags:** use local builds—see `configs/evaluators.example.yaml` and `configs/tools/example_*.yaml` (no org registry URLs in examples).
 
-- **Automated Pipeline Execution**: Systematically tests all combinations of defense tools
-- **Docker-based Tool Integration**: Runs defense mechanisms in isolated containers
-- **Multi-stage Defense Testing**: Supports pre-training, during-training, and post-training defenses
-- **Comprehensive Evaluation**: Tests clean accuracy, robustness, fingerprinting resistance, and attack success rates
-- **Attack Simulation**: Supports backdoor, evasion, extraction, and inference attacks
-- **Intelligent Caching**: Avoids redundant computations with hash-based caching
-- **Parallel Execution**: GPU-aware parallel processing of combinations
-- **Result Tracking**: Detailed logging and CSV-based result reporting
 
-### Supported Metrics
-- **Clean Accuracy**: Standard model performance on clean train and test data
-- **Robust Accuracy**: Performance under adversarial attacks (PGD)
-- **Out-of-Distribution (OOD) Detection**: AUC for detecting out-of-distribution inputs
-- **Fingerprint confidence score and p-value**: Confidence score and p-value of suspected stolen model to victim model's fingerptint
-- **Backdoor Attack Success Rate (ASR)**: Success rate of backdoor triggers
-- **Epsilon**: Privacy Budget for differentially private data or models 
-- **Training Duration**: Time measurements for each tool and combination
+## Layout
 
-### Attack Types
-- **Backdoor**: Data poisoning attacks with trigger patterns
-- **Evasion**: Adversarial examples designed to fool the model
-- **Extraction**: Model stealing and membership inference attacks
-- **Inference**: Privacy attacks extracting training data information
+| Path | Role |
+|------|------|
+| **`src/`** | `backend/`, `worker/`, `frontend/`, `pipeline/`, `data/`, `db/`, … |
+| **`configs/`** | `pipeline/`, `tools.yaml`, `evaluators.yaml`, `model/`, `attack/` |
+| **`tools/`** | Vendored XGBOD / MagNet Docker + patches, **`evals/`** — see [`tools/README.md`](tools/README.md) |
+| **`minimal-working demo/`** | Legacy single-worker + [`README`](minimal-working%20demo/README.md) |
 
-##  Project Structure
+## Project tree (sketch)
 
 ```
-landseer-pipeline/
-├── src/
-|   ├── landseer_pipeline/
-│      ├── config/                 # Configuration management
-│      ├── dataset_handler/        # Dataset loading and preprocessing
-│      ├── docker_handler/         # Docker container management
-│      ├── evaluator/             # Model evaluation and metrics
-│      ├── pipeline/              # Pipeline execution logic
-│      ├── tools/                 # Tool execution framework
-│      └── utils/                 # Utilities (logging, GPU, files)
-|   └── landseer_ui/              
-├── configs/
-│   ├── pipeline/              # Pipeline configuration files
-│   ├── attack/                # Attack configuration files
-│   └── model/                 # Model architecture definitions
-├── cache/                     # Cached tool outputs
-├── results/                   # Experiment results
-└── logs/                      # Execution logs
+.
+├── src/           # backend, worker, frontend, pipeline
+├── configs/       # pipeline, tools, evaluators, model, attack
+├── tools/         # xgbod_v2, MagNet, etc + evals/ — see tools/README.md
+└── pyproject.toml
 ```
 
-2. **Tool interface requirements**:
-   - Input: `/data` directory (dataset + previous tool outputs)
-   - Output: `/output` directory (processed data/model)
-   - Config: `config_model.py` (model architecture)
+Tools consume **`/data`**, write **`/output`** and get model script from pipeline YAML.
 
-3. **Expected outputs**:
-   - Pre-training tools: Processed dataset files (npy)
-   - During-training tools: `model.pt` (trained PyTorch model)
-   - Post-training tools: `model.pt` (refined model)
+## Install
 
-## Installation
+1. `pip install poetry && poetry install` (from repo root).  
+2. Docker + optional NVIDIA toolkit for GPU tools.  
+3. `cp` example configs to `configs/tools.yaml`, `configs/evaluators.yaml` (see `configs/pipeline/example_*.yaml`, `configs/tools/example_*.yaml`, `configs/evaluators.example.yaml`).  
+4. MySQL / registry / MinIO only if your deployment needs them.
 
-### Prerequisites
-- Python 3.11+
-- Docker with GPU support (for CUDA-enabled tools)
-- NVIDIA Container Toolkit (for GPU acceleration)
-
-### Setup
-1. **Clone the repository**
-   ```bash
-   git clone <repository-url>
-   cd landseer-pipeline
-   ```
-
-2. **Install dependencies**
-   ```bash
-   pip install poetry
-   poetry install
-   ```
-
-3. **Configure Docker access**
-   ```bash
-   # Ensure Docker daemon is running
-   sudo systemctl start docker
-   
-   # Add user to docker group (optional)
-   sudo usermod -aG docker $USER
-   ```
-
-4. **Set up environment variables**
-   ```bash
-   # For private GitHub Container Registry access
-   export GHCR_TOKEN=your_github_token
-   ```
-
-5. **(Optional) Set up MySQL Database for Results**
-   
-   For easier querying and analysis of pipeline results, you can enable MySQL storage.
-   See [Database Setup Instructions](docs/DATABASE_SETUP.md) for details.
-   
-   Quick start with Docker:
-   ```bash
-   # Start MySQL container
-   docker run -d --name landseer-mysql \
-     -e MYSQL_ROOT_PASSWORD=rootpass \
-     -e MYSQL_DATABASE=landseer_pipeline \
-     -e MYSQL_USER=landseer \
-     -e MYSQL_PASSWORD=landseer \
-     -p 3306:3306 \
-     mysql:8.0
-   
-   # Apply schema
-   docker exec -i landseer-mysql mysql -u landseer -plandseer landseer_pipeline \
-     < src/landseer_pipeline/database/schema.sql
-   
-   # Enable database logging
-   source .env.db
-   ```
-
-## Usage
-
-### Quick Start
-
-For complete step-by-step instructions on running a pipeline, see **[Sphinx docs: Run a Pipeline](docs/how-to/run-a-pipeline.md)**, which covers:
-- System setup (backend, workers, frontend)
-- Starting pipeline runs via REST API or web UI
-- Monitoring progress in real-time
-- Interpreting and analyzing results
-
-### Basic Pipeline Execution
+## Run (stack)
 
 ```bash
-# 1. Start backend server
-python -m src.backend.cli --config configs/pipeline/trades.yaml
-
-# 2. Start worker(s) to execute tasks
-python -m src.worker.cli --backend-url http://localhost:8000 --gpu 0
-
-# 3. Trigger a pipeline run via REST API
-curl -X POST http://localhost:8000/api/pipeline-configs/trades/runs \
-  -H "Content-Type: application/json" \
-  -d '{"use_cache": true}'
-
-# 4. (Optional) View results in web dashboard
-python -m http.server 3000 --directory src/frontend/dist
-# Open http://localhost:3000
+poetry run landseer-backend --config configs/pipeline/<file>.yaml --tools-config configs/tools.yaml
+poetry run landseer-worker --backend-url http://localhost:8000 --gpu 0
 ```
 
-### Configuration Options
+Pipeline config id: `config_<yaml_stem>` (e.g. `trades.yaml` → `config_trades`).
 
-**Pipeline Configuration** (`configs/pipeline/*.yaml`):
-```yaml
-dataset:
-  name: cifar10                    # Required: Dataset name (cifar10, mnist, celeba, etc.)
-  variant: clean                   # Optional: clean, poisoned (default: clean)
-  version: "1.0"                   # Optional: Dataset version
-  params:                          # Optional: Dataset-specific parameters
-    subset_size: 1000
-    seed: 42
-    poison_fraction: 0.1
-
-# Model Configuration  
-model:
-  script: /path/to/model_config.py # Required: Path to model definition script
-  framework: pytorch               # Required: pytorch, tensorflow, etc.
-  params:                          # Optional: Model hyperparameters
-    learning_rate: 0.001
-    batch_size: 32
-    epochs: 100
-
-# Pipeline Stages Configuration
-pipeline:
-  # Pre-training stage (data preprocessing, outlier detection, etc.)
-  pre_training:
-    tools:
-    - name: pre_xgbod              # Tool name
-      docker:
-        image: ghcr.io/landseer-project/pre_xgbod:v2
-        command: python3 main.py
-        config_script: configs/model/config_model.py  # Optional: tool-specific model config
-      auxiliar
-  # ... during_training and post_training sections
+```bash
+curl -s http://localhost:8000/api/pipeline-configs
+curl -X POST "http://localhost:8000/api/pipeline-configs/config_trades/runs" \
+  -H "Content-Type: application/json" -d '{"use_cache": true}'
 ```
 
-**Attack Configuration** (`configs/attack/*.yaml`):
-```yaml
-attacks:
-  backdoor: true
-  evasion: false
-  extraction: false
-  inference: false
-  other: false
+If `LANDSEER_PIPELINE_KEYS` is set, send `X-Pipeline-Key`. Frontend: `poetry run landseer-frontend install && poetry run landseer-frontend dev`
+
+**Legacy demo:** `minimal-working demo/README.md`.
+
+## `tools/` (Docker sources)
+
+| Path | Content |
+|------|---------|
+| `tools/xgbod_v2/` | pre_xgbod: Dockerfiles, patches, `LANDSEER_USAGE.md` |
+| `tools/MagNet/` | post_magnet: Dockerfile, patches, `LANDSEER_USAGE.md` |
+| `tools/evals/` | Evaluator images — [`tools/evals/README.md`](tools/evals/README.md) |
+
+```bash
+cd tools/xgbod_v2 && docker build -f Dockerfile-main -t pre_xgbod:artifact .
+cd ../MagNet   && docker build -f Dockerfile -t post_magnet:artifact .
+cd ../evals    # see tools/evals/README.md for all `docker build` lines
+cp configs/evaluators.example.yaml configs/evaluators.yaml
 ```
 
-## Results Interpretation
+Other tool ids in `configs/tools/example_registry.yaml` need images you build or provide separately.
 
-### Output Files
-All experiment results are stored in the `results/` directory, containing metrics and logs for each valid defense combination across configured attack scenarios.
+## Config snippets
 
-1. **`results_combinations.csv`**: Main results for each tool combination
-   ```csv
-   pipeline_id,combination,pre_training,in_training,post_training,dataset_name,dataset_type,acc_train_clean,acc_test_clean,acc_robust,ood_auc,fingerprinting,asr,total_duration
-   ```
+Pipeline / attack YAML shapes live under `configs/pipeline/` and `configs/attack/`; use the `example_*.yaml` files as templates.
 
-2. **`results_tools.csv`**: Individual tool execution details
-   ```csv
-   pipeline_id,combination,stage,tool_name,cache_key,duration_sec,status,output_path
-   ```
+## Results
 
-3. **MySQL Database** (if enabled): Results are also stored in MySQL for SQL querying.
-   See [Database Setup Instructions](docs/DATABASE_SETUP.md) for query examples.
-
-## Public Defense Docker Images
-
-Landseer provides all defense modules as pre-built Docker images hosted at:
-
-* `ghcr.io/landseer-project/`
-### Model Converter Images
-
-For cross-framework interoperability, Landseer provides dedicated model converter containers:
-
-* `ghcr.io/landseer-project/model_converter_pytorch_to_other:v1` - Converts PyTorch models to ONNX or TensorFlow format
-* `ghcr.io/landseer-project/model_converter_other_to_pytorch:v1` - Converts TensorFlow or ONNX models to PyTorch format
-
-These converters are automatically invoked when pipeline tools require different model formats, eliminating the need for heavy ML package dependencies in the main Landseer environment.
+Under `results/` (and optionally DB): combination and per-tool CSVs; see `src/backend` / run logs for details.

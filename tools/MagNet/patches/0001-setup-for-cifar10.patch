@@ -1,0 +1,103 @@
+From 80449a03ec0525e8e27f9264f601089d0cfcb2c9 Mon Sep 17 00:00:00 2001
+From: ais2397 <as.sharma7235@gmail.com>
+Date: Mon, 24 Mar 2025 09:24:20 -0400
+Subject: [PATCH 1/2] setup for cifar10
+
+---
+ Dockerfile                | 38 ++++++++++++++++++++++++++++++++++++++
+ train_defense_cifar-10.py | 37 +++++++++++++++++++++++++++++++++++++
+ 2 files changed, 75 insertions(+)
+ create mode 100644 Dockerfile
+ create mode 100644 train_defense_cifar-10.py
+
+diff --git a/Dockerfile b/Dockerfile
+new file mode 100644
+index 0000000..db67c8c
+--- /dev/null
++++ b/Dockerfile
+@@ -0,0 +1,38 @@
++# Use Miniconda as the base image
++FROM continuumio/miniconda3
++
++# Set working directory
++WORKDIR /app
++
++# Install system dependencies
++RUN apt-get update && apt-get install -y \
++    wget \
++    unzip \
++    && rm -rf /var/lib/apt/lists/*
++
++# Create a new Conda environment named "magnet"
++RUN conda create --name magnet python=3.7 -y
++
++# Activate the environment and install dependencies
++RUN /bin/bash -c "source activate magnet"
++
++SHELL ["conda", "run", "-n", "watermarknn", "/bin/bash", "-c"]
++
++RUN /bin/bash -c "pip install --no-cache-dir tensorflow keras==2.0.8 numpy scipy matplotlib h5py"
++
++# Copy the MagNet repository into the container
++COPY . /app
++
++# Download demo attack data and classifier
++RUN wget -O demo_data.zip "https://www.dropbox.com/scl/fi/miem7ydf04hsmnpwzslfk/MagNet_support_data.zip?rlkey=k1a9u2ud2ajzo6un55di3d5xx&e=2&dl=0" && \
++    unzip demo_data.zip -d /app/MagNet/ && \
++    rm demo_data.zip
++
++# Set environment variable to suppress TensorFlow logs
++ENV TF_CPP_MIN_LOG_LEVEL=3
++
++# Ensure the conda environment is used in container commands
++SHELL ["conda", "run", "-n", "magnet", "/bin/bash", "-c"]
++
++# Default command
++CMD ["bash"]
+diff --git a/train_defense_cifar-10.py b/train_defense_cifar-10.py
+new file mode 100644
+index 0000000..a5f5831
+--- /dev/null
++++ b/train_defense_cifar-10.py
+@@ -0,0 +1,37 @@
++#from setup_cifar10 import CIFAR10
++from defensive_models import DenoisingAutoEncoder as DAE
++import os
++
++
++# Load command line args (input path and outout path)
++shape = [32, 32, 3]
++
++combination_I = [3, "average", 3, 3]
++
++combination_II = [3, 3, 3]
++
++activation = "sigmoid"
++reg_strength = 1e-9  
++epochs = 400  
++noise_level = 0.025  
++
++if not os.path.exists('models'):
++    os.makedirs('models')
++
++print("Loading CIFAR-10 dataset...")
++#data = CIFAR10()
++# grab the CIFAR 10 dataset from the main data folder (path in command line args)
++
++print("Dataset loaded!")
++
++print("Training the first autoencoder (with pooling)...")
++AE_I = DAE(shape, combination_I, v_noise=noise_level, activation=activation,
++           reg_strength=reg_strength)
++AE_I.train(data, "CIFAR10_I", num_epochs=epochs)
++
++print("Training the second autoencoder (without pooling)...")
++AE_II = DAE(shape, combination_II, v_noise=noise_level, activation=activation,
++            reg_strength=reg_strength)
++AE_II.train(data, "CIFAR10_II", num_epochs=epochs)
++
++print("Training complete!")
+\ No newline at end of file
+-- 
+2.53.0
+

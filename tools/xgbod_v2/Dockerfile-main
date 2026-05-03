@@ -1,0 +1,25 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+LABEL org.opencontainers.image.dataset="CIFAR-10, CelebA"
+LABEL org.opencontainers.image.defense_stage="pre_training"
+LABEL org.opencontainers.image.defense_type="outlier_removal"
+
+ARG UPSTREAM_REPO=https://github.com/yzhao062/XGBOD.git
+ARG UPSTREAM_SHA=8017b56e3b9fe115901c910037366f27606ab611
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git ca-certificates build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone "${UPSTREAM_REPO}" /app \
+    && cd /app \
+    && git checkout "${UPSTREAM_SHA}"
+
+COPY patches/landseer-on-upstream.patch /tmp/landseer.patch
+RUN cd /app && git apply /tmp/landseer.patch && rm /tmp/landseer.patch
+
+RUN pip install --upgrade pip \
+    && pip install -r requirements.txt
+
+CMD ["python", "main.py"]

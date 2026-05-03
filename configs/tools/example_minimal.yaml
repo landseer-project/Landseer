@@ -1,0 +1,38 @@
+# Copy to configs/tools.yaml; use with configs/pipeline/example_minimal.yaml
+
+tools:
+  pre_noop:
+    name: noop
+    defense_stage: pre_training
+    is_baseline: true
+    container:
+      image: pre_noop:artifact
+      command: python main.py
+      runtime: null
+
+  in_noop:
+    name: in_noop
+    defense_stage: during_training
+    is_baseline: true
+    container:
+      image: in_noop:artifact
+      command: python main.py
+      runtime: null
+
+  post_noop:
+    name: post_noop
+    defense_stage: post_training
+    is_baseline: true
+    container:
+      image: post_noop:artifact
+      command: python main.py
+      runtime: null
+
+  deploy_noop:
+    name: deploy_noop
+    defense_stage: deployment
+    is_baseline: true
+    container:
+      image: deploy_noop:artifact
+      command: python main.py
+      runtime: null

@@ -1,0 +1,268 @@
+From 577d102805cf3d43baf20239bd419b07d2e555d5 Mon Sep 17 00:00:00 2001
+From: ais2397 <as.sharma7235@gmail.com>
+Date: Thu, 29 May 2025 12:14:41 -0400
+Subject: [PATCH 2/2] tensorflow
+
+---
+ Dockerfile          | 18 ++++------
+ LICENSE             |  0
+ README.md           |  0
+ defense.py          | 88 +++++++++++++++++++++++++++++++++++++++++++++
+ defensive_models.py |  0
+ setup_cifar10.py    | 67 ++++++++++++++++++++++++++++++++++
+ setup_mnist.py      |  0
+ test_defense.py     |  0
+ train_defense.py    |  0
+ train_models.py     |  0
+ utils.py            |  0
+ worker.py           |  0
+ 12 files changed, 161 insertions(+), 12 deletions(-)
+ mode change 100644 => 100755 Dockerfile
+ mode change 100644 => 100755 LICENSE
+ mode change 100644 => 100755 README.md
+ create mode 100755 defense.py
+ mode change 100644 => 100755 defensive_models.py
+ create mode 100755 setup_cifar10.py
+ mode change 100644 => 100755 setup_mnist.py
+ mode change 100644 => 100755 test_defense.py
+ mode change 100644 => 100755 train_defense.py
+ mode change 100644 => 100755 train_models.py
+ mode change 100644 => 100755 utils.py
+ mode change 100644 => 100755 worker.py
+
+diff --git a/Dockerfile b/Dockerfile
+old mode 100644
+new mode 100755
+index db67c8c..baa8291
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -16,23 +16,17 @@ RUN conda create --name magnet python=3.7 -y
+ # Activate the environment and install dependencies
+ RUN /bin/bash -c "source activate magnet"
+ 
+-SHELL ["conda", "run", "-n", "watermarknn", "/bin/bash", "-c"]
++SHELL ["conda", "run", "-n", "magnet", "/bin/bash", "-c"]
+ 
+-RUN /bin/bash -c "pip install --no-cache-dir tensorflow keras==2.0.8 numpy scipy matplotlib h5py"
++RUN /bin/bash -c "pip install --no-cache-dir protobuf==3.20.* tensorflow==1.13.1 keras==2.0.8 numpy scipy matplotlib h5py"
+ 
+ # Copy the MagNet repository into the container
+ COPY . /app
+-
+-# Download demo attack data and classifier
+-RUN wget -O demo_data.zip "https://www.dropbox.com/scl/fi/miem7ydf04hsmnpwzslfk/MagNet_support_data.zip?rlkey=k1a9u2ud2ajzo6un55di3d5xx&e=2&dl=0" && \
+-    unzip demo_data.zip -d /app/MagNet/ && \
+-    rm demo_data.zip
++#change defense.py to main.py
++COPY defense.py /app/main.py
+ 
+ # Set environment variable to suppress TensorFlow logs
+ ENV TF_CPP_MIN_LOG_LEVEL=3
+ 
+-# Ensure the conda environment is used in container commands
+-SHELL ["conda", "run", "-n", "magnet", "/bin/bash", "-c"]
+-
+-# Default command
+-CMD ["bash"]
++ENTRYPOINT ["conda", "run", "--no-capture-output", "-n", "magnet"]
++# Ensure the conda environment is used in container commands
+\ No newline at end of file
+diff --git a/LICENSE b/LICENSE
+old mode 100644
+new mode 100755
+diff --git a/README.md b/README.md
+old mode 100644
+new mode 100755
+diff --git a/defense.py b/defense.py
+new file mode 100755
+index 0000000..6e71dfc
+--- /dev/null
++++ b/defense.py
+@@ -0,0 +1,88 @@
++#!/usr/bin/env python3
++"""
++Train defense autoencoders for CIFAR-10 dataset using MagNet approach.
++This script trains two autoencoders for detecting and reforming adversarial examples.
++"""
++import os
++import argparse
++import time
++import numpy as np
++from setup_cifar10 import CIFAR10
++from defensive_models import DenoisingAutoEncoder as DAE
++
++class DataWrapper:
++    def __init__(self, train_data, val_split=0.1):
++        n = train_data.shape[0]
++        split = int(n * (1 - val_split))
++        self.train_data = train_data[:split]
++        self.validation_data = train_data[split:]
++
++def load_and_prepare_data(input_dir):
++    train_data = np.load(os.path.join(input_dir, 'data.npy')).astype(np.float32) / 255.0
++    test_data = np.load(os.path.join(input_dir, 'test_data.npy')).astype(np.float32) / 255.0
++
++    # Ensure format is [N, 32, 32, 3]
++    if train_data.shape[1] == 3:  # If shape is [N, 3, 32, 32]
++        train_data = np.transpose(train_data, (0, 2, 3, 1))
++    if test_data.shape[1] == 3:
++        test_data = np.transpose(test_data, (0, 2, 3, 1))
++
++    wrapped = DataWrapper(train_data)
++    return wrapped, test_data
++
++def main():
++    # Parse command line arguments
++    parser = argparse.ArgumentParser(description='Train defense autoencoders for CIFAR-10 dataset')
++    parser.add_argument('--input-dir', type=str,default='/data', 
++                        help='Path to the CIFAR-10 dataset directory')
++    parser.add_argument('--output', type=str, default='/output',
++                        help='Path to save the trained models')
++    parser.add_argument('--epochs', type=int, default=400,
++                        help='Number of epochs to train (default: 400)')
++    parser.add_argument('--noise', type=float, default=0.025,
++                        help='Noise level for denoising autoencoder (default: 0.025)')
++    parser.add_argument('--reg', type=float, default=1e-9,
++                        help='Regularization strength (default: 1e-9)')
++    args = parser.parse_args()
++
++    device = 'cuda' if torch.cuda.is_available() else 'cpu'
++    print(f"Using device: {device}")
++    # Model configuration
++    shape = [32, 32, 3]
++    combination_I = [3, "average", 3, 3]  # Autoencoder with pooling
++    combination_II = [3, 3, 3]            # Autoencoder without pooling
++    activation = "sigmoid"
++    
++    # Create output directory if it doesn't exist
++    if not os.path.exists(args.output):
++        os.makedirs(args.output)
++    
++    # Load CIFAR-10 dataset
++    print("Loading training data from data.npy...")
++    data, test_data = load_and_prepare_data(args.input_dir)
++    print(f"Loaded {data.train_data.shape[0] + data.validation_data.shape[0]} training samples")
++
++
++    # Train the first autoencoder (with pooling)
++    print("\nTraining the first autoencoder (with pooling)...")
++    start_time = time.time()
++    AE_I = DAE(shape, combination_I, v_noise=args.noise, activation=activation,
++               reg_strength=args.reg, model_dir=args.output)
++    AE_I.train(data, "CIFAR10_I", num_epochs=args.epochs)
++    print(f"First autoencoder training completed in {time.time() - start_time:.2f} seconds")
++
++    # Train the second autoencoder (without pooling)
++    print("\nTraining the second autoencoder (without pooling)...")
++    start_time = time.time()
++    AE_II = DAE(shape, combination_II, v_noise=args.noise, activation=activation,
++                reg_strength=args.reg, model_dir=args.output)
++    AE_II.train(data, "CIFAR10_II", num_epochs=args.epochs)
++    print(f"Second autoencoder training completed in {time.time() - start_time:.2f} seconds")
++
++    print("\nTraining complete! Models saved to", args.output)
++    print("Files created:")
++    print(f"  - {os.path.join(args.output, 'CIFAR10_I')}")
++    print(f"  - {os.path.join(args.output, 'CIFAR10_II')}")
++
++if __name__ == "__main__":
++    main()
+\ No newline at end of file
+diff --git a/defensive_models.py b/defensive_models.py
+old mode 100644
+new mode 100755
+diff --git a/setup_cifar10.py b/setup_cifar10.py
+new file mode 100755
+index 0000000..74b8728
+--- /dev/null
++++ b/setup_cifar10.py
+@@ -0,0 +1,67 @@
++## setup_cifar10.py -- cifar-10 data and model loading code
++import numpy as np
++import os
++import pickle
++
++class CIFAR10:
++    def __init__(self, data_path='./data'):
++        """
++        Load CIFAR-10 dataset from the specified path
++        
++        Args:
++            data_path: Path to the CIFAR-10 dataset directory containing the data batches
++        """
++        self.data_path = data_path
++        
++        # Load training data
++        train_data = []
++        train_labels = []
++        
++        # CIFAR-10 has 5 batch files for training
++        for i in range(1, 6):
++            file_path = os.path.join(data_path, f'data_batch_{i}')
++            if os.path.exists(file_path):
++                with open(file_path, 'rb') as f:
++                    batch = pickle.load(f, encoding='bytes')
++                    train_data.append(batch[b'data'])
++                    train_labels.extend(batch[b'labels'])
++            else:
++                raise FileNotFoundError(f"Could not find {file_path}. Make sure the CIFAR-10 dataset is in the specified directory.")
++        
++        # Combine all batches
++        train_data = np.vstack(train_data)
++        train_labels = np.array(train_labels)
++        
++        # Load test data
++        test_file = os.path.join(data_path, 'test_batch')
++        if os.path.exists(test_file):
++            with open(test_file, 'rb') as f:
++                test_batch = pickle.load(f, encoding='bytes')
++                self.test_data = test_batch[b'data']
++                self.test_labels = np.array(test_batch[b'labels'])
++        else:
++            raise FileNotFoundError(f"Could not find {test_file}. Make sure the CIFAR-10 dataset is in the specified directory.")
++        
++        # Reshape and normalize data
++        train_data = train_data.reshape(-1, 3, 32, 32).transpose(0, 2, 3, 1).astype(np.float32)
++        self.test_data = self.test_data.reshape(-1, 3, 32, 32).transpose(0, 2, 3, 1).astype(np.float32)
++        
++        # Normalize to [0, 1]
++        train_data = train_data / 255.0
++        self.test_data = self.test_data / 255.0
++        
++        # Set aside validation data
++        VALIDATION_SIZE = 5000
++        self.validation_data = train_data[:VALIDATION_SIZE]
++        self.validation_labels = self.to_categorical(train_labels[:VALIDATION_SIZE])
++        self.train_data = train_data[VALIDATION_SIZE:]
++        self.train_labels = self.to_categorical(train_labels[VALIDATION_SIZE:])
++        self.test_labels = self.to_categorical(self.test_labels)
++    
++    def to_categorical(self, y, num_classes=10):
++        """Convert a class vector to binary class matrix."""
++        return np.eye(num_classes)[y]
++    
++    @staticmethod
++    def print():
++        return "CIFAR-10"
+\ No newline at end of file
+diff --git a/setup_mnist.py b/setup_mnist.py
+old mode 100644
+new mode 100755
+diff --git a/test_defense.py b/test_defense.py
+old mode 100644
+new mode 100755
+diff --git a/train_defense.py b/train_defense.py
+old mode 100644
+new mode 100755
+diff --git a/train_models.py b/train_models.py
+old mode 100644
+new mode 100755
+diff --git a/utils.py b/utils.py
+old mode 100644
+new mode 100755
+diff --git a/worker.py b/worker.py
+old mode 100644
+new mode 100755
+-- 
+2.53.0
+
