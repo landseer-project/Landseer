@@ -1,0 +1,516 @@
+diff --git a/data/datasets.py b/data/datasets.py
+new file mode 100644
+index 0000000..a078fe2
+--- /dev/null
++++ b/data/datasets.py
+@@ -0,0 +1,137 @@
++##################################### DATASET: CIFAR-10 AND CELEBA #####################################
++from __future__ import print_function
++from PIL import Image
++import os
++import os.path
++import numpy as np
++import sys
++if sys.version_info[0] == 2:
++    import cPickle as pickle
++else:
++    import pickle
++
++import torch.utils.data as data
++from .utils import noisify
++
++
++class CustomCIFAR10(data.Dataset):
++    def __init__(self, input_dir, train=True, transform=None, target_transform=None,
++                 noise_type='clean', noise_rate=0.2, random_state=0):
++        self.input_dir = input_dir
++        self.train = train
++        self.transform = transform
++        self.target_transform = target_transform
++        self.noise_type = noise_type
++        self.noise_rate = noise_rate
++        self.random_state = random_state
++        self.nb_classes = 10  # CIFAR-10
++
++        if self.train:
++            self.data = np.load(os.path.join(input_dir, "data.npy"))
++            self.labels = np.load(os.path.join(input_dir, "labels.npy"))
++
++            if noise_type != 'clean':
++                self.labels = self.labels.reshape(-1, 1)
++                self.noisy_labels, self.actual_noise_rate = noisify(
++                    dataset='cifar10',
++                    train_labels=self.labels,
++                    noise_type=noise_type,
++                    noise_rate=noise_rate,
++                    random_state=random_state,
++                    nb_classes=self.nb_classes
++                )
++                self.noisy_labels = self.noisy_labels.flatten()
++                self.labels = self.labels.flatten()
++                self.noise_or_not = self.noisy_labels == self.labels
++            else:
++                self.noisy_labels = self.labels
++                self.noise_or_not = np.ones_like(self.labels, dtype=bool)
++        else:
++            self.data = np.load(os.path.join(input_dir, "test_data.npy"))
++            self.labels = np.load(os.path.join(input_dir, "test_labels.npy"))
++
++    def __getitem__(self, index):
++        img = self.data[index]
++        target = self.noisy_labels[index] if self.train and self.noise_type != 'clean' else self.labels[index]
++
++        # Fix format: CHW → HWC and float → uint8
++        if img.dtype != np.uint8:
++            img = (img * 255).astype(np.uint8)
++
++        if img.shape[0] == 3:  # CHW check
++            img = np.transpose(img, (1, 2, 0))
++
++        img = Image.fromarray(img)
++
++        if self.transform:
++            img = self.transform(img)
++
++        return img, target, index
++
++    def __len__(self):
++        return len(self.data)
++
++
++class CustomCelebA(data.Dataset):
++    def __init__(self, input_dir, train=True, transform=None, target_transform=None,
++                 noise_type='clean', noise_rate=0.2, random_state=0):
++        self.input_dir = input_dir
++        self.train = train
++        self.transform = transform
++        self.target_transform = target_transform
++        self.noise_type = noise_type
++        self.noise_rate = noise_rate
++        self.random_state = random_state
++        self.nb_classes = 2  # CelebA is Binary
++
++        if self.train:
++            self.data = np.load(os.path.join(input_dir, "data.npy"))
++            self.labels = np.load(os.path.join(input_dir, "labels.npy"))
++
++            if noise_type != 'clean':
++                self.labels = self.labels.reshape(-1, 1)
++                # Pass 'celeba' to noisify so it handles 2 classes correctly
++                self.noisy_labels, self.actual_noise_rate = noisify(
++                    dataset='celeba', 
++                    train_labels=self.labels,
++                    noise_type=noise_type,
++                    noise_rate=noise_rate,
++                    random_state=random_state,
++                    nb_classes=self.nb_classes
++                )
++                self.noisy_labels = self.noisy_labels.flatten()
++                self.labels = self.labels.flatten()
++                self.noise_or_not = self.noisy_labels == self.labels
++            else:
++                self.noisy_labels = self.labels
++                self.noise_or_not = np.ones_like(self.labels, dtype=bool)
++        else:
++            self.data = np.load(os.path.join(input_dir, "test_data.npy"))
++            self.labels = np.load(os.path.join(input_dir, "test_labels.npy"))
++
++    def __getitem__(self, index):
++        img = self.data[index]
++        target = self.noisy_labels[index] if self.train and self.noise_type != 'clean' else self.labels[index]
++
++        # Fix format: CHW → HWC and float → uint8
++        if img.dtype != np.uint8:
++            img = (img * 255).astype(np.uint8)
++
++        # Generic CHW check (works for any size)
++        if img.shape[0] == 3:  
++            img = np.transpose(img, (1, 2, 0))
++
++        img = Image.fromarray(img)
++
++        if self.transform:
++            img = self.transform(img)
++
++        return img, target, index
++
++    def __len__(self):
++        return len(self.data)
++
++
++
++
++
+diff --git a/data/utils.py b/data/utils.py
+index 859724c..ad562cd 100644
+--- a/data/utils.py
++++ b/data/utils.py
+@@ -99,7 +99,7 @@ def multiclass_noisify(y, P, random_state=0):
+     """ Flip classes according to transition probability matrix T.
+     It expects a number between 0 and the number of classes - 1.
+     """
+-    print np.max(y), P.shape[0]
++    print(np.max(y), P.shape[0])
+     assert P.shape[0] == P.shape[1]
+     assert np.max(y) < P.shape[0]
+ 
+@@ -108,7 +108,7 @@ def multiclass_noisify(y, P, random_state=0):
+     assert (P >= 0.0).all()
+ 
+     m = y.shape[0]
+-    print m
++    print(m)
+     new_y = y.copy()
+     flipper = np.random.RandomState(random_state)
+ 
+@@ -142,7 +142,7 @@ def noisify_pairflip(y_train, noise, random_state=None, nb_classes=10):
+         assert actual_noise > 0.0
+         print('Actual noise %.2f' % actual_noise)
+         y_train = y_train_noisy
+-    print P
++    print(P)
+ 
+     return y_train, actual_noise
+ 
+@@ -167,7 +167,7 @@ def noisify_multiclass_symmetric(y_train, noise, random_state=None, nb_classes=1
+         assert actual_noise > 0.0
+         print('Actual noise %.2f' % actual_noise)
+         y_train = y_train_noisy
+-    print P
++    print(P)
+ 
+     return y_train, actual_noise
+ 
+diff --git a/loss.py b/loss.py
+index 8a21c9d..41c12b8 100644
+--- a/loss.py
++++ b/loss.py
+@@ -7,11 +7,14 @@ import numpy as np
+ # Loss functions
+ def loss_coteaching(y_1, y_2, t, forget_rate, ind, noise_or_not):
+     loss_1 = F.cross_entropy(y_1, t, reduce = False)
+-    ind_1_sorted = np.argsort(loss_1.data).cuda()
++    #Changed: based on error 2, changing .cuda()
++    #ind_1_sorted = np.argsort(loss_1.data).cuda()
++    ind_1_sorted = np.argsort(loss_1.data.cpu().numpy())
+     loss_1_sorted = loss_1[ind_1_sorted]
+ 
+     loss_2 = F.cross_entropy(y_2, t, reduce = False)
+-    ind_2_sorted = np.argsort(loss_2.data).cuda()
++    #ind_2_sorted = np.argsort(loss_2.data).cuda()
++    ind_2_sorted = np.argsort(loss_2.data.cpu().numpy())
+     loss_2_sorted = loss_2[ind_2_sorted]
+ 
+     remember_rate = 1 - forget_rate
+diff --git a/main.py b/main.py
+index b5e1e5d..b7d1830 100644
+--- a/main.py
++++ b/main.py
+@@ -1,3 +1,4 @@
++########################################### CO-TEACHING WITH BOTH CIFAR10 AND CELEBA SUPPORT ###########################################
+ # -*- coding:utf-8 -*-
+ import os
+ import torch 
+@@ -5,9 +6,9 @@ import torch.nn as nn
+ import torch.nn.functional as F
+ from torch.autograd import Variable
+ import torchvision.transforms as transforms
+-from data.cifar import CIFAR10, CIFAR100
+-from data.mnist import MNIST
+-from model import CNN
++# CHANGE 1: Import from the new data.datasets file
++from data.datasets import CustomCIFAR10, CustomCelebA
++from config_model import config
+ import argparse, sys
+ import numpy as np
+ import datetime
+@@ -17,20 +18,24 @@ from loss import loss_coteaching
+ 
+ parser = argparse.ArgumentParser()
+ parser.add_argument('--lr', type = float, default = 0.001)
++parser.add_argument('--input_dir', type=str, default='/data', help='Directory containing the preprocessed .npy files')
++parser.add_argument('--output', type=str, default='/output', help='Directory containing output files/ models')
+ parser.add_argument('--result_dir', type = str, help = 'dir to save result txt files', default = 'results/')
+-parser.add_argument('--noise_rate', type = float, help = 'corruption rate, should be less than 1', default = 0.2)
++parser.add_argument('--noise_rate', type = float, help = 'corruption rate, should be less than 1', default = 0.5)
+ parser.add_argument('--forget_rate', type = float, help = 'forget rate', default = None)
+-parser.add_argument('--noise_type', type = str, help='[pairflip, symmetric]', default='pairflip')
++parser.add_argument('--noise_type', type = str, help='[pairflip, symmetric]', default='symmetric')
+ parser.add_argument('--num_gradual', type = int, default = 10, help='how many epochs for linear drop rate, can be 5, 10, 15. This parameter is equal to Tk for R(T) in Co-teaching paper.')
+ parser.add_argument('--exponent', type = float, default = 1, help='exponent of the forget rate, can be 0.5, 1, 2. This parameter is equal to c in Tc for R(T) in Co-teaching paper.')
+ parser.add_argument('--top_bn', action='store_true')
+-parser.add_argument('--dataset', type = str, help = 'mnist, cifar10, or cifar100', default = 'mnist')
++parser.add_argument('--dataset', type = str, help = 'mnist, cifar10, or cifar100, celeba', default = 'cifar10')
+ parser.add_argument('--n_epoch', type=int, default=200)
+ parser.add_argument('--seed', type=int, default=1)
+ parser.add_argument('--print_freq', type=int, default=50)
+ parser.add_argument('--num_workers', type=int, default=4, help='how many subprocesses to use for data loading')
+ parser.add_argument('--num_iter_per_epoch', type=int, default=400)
+ parser.add_argument('--epoch_decay_start', type=int, default=80)
++# CHANGE 2: Add target size argument
++parser.add_argument('--target_size', type=int, default=32, help='Target image size (32 or 64)')
+ 
+ args = parser.parse_args()
+ 
+@@ -43,71 +48,64 @@ batch_size = 128
+ learning_rate = args.lr 
+ 
+ # load dataset
+-if args.dataset=='mnist':
+-    input_channel=1
+-    num_classes=10
+-    args.top_bn = False
+-    args.epoch_decay_start = 80
+-    args.n_epoch = 200
+-    train_dataset = MNIST(root='./data/',
+-                                download=True,  
+-                                train=True, 
+-                                transform=transforms.ToTensor(),
+-                                noise_type=args.noise_type,
+-                                noise_rate=args.noise_rate
+-                         )
+-    
+-    test_dataset = MNIST(root='./data/',
+-                               download=True,  
+-                               train=False, 
+-                               transform=transforms.ToTensor(),
+-                               noise_type=args.noise_type,
+-                               noise_rate=args.noise_rate
+-                        )
+-    
+ if args.dataset=='cifar10':
+     input_channel=3
+     num_classes=10
+     args.top_bn = False
+     args.epoch_decay_start = 80
+-    args.n_epoch = 200
+-    train_dataset = CIFAR10(root='./data/',
+-                                download=True,  
+-                                train=True, 
+-                                transform=transforms.ToTensor(),
+-                                noise_type=args.noise_type,
+-                                noise_rate=args.noise_rate
+-                           )
+     
+-    test_dataset = CIFAR10(root='./data/',
+-                                download=True,  
+-                                train=False, 
+-                                transform=transforms.ToTensor(),
+-                                noise_type=args.noise_type,
+-                                noise_rate=args.noise_rate
+-                          )
+-
+-if args.dataset=='cifar100':
+-    input_channel=3
+-    num_classes=100
++    train_dataset = CustomCIFAR10(
++        input_dir=args.input_dir,
++        train=True,
++        transform=transforms.ToTensor(),
++        noise_type=args.noise_type,
++        noise_rate=args.noise_rate
++    )
++
++    test_dataset = CustomCIFAR10(
++        input_dir=args.input_dir,
++        train=False,
++        transform=transforms.ToTensor(),
++        noise_type=args.noise_type,
++        noise_rate=args.noise_rate
++    )      
++
++elif args.dataset == 'celeba':
++    # CHANGE 3: CelebA Support
++    input_channel = 3
++    num_classes = 2
+     args.top_bn = False
+-    args.epoch_decay_start = 100
+-    args.n_epoch = 200
+-    train_dataset = CIFAR100(root='./data/',
+-                                download=True,  
+-                                train=True, 
+-                                transform=transforms.ToTensor(),
+-                                noise_type=args.noise_type,
+-                                noise_rate=args.noise_rate
+-                            )
++    args.epoch_decay_start = 80
++    
++    # Define transforms based on target size
++    transform_celeba = transforms.Compose([
++        transforms.CenterCrop(178),
++        transforms.Resize((args.target_size, args.target_size)),
++        transforms.RandomHorizontalFlip(),
++        transforms.ToTensor(),
++    ])
+     
+-    test_dataset = CIFAR100(root='./data/',
+-                                download=True,  
+-                                train=False, 
+-                                transform=transforms.ToTensor(),
+-                                noise_type=args.noise_type,
+-                                noise_rate=args.noise_rate
+-                            )
++    transform_celeba_test = transforms.Compose([
++        transforms.CenterCrop(178),
++        transforms.Resize((args.target_size, args.target_size)),
++        transforms.ToTensor(),
++    ])
++
++    train_dataset = CustomCelebA(
++        input_dir=args.input_dir,
++        train=True,
++        transform=transform_celeba,
++        noise_type=args.noise_type,
++        noise_rate=args.noise_rate
++    )
++
++    test_dataset = CustomCelebA(
++        input_dir=args.input_dir,
++        train=False,
++        transform=transform_celeba_test,
++        noise_type=args.noise_type,
++        noise_rate=args.noise_rate
++    )
+ 
+ if args.forget_rate is None:
+     forget_rate=args.noise_rate
+@@ -159,13 +157,14 @@ def accuracy(logit, target, topk=(1,)):
+ 
+     res = []
+     for k in topk:
+-        correct_k = correct[:k].view(-1).float().sum(0, keepdim=True)
++        # CHANGE 4: Use reshape instead of view to prevent runtime errors
++        correct_k = correct[:k].reshape(-1).float().sum(0, keepdim=True)
+         res.append(correct_k.mul_(100.0 / batch_size))
+     return res
+ 
+ # Train the Model
+ def train(train_loader,epoch, model1, optimizer1, model2, optimizer2):
+-    print 'Training %s...' % model_str
++    print('Training %s...' % model_str)
+     pure_ratio_list=[]
+     pure_ratio_1_list=[]
+     pure_ratio_2_list=[]
+@@ -185,12 +184,21 @@ def train(train_loader,epoch, model1, optimizer1, model2, optimizer2):
+         
+         # Forward + Backward + Optimize
+         logits1=model1(images)
+-        prec1, _ = accuracy(logits1, labels, topk=(1, 5))
++        # CHANGE 5: Handle TopK for binary classification (CelebA)
++        if args.dataset == 'celeba':
++             prec1, _ = accuracy(logits1, labels, topk=(1, 1))
++        else:
++             prec1, _ = accuracy(logits1, labels, topk=(1, 5))
++             
+         train_total+=1
+         train_correct+=prec1
+ 
+         logits2 = model2(images)
+-        prec2, _ = accuracy(logits2, labels, topk=(1, 5))
++        if args.dataset == 'celeba':
++             prec2, _ = accuracy(logits2, labels, topk=(1, 1))
++        else:
++             prec2, _ = accuracy(logits2, labels, topk=(1, 5))
++             
+         train_total2+=1
+         train_correct2+=prec2
+         loss_1, loss_2, pure_ratio_1, pure_ratio_2 = loss_coteaching(logits1, logits2, labels, rate_schedule[epoch], ind, noise_or_not)
+@@ -205,7 +213,7 @@ def train(train_loader,epoch, model1, optimizer1, model2, optimizer2):
+         optimizer2.step()
+         if (i+1) % args.print_freq == 0:
+             print ('Epoch [%d/%d], Iter [%d/%d] Training Accuracy1: %.4F, Training Accuracy2: %.4f, Loss1: %.4f, Loss2: %.4f, Pure Ratio1: %.4f, Pure Ratio2 %.4f' 
+-                  %(epoch+1, args.n_epoch, i+1, len(train_dataset)//batch_size, prec1, prec2, loss_1.data[0], loss_2.data[0], np.sum(pure_ratio_1_list)/len(pure_ratio_1_list), np.sum(pure_ratio_2_list)/len(pure_ratio_2_list)))
++                %(epoch+1, args.n_epoch, i+1, len(train_dataset)//batch_size, prec1, prec2, loss_1.item(), loss_2.item(), np.sum(pure_ratio_1_list)/len(pure_ratio_1_list), np.sum(pure_ratio_2_list)/len(pure_ratio_2_list)))
+ 
+     train_acc1=float(train_correct)/float(train_total)
+     train_acc2=float(train_correct2)/float(train_total2)
+@@ -213,7 +221,7 @@ def train(train_loader,epoch, model1, optimizer1, model2, optimizer2):
+ 
+ # Evaluate the Model
+ def evaluate(test_loader, model1, model2):
+-    print 'Evaluating %s...' % model_str
++    print('Evaluating %s...' % model_str)
+     model1.eval()    # Change model to 'eval' mode.
+     correct1 = 0
+     total1 = 0
+@@ -243,28 +251,60 @@ def evaluate(test_loader, model1, model2):
+ 
+ def main():
+     # Data Loader (Input Pipeline)
+-    print 'loading dataset...'
++    print('loading dataset...')
+     train_loader = torch.utils.data.DataLoader(dataset=train_dataset,
+                                                batch_size=batch_size, 
+                                                num_workers=args.num_workers,
+-                                               drop_last=True,
++                                               drop_last=False,
+                                                shuffle=True)
+     
+     test_loader = torch.utils.data.DataLoader(dataset=test_dataset,
+                                               batch_size=batch_size, 
+                                               num_workers=args.num_workers,
+-                                              drop_last=True,
++                                              drop_last=False,
+                                               shuffle=False)
++    
++
++    # === Save transformed training and test data as .npy files ===
++
++    print("Saving transformed train/test datasets as .npy...")
++
++    def collect_transformed_data(loader):
++        X_list, Y_list = [], []
++        # The Custom datasets return 3 values: (img, target, index)
++        # So we unpack (x, y, _) to ignore the index
++        for x, y, _ in loader:
++            X_list.append(x)
++            Y_list.append(y)
++        X_all = torch.cat(X_list, dim=0).cpu().numpy()
++        Y_all = torch.cat(Y_list, dim=0).cpu().numpy()
++        return X_all, Y_all
++
++    # Collect transformed train and test tensors
++    X_train_tf, Y_train_tf = collect_transformed_data(train_loader)
++    X_test_tf, Y_test_tf = collect_transformed_data(test_loader)
++
++    # Save as .npy
++    os.makedirs(args.output, exist_ok=True)
++    np.save(os.path.join(args.output, "data.npy"), X_train_tf)
++    np.save(os.path.join(args.output, "labels.npy"), Y_train_tf)
++    np.save(os.path.join(args.output, "test_data.npy"), X_test_tf)
++    np.save(os.path.join(args.output, "test_labels.npy"), Y_test_tf)
++
++    print("Saved transformed datasets to:", args.output)
++    # =========================================================================
++
++
+     # Define models
+-    print 'building model...'
+-    cnn1 = CNN(input_channel=input_channel, n_outputs=num_classes)
++    print('building model...')
++    cnn1 = config()
+     cnn1.cuda()
+-    print cnn1.parameters
++    # print(cnn1.parameters)
+     optimizer1 = torch.optim.Adam(cnn1.parameters(), lr=learning_rate)
+-    
+-    cnn2 = CNN(input_channel=input_channel, n_outputs=num_classes)
++
++    cnn2 = config()
+     cnn2.cuda()
+-    print cnn2.parameters
++    # print(cnn2.parameters)
+     optimizer2 = torch.optim.Adam(cnn2.parameters(), lr=learning_rate)
+ 
+     mean_pure_ratio1=0
+@@ -300,5 +340,10 @@ def main():
+         with open(txtfile, "a") as myfile:
+             myfile.write(str(int(epoch)) + ': '  + str(train_acc1) +' '  + str(train_acc2) +' '  + str(test_acc1) + " " + str(test_acc2) + ' ' + str(mean_pure_ratio1) + ' ' + str(mean_pure_ratio2) + "\n")
+ 
++    model = cnn2
++    torch.save(model.state_dict(), os.path.join(args.output, 'model.pt'))
++
+ if __name__=='__main__':
+     main()
++
++
