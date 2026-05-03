@@ -1,0 +1,15 @@
+FROM python:3.10-slim
+
+LABEL org.opencontainers.image.dataset="CIFAR-10"
+LABEL org.opencontainers.image.defense_stage="post_training"
+LABEL org.opencontainers.image.defense_type="backdoor"
+
+WORKDIR /app
+
+# Minimal files/folders needed
+COPY main.py /app/
+COPY models.py /app/
+
+
+# Python deps used by main.py
+RUN pip install --no-cache-dir torch torchvision numpy pandas
