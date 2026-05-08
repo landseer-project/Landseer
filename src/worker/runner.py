@@ -83,10 +83,19 @@ class ContainerRuntime:
     def detect_runtime() -> str:
         """
         Detect which container runtime is available.
-        
+
         Returns:
-            'docker', 'apptainer', 'singularity', or 'none'
+            'kubernetes', 'docker', 'apptainer', 'singularity', or 'none'
         """
+        # Prefer Kubernetes when running inside a cluster (the
+        # KUBERNETES_SERVICE_HOST env var is set on every Pod by the kubelet).
+        # We do not auto-pick K8s when only a kubeconfig is present, because
+        # a developer with kubectl installed almost certainly still wants
+        # docker as their default runtime locally — they have to opt in via
+        # --runtime kubernetes.
+        if os.environ.get("KUBERNETES_SERVICE_HOST"):
+            return "kubernetes"
+
         # Check for Docker
         try:
             result = subprocess.run(
@@ -767,6 +776,15 @@ class TaskRunner:
                 gpu_id=self.gpu_id,
                 timeout=self.timeout,
                 runtime=self.runtime
+            )
+        elif self.runtime == "kubernetes":
+            # Imported lazily so users without the kubernetes package
+            # don't pay the import cost on docker/apptainer paths.
+            from .kubernetes_runner import KubernetesRunner
+            self._container_runner = KubernetesRunner(
+                workspace_dir=self.workspace_dir,
+                gpu_id=self.gpu_id,
+                timeout=self.timeout,
             )
         else:
             self._container_runner = None

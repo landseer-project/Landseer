@@ -18,6 +18,7 @@ dependencies = [
     "python-dotenv>=1.0.0,<2.0.0",
     "httpx>=0.27.0,<1.0.0",
     "minio>=7.2.0,<8.0.0",
+    "kubernetes>=29.0.0,<35.0.0",
 ]
 
 [project.scripts]
@@ -55,6 +56,8 @@ python-dotenv = ">=1.0.0,<2.0.0"
 httpx = ">=0.27.0,<1.0.0"
 # MinIO client for artifact storage
 minio = ">=7.2.0,<8.0.0"
+# Kubernetes client (used by KubernetesRunner; lazy-imported in code)
+kubernetes = ">=29.0.0,<35.0.0"
 
 [tool.poetry.scripts]
 landseer-backend = "src.backend.cli:main"

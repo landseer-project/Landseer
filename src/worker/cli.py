@@ -1172,7 +1172,7 @@ Examples:
     exec_group.add_argument(
         "--runtime",
         type=str,
-        choices=["docker", "apptainer", "singularity", "auto"],
+        choices=["docker", "apptainer", "singularity", "kubernetes", "auto"],
         default="auto",
         help="Container runtime to use (default: auto-detect)",
     )
