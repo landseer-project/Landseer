@@ -151,6 +151,13 @@ python -m http.server 3000 --directory src/frontend/dist
 # Open http://localhost:3000
 ```
 
+### Running on Kubernetes (kind / AKS / GKE)
+
+The worker can spawn each task as a Kubernetes Job instead of a local
+Docker container. To try it on a local kind cluster, see
+**[`deploy/kind/README.md`](deploy/kind/README.md)** — it covers cluster
+setup, MinIO transport, the worker invocation, and diagnostics.
+
 ### Configuration Options
 
 **Pipeline Configuration** (`configs/pipeline/*.yaml`):

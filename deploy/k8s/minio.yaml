@@ -1,0 +1,125 @@
+# MinIO running inside the kind cluster.
+# - Workers running on the HOST hit it via NodePort 30900 (kind maps to host 9000).
+# - Pods running INSIDE the cluster hit it via the ClusterIP service `minio.landseer-workers.svc.cluster.local:9000`.
+# KubernetesRunner is responsible for injecting the in-cluster endpoint into task pods.
+#
+# !!! LOCAL DEV ONLY !!!
+# The Secret below uses minioadmin/minioadmin which is fine for kind on a
+# laptop but MUST be replaced with a real Secret (Sealed Secrets, External
+# Secrets, or out-of-band kubectl create) before applying to any shared or
+# production cluster. See deploy/kind/README.md (section "Credentials").
+apiVersion: v1
+kind: Secret
+metadata:
+  name: minio-credentials
+  namespace: landseer-workers
+type: Opaque
+stringData:
+  MINIO_ROOT_USER: minioadmin
+  MINIO_ROOT_PASSWORD: minioadmin
+---
+# Persistent storage for MinIO data so the artifact cache survives Pod restarts.
+# storageClassName is omitted so the cluster's default class is used:
+# - kind: `standard` (local-path-provisioner) — provisioned on demand
+# - AKS:  `default` / `managed-csi` — Azure Disk
+# - GKE:  `standard-rwo` — GCE Persistent Disk
+# Override per cluster by setting metadata.annotations or storageClassName here.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio-data
+  namespace: landseer-workers
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: landseer-workers
+  labels:
+    app: minio
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio
+  # Recreate ensures the old Pod releases the PVC before the new one starts;
+  # ReadWriteOnce volumes cannot be mounted by two Pods at once.
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      containers:
+        - name: minio
+          image: minio/minio:latest
+          args:
+            - server
+            - /data
+            - --console-address
+            - ":9001"
+          envFrom:
+            - secretRef:
+                name: minio-credentials
+          ports:
+            - name: api
+              containerPort: 9000
+            - name: console
+              containerPort: 9001
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: api
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: minio-data
+---
+# In-cluster service. Task pods reach MinIO at minio.landseer-workers.svc.cluster.local:9000.
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: landseer-workers
+spec:
+  selector:
+    app: minio
+  ports:
+    - name: api
+      port: 9000
+      targetPort: 9000
+    - name: console
+      port: 9001
+      targetPort: 9001
+---
+# NodePort service exposes MinIO to the host (kind maps NodePorts via extraPortMappings).
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio-nodeport
+  namespace: landseer-workers
+spec:
+  type: NodePort
+  selector:
+    app: minio
+  ports:
+    - name: api
+      port: 9000
+      targetPort: 9000
+      nodePort: 30900
+    - name: console
+      port: 9001
+      targetPort: 9001
+      nodePort: 30901
