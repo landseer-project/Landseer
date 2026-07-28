@@ -148,6 +148,61 @@ class Worker:
         # Signal handling
         self._setup_signal_handlers()
     
+    def _get_minio_store_for_dataset_downloads(self):
+        """
+        MinIO client used to download the shared dataset directory and model script.
+        Production TwoLevelCache exposes this as ``cache.manager.minio``; tests may
+        inject ``_minio_store`` on a mock.
+        """
+        if not self._two_level_cache:
+            return None
+        tlc = self._two_level_cache
+        mgr = getattr(tlc, "manager", None)
+        if mgr is not None:
+            m = getattr(mgr, "minio", None)
+            if m is not None and getattr(m, "is_available", False):
+                return m
+        injected = getattr(tlc, "_minio_store", None)
+        if injected is not None:
+            return injected
+        return None
+    
+    def _model_script_cache_path(self, dataset_info: Dict[str, Any]) -> Path:
+        """Stable local path for ``config_model.py`` aligned with dataset cache layout."""
+        name = dataset_info.get("name") or "dataset"
+        variant = dataset_info.get("variant") or "clean"
+        return self.cache_dir / "datasets" / str(name) / str(variant) / "config_model.py"
+    
+    def _try_download_model_script_via_minio(self, dataset_info: Dict[str, Any]) -> None:
+        """
+        Fetch ``config_model.py`` from MinIO when the backend published
+        ``model_script_minio_key`` (remote workers do not have host-local ``model_script`` paths).
+        """
+        if self._model_script_path and self._model_script_path.exists():
+            return
+        key = dataset_info.get("model_script_minio_key")
+        if not key:
+            return
+        if not dataset_info.get("minio_available"):
+            return
+        minio = self._get_minio_store_for_dataset_downloads()
+        if minio is None:
+            logger.warning(
+                "Dataset advertises model_script_minio_key but worker has no MinIO client "
+                "(enable two-level cache + MinIO or check LANDSEER_USE_MINIO)"
+            )
+            return
+        dest = self._model_script_cache_path(dataset_info)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest.exists():
+            self._model_script_path = dest
+            return
+        if minio.download_file(key, dest):
+            self._model_script_path = dest
+            logger.info(f"Downloaded model script from MinIO: {key} -> {dest}")
+        else:
+            logger.warning(f"Failed to download model script from MinIO: {key}")
+    
     def _setup_signal_handlers(self) -> None:
         """Setup signal handlers for graceful shutdown."""
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -262,6 +317,7 @@ class Worker:
                     logger.debug(
                         f"Manual data path mode: failed to fetch pipeline info for model script: {e}"
                     )
+            self._try_download_model_script_via_minio(self._dataset_info or {})
             return self.data_path
         
         # Try to get dataset info from backend
@@ -292,6 +348,7 @@ class Worker:
             local_dir = Path(local_path)
             if local_dir.exists() and (local_dir / "data.npy").exists():
                 logger.info(f"Using local dataset path: {local_dir}")
+                self._try_download_model_script_via_minio(dataset_info)
                 return local_dir
         
         # Try to download from MinIO
@@ -303,44 +360,21 @@ class Worker:
                 variant = dataset_info.get("variant", "clean")
                 download_dir = self.cache_dir / "datasets" / dataset_name / variant
                 download_dir.mkdir(parents=True, exist_ok=True)
-                model_script_minio_key = dataset_info.get("model_script_minio_key")
-                model_script_local = download_dir / "config_model.py"
 
-                def _download_model_script_if_needed() -> None:
-                    if not model_script_minio_key:
-                        return
-                    if model_script_local.exists():
-                        self._model_script_path = model_script_local
-                        return
-                    if hasattr(self._two_level_cache, "_minio_store"):
-                        ok = self._two_level_cache._minio_store.download_file(
-                            model_script_minio_key,
-                            model_script_local,
-                        )
-                        if ok:
-                            self._model_script_path = model_script_local
-                            logger.info(
-                                f"Downloaded model script from MinIO: {model_script_minio_key}"
-                            )
-                        else:
-                            logger.warning(
-                                f"Failed to download model script from MinIO: {model_script_minio_key}"
-                            )
-                
-                # Check if already downloaded
-                if (download_dir / "data.npy").exists():
-                    _download_model_script_if_needed()
+                minio = self._get_minio_store_for_dataset_downloads()
+                if minio is None:
+                    logger.warning(
+                        "Dataset is in MinIO but worker has no MinIO client "
+                        "(two-level cache / LANDSEER_USE_MINIO)"
+                    )
+                elif (download_dir / "data.npy").exists():
+                    self._try_download_model_script_via_minio(dataset_info)
                     logger.info(f"Dataset already cached at: {download_dir}")
                     return download_dir
-                
-                logger.info(f"Downloading dataset from MinIO: {minio_key}")
-                
-                # Use the store from two-level cache
-                if hasattr(self._two_level_cache, '_minio_store'):
-                    self._two_level_cache._minio_store.download_directory(
-                        minio_key, download_dir
-                    )
-                    _download_model_script_if_needed()
+                else:
+                    logger.info(f"Downloading dataset from MinIO: {minio_key}")
+                    minio.download_directory(minio_key, download_dir)
+                    self._try_download_model_script_via_minio(dataset_info)
                     logger.info(f"Dataset downloaded to: {download_dir}")
                     return download_dir
                     
@@ -605,6 +639,7 @@ class Worker:
             # identity and incorrectly reuse cache entries across runs.
             if task.run_id and task.run_id != self._active_run_id:
                 logger.info(f"Run changed ({self._active_run_id} -> {task.run_id}); refreshing dataset/model context")
+                self._model_script_path = None
                 refreshed = self._fetch_dataset()
                 if refreshed:
                     self._dataset_path = refreshed

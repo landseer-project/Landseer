@@ -20,4 +20,4 @@ deviation_*
 .node/
 node_modules/
 dist/
-docs/_build/
+docs/_build/helper_scripts/landseer-494115-4f746115c9cf-gcs-bucket-key.json

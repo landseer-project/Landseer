@@ -2,12 +2,14 @@ dataset:
   name: cifar10
   variant: clean
 model:
-  script: configs/model/config_model_combined.py
+  script: configs/model/config_model_resnet20.py
   framework: pytorch
 pipeline:
   pre_training:
     tools:
       - pre_xgbod
+      - tool: pre_watermarkbn
+        command: python main.py 
       - pre_noop
   during_training:
     tools:
@@ -15,9 +17,11 @@ pipeline:
       - in_noop
   post_training:
     tools:
-      - post_fineprune
+      - post_magnet
+      - post_neuronprune
       - post_noop
   deployment:
     tools:
-      - deploy_dp
+      - deploy_explainshap
+      - deploy_dataset_inference
       - deploy_noop

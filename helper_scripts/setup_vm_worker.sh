@@ -104,6 +104,38 @@ install_packages() {
   fi
 }
 
+install_gpu_drivers_if_needed() {
+  # Debian bookworm GPU VMs need contrib/non-free repos + nvidia-driver.
+  # Ubuntu uses ubuntu-drivers; this helper is Debian-specific by design.
+  if ! command -v apt-get >/dev/null 2>&1; then
+    return
+  fi
+  if ! grep -qi 'debian' /etc/os-release 2>/dev/null; then
+    return
+  fi
+  if ! grep -q 'VERSION_CODENAME=bookworm' /etc/os-release 2>/dev/null; then
+    return
+  fi
+
+  log "Debian bookworm detected; ensuring non-free repos and NVIDIA driver packages."
+  log "Current bookworm apt sources:"
+  grep -R "deb .*bookworm" /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null || true
+
+  if ! grep -R "bookworm .*contrib .*non-free" /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null | rg -q .; then
+    cat <<'EOF' | $SUDO tee /etc/apt/sources.list.d/nonfree.list >/dev/null
+deb http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware
+deb http://deb.debian.org/debian-security bookworm-security main contrib non-free non-free-firmware
+deb http://deb.debian.org/debian bookworm-updates main contrib non-free non-free-firmware
+EOF
+  fi
+
+  $SUDO apt-get update -y
+  $SUDO apt-get install -y \
+    "linux-headers-$(uname -r)" dkms nvidia-driver firmware-misc-nonfree
+
+  log "NVIDIA driver packages installed. Reboot VM before starting workers."
+}
+
 install_uv() {
   export PATH="$HOME/.local/bin:$PATH"
   if command -v uv >/dev/null 2>&1; then
@@ -178,6 +210,7 @@ install_python_deps() {
 
 main() {
   install_packages
+  install_gpu_drivers_if_needed
   install_uv
   install_tailscale
   clone_or_update_repo
@@ -186,6 +219,7 @@ main() {
 
   log "Bootstrap complete."
   log "Branch in use: ${BRANCH}"
+  log "If NVIDIA drivers were installed, run: sudo reboot"
   log "Next steps on VM:"
   log "  1) Ensure tailnet join done: sudo tailscale up --ssh --hostname ${TAILSCALE_HOSTNAME}"
   log "  2) Start worker: cd ${INSTALL_DIR} && ./helper_scripts/vm_worker.sh start"

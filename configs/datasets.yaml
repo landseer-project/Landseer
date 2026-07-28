@@ -1,0 +1,23 @@
+datasets:
+  cifar10:
+    default_image: ghcr.io/landseer-project/dataset_cifar10:v1
+    variants:
+      clean:
+        image: ghcr.io/landseer-project/dataset_cifar10:v1
+        labels:
+          landseer.dataset: cifar10
+          landseer.variant: clean
+
+  celeba:
+    default_image: ghcr.io/landseer-project/dataset_celeba_hf:v1
+    # Full CelebA tree (e.g. celeba/downloaded_dataset/, img_align when present).
+    # Override per host: LANDSEER_DATASET_SOURCE_CELEBA=/path/to/data
+    source_artifacts_dir: /data/landseer/landseer_old_data/data
+    min_total_samples: 100000
+    require_image_dir: true
+    variants:
+      clean:
+        image: ghcr.io/landseer-project/dataset_celeba_hf:v1
+        labels:
+          landseer.dataset: celeba
+          landseer.variant: clean

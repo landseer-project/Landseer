@@ -12,6 +12,7 @@ Usage:
 """
 
 import asyncio
+import csv
 from contextlib import asynccontextmanager
 from datetime import datetime
 import json
@@ -50,7 +51,7 @@ def _debug_log(
     message: str,
     data: Dict[str, Any],
 ) -> None:
-    # Debug-session instrumentation disabled after fix verification.
+    # Debug-session instrumentation disabled.
     return
 
 
@@ -1064,6 +1065,7 @@ async def update_task_status(
             from ..db import session_scope, PipelineRunRepository, PipelineRunStatus
             run_id = getattr(scheduler.pipeline, "id", None)
             if run_id:
+                csv_path: Optional[Path] = None
                 with session_scope() as session:
                     run_repo = PipelineRunRepository(session)
                     run = run_repo.get_by_id(run_id)
@@ -1072,6 +1074,12 @@ async def update_task_status(
                         final_status = PipelineRunStatus.FAILED if progress.get("failed", 0) > 0 else PipelineRunStatus.COMPLETED
                         run_repo.update_status(run_id, final_status)
                         logger.info(f"Pipeline run {run_id} finalized as {final_status.value}")
+                try:
+                    csv_path = _export_run_metrics_csv(run_id, scheduler)
+                except Exception as export_err:
+                    logger.warning(f"Failed to export metrics CSV for run {run_id}: {export_err}", exc_info=True)
+                if csv_path:
+                    logger.info(f"Exported run metrics CSV: {csv_path}")
         except Exception as e:
             logger.warning(f"Failed to finalize pipeline run status: {e}")
     
@@ -1636,6 +1644,17 @@ async def worker_claim_task(
         )
     
     scheduler = state.scheduler
+    ready_count = 0
+    blocked_pending_count = 0
+    try:
+        all_tasks = getattr(scheduler, "_all_tasks", [])
+        ready_count = sum(1 for t in all_tasks if scheduler._is_task_ready(t))
+        blocked_pending_count = sum(
+            1 for t in all_tasks
+            if getattr(t, "status", None) == TaskStatus.PENDING and not scheduler._is_task_ready(t)
+        )
+    except Exception:
+        pass
     task = scheduler.get_next_task()
     progress = scheduler.get_progress()
     # region agent log
@@ -1651,6 +1670,8 @@ async def worker_claim_task(
             "running": progress.get("running"),
             "completed": progress.get("completed"),
             "failed": progress.get("failed"),
+            "ready_count": ready_count,
+            "blocked_pending_count": blocked_pending_count,
         },
     )
     # endregion
@@ -1936,6 +1957,7 @@ class DatasetInfoResponse(BaseModel):
     config: Optional[Dict[str, Any]] = Field(default=None, description="Dataset configuration")
     poisoning: Optional[Dict[str, Any]] = Field(default=None, description="Poisoning configuration if applied")
     model_script: Optional[str] = Field(default=None, description="Path to model config script (e.g., config_model.py)")
+    model_script_minio_key: Optional[str] = Field(default=None, description="MinIO object key for model config script")
 
 
 @app.get("/dataset", response_model=DatasetInfoResponse, tags=["Dataset"])
@@ -1959,12 +1981,18 @@ async def get_dataset_info(state: SchedulerState = Depends(get_scheduler_state))
     if not context or not context.dataset_info:
         # Fall back to pipeline config
         pipeline_dataset = None
+        model_script = None
         if state.pipeline:
             pipeline_dataset = state.pipeline.dataset
+            model_cfg = getattr(state.pipeline, "model", None)
+            if isinstance(model_cfg, dict):
+                model_script = model_cfg.get("script")
         return DatasetInfoResponse(
             available=False,
             minio_available=False,
-            config=pipeline_dataset
+            config=pipeline_dataset,
+            model_script=model_script,
+            model_script_minio_key=None,
         )
     
     ds_info = context.dataset_info
@@ -1995,7 +2023,8 @@ async def get_dataset_info(state: SchedulerState = Depends(get_scheduler_state))
         minio_available=minio_available,
         config=context.pipeline.dataset if context.pipeline else None,
         poisoning=ds_info.get("poisoning"),
-        model_script=model_script
+        model_script=model_script,
+        model_script_minio_key=ds_info.get("model_script_minio_key"),
     )
 
 
@@ -2467,6 +2496,136 @@ def _should_override_metric(existing_evaluator: Optional[str], new_evaluator: st
         if new_evaluator == "clean":
             return True
     return False
+
+
+def _export_run_metrics_csv(run_id: str, scheduler: Scheduler) -> Optional[Path]:
+    """
+    Export per-workflow evaluation metrics to CSV for a completed run.
+
+    Every expected evaluator is included. If evaluator output is missing, skipped,
+    or failed, metric values are written as -1.
+    """
+    try:
+        from ..db import session_scope
+        from ..db.models import EvaluationResultModel, PipelineRunModel
+    except Exception as e:
+        logger.warning(f"Unable to import DB models for metrics CSV export: {e}")
+        return None
+
+    pipeline = getattr(scheduler, "pipeline", None)
+    if not pipeline:
+        return None
+
+    workflow_name_by_id: Dict[str, str] = {wf.id: wf.name for wf in pipeline.workflows}
+    workflow_is_baseline: Dict[str, bool] = {}
+    expected_evaluators_by_workflow: Dict[str, set] = {}
+    expected_metric_names_by_evaluator: Dict[str, set] = {}
+
+    for wf in pipeline.workflows:
+        non_eval_tasks = [t for t in wf.tasks if t.task_type != TaskType.EVALUATION]
+        workflow_is_baseline[wf.id] = bool(non_eval_tasks) and all(
+            getattr(t.tool, "is_baseline", False) for t in non_eval_tasks
+        )
+        for task in wf.tasks:
+            if task.task_type != TaskType.EVALUATION:
+                continue
+            evaluator_name = str(task.tool.name)
+            expected_evaluators_by_workflow.setdefault(wf.id, set()).add(evaluator_name)
+            expected_metric_names_by_evaluator.setdefault(evaluator_name, set()).update(
+                [str(m) for m in (task.config or {}).get("metrics", []) if str(m).strip()]
+            )
+
+    if not expected_evaluators_by_workflow:
+        logger.info(f"Run {run_id}: no evaluation tasks found; skipping metrics CSV export")
+        return None
+
+    with session_scope() as session:
+        run = session.query(PipelineRunModel).filter(PipelineRunModel.id == run_id).first()
+        if not run:
+            logger.warning(f"Run {run_id} not found while exporting metrics CSV")
+            return None
+
+        results = session.query(EvaluationResultModel).filter(
+            EvaluationResultModel.run_id == run_id
+        ).all()
+
+        # Backward compatibility for rows keyed only by pipeline_id.
+        if not results:
+            results = session.query(EvaluationResultModel).filter(
+                EvaluationResultModel.pipeline_id == run_id
+            ).all()
+
+    result_lookup: Dict[tuple, Any] = {}
+    observed_metric_names_by_evaluator: Dict[str, set] = {}
+    for result in results:
+        key = (result.workflow_id, result.evaluator_name)
+        result_lookup[key] = result
+        observed_metric_names_by_evaluator.setdefault(result.evaluator_name, set()).update(
+            list((result.metrics or {}).keys())
+        )
+
+    metric_names_by_evaluator: Dict[str, List[str]] = {}
+    for evaluator_name in set(expected_metric_names_by_evaluator) | set(observed_metric_names_by_evaluator):
+        merged = (
+            expected_metric_names_by_evaluator.get(evaluator_name, set())
+            | observed_metric_names_by_evaluator.get(evaluator_name, set())
+        )
+        metric_names_by_evaluator[evaluator_name] = sorted(merged)
+
+    all_evaluators = sorted(
+        set(expected_metric_names_by_evaluator.keys())
+        | set(observed_metric_names_by_evaluator.keys())
+    )
+    if not all_evaluators:
+        return None
+
+    output_dir = Path("results") / run.pipeline_config_id / run_id
+    output_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = output_dir / "metrics_summary.csv"
+
+    header: List[str] = ["run_id", "workflow_id", "workflow_name", "is_baseline"]
+    for evaluator_name in all_evaluators:
+        header.append(f"{evaluator_name}.status")
+        for metric_name in metric_names_by_evaluator.get(evaluator_name, []):
+            header.append(f"{evaluator_name}.{metric_name}")
+
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=header)
+        writer.writeheader()
+
+        for workflow_id in sorted(expected_evaluators_by_workflow.keys()):
+            row: Dict[str, Any] = {
+                "run_id": run_id,
+                "workflow_id": workflow_id,
+                "workflow_name": workflow_name_by_id.get(workflow_id, workflow_id),
+                "is_baseline": workflow_is_baseline.get(workflow_id, False),
+            }
+            expected_evaluators = expected_evaluators_by_workflow.get(workflow_id, set())
+            for evaluator_name in all_evaluators:
+                result = result_lookup.get((workflow_id, evaluator_name))
+                if evaluator_name not in expected_evaluators:
+                    status = "not_applicable"
+                elif result is None:
+                    status = "missing"
+                elif result.skipped:
+                    status = "skipped"
+                elif not result.success:
+                    status = "failed"
+                else:
+                    status = "ok"
+                row[f"{evaluator_name}.status"] = status
+
+                for metric_name in metric_names_by_evaluator.get(evaluator_name, []):
+                    col = f"{evaluator_name}.{metric_name}"
+                    if status != "ok":
+                        row[col] = -1
+                        continue
+                    metric_val = (result.metrics or {}).get(metric_name) if result else None
+                    row[col] = metric_val if metric_val is not None else -1
+
+            writer.writerow(row)
+
+    return csv_path
 
 
 @app.get("/pipelines/{pipeline_id}/metrics", response_model=PipelineMetricsResponse, tags=["Metrics"])
@@ -2943,6 +3102,8 @@ async def start_pipeline_run(
                 for task in workflow.tasks:
                     task.pipeline_id = run_id
                     task.run_id = run_id
+                    # Propagate per-run cache policy to workers via task payload.
+                    task.config["_run_use_cache"] = bool(request_data.get("use_cache", True))
 
             # Step 3: Dataset context (best-effort)
             ctx = get_backend_context()
@@ -3023,8 +3184,39 @@ async def start_pipeline_run(
                                     )
                                     # endregion
                                     ctx.dataset_info["minio_key"] = dataset_key
+
+                                    model_script = cfg.model.get("script") if cfg and cfg.model else None
+                                    if model_script:
+                                        model_path = Path(model_script)
+                                        if not model_path.is_absolute():
+                                            cfg_base = (
+                                                Path(ctx.pipeline_config_path).resolve().parent
+                                                if ctx.pipeline_config_path
+                                                else Path(config_path).resolve().parent
+                                            )
+                                            model_path = (cfg_base / model_path).resolve()
+                                        if model_path.exists() and model_path.is_file():
+                                            model_script_key = f"{dataset_key}/config_model.py"
+                                            if ctx.store.upload_file(model_path, model_script_key):
+                                                ctx.dataset_info["model_script_minio_key"] = model_script_key
+                                                logger.info(
+                                                    f"Model script uploaded to MinIO: {model_script_key}"
+                                                )
+                                            else:
+                                                logger.warning(
+                                                    f"Failed to upload model script to MinIO: {model_path}"
+                                                )
+                                        else:
+                                            logger.warning(
+                                                f"Model script path not found for MinIO upload: {model_path}"
+                                            )
                                 except Exception as e:
                                     logger.warning(f"Failed to upload dataset to MinIO: {e}")
+                        else:
+                            raise RuntimeError(
+                                f"Dataset preparation returned no dataset info for "
+                                f"{cfg.dataset.name}/{cfg.dataset.variant}"
+                            )
                 except Exception as e:
                     logger.warning(f"Dataset context setup failed for run {run_id}: {e}")
                 set_backend_context(ctx)
@@ -3060,6 +3252,7 @@ async def start_pipeline_run(
                     "pid": os.getpid(),
                     "hostname": socket.gethostname(),
                     "workflow_count": len(pipeline.workflows),
+                    "run_use_cache": bool(request_data.get("use_cache", True)),
                     "progress": state.scheduler.get_progress() if state.scheduler else None,
                 },
             )
@@ -3202,7 +3395,7 @@ async def start_pipeline_run(
             run_id_val = run_obj.id
             run_number_val = run_obj.run_number
             run_use_cache = run_obj.use_cache
-            run_tools_config = run_obj.tools_config
+            run_tools_config = getattr(run_obj, "tools_config", None)
             run_status = run_obj.status.value
             run_error = run_obj.error_message
             run_created_at = run_obj.created_at.isoformat()
@@ -3241,13 +3434,22 @@ async def start_pipeline_run(
         )
         # endregion
 
+        # Once initialization is successfully enqueued, report running to clients.
+        # The DB row may still be pending for a brief moment until background
+        # initialization updates it, but the API contract here is "accepted and active".
+        response_status = (
+            PipelineRunStatus.RUNNING.value
+            if run_status == PipelineRunStatus.PENDING.value
+            else run_status
+        )
+
         return PipelineRunResponse(
             id=run_id_val,
             pipeline_config_id=config_id,
             run_number=run_number_val,
             use_cache=run_use_cache,
             tools_config=run_tools_config,
-            status=run_status,
+            status=response_status,
             error_message=run_error,
             created_at=run_created_at,
             started_at=run_started_at,
@@ -3287,7 +3489,7 @@ async def get_pipeline_run(run_id: str):
                 pipeline_config_id=run.pipeline_config_id,
                 run_number=run.run_number,
                 use_cache=run.use_cache,
-                tools_config=run.tools_config,
+                tools_config=getattr(run, "tools_config", None),
                 status=run.status.value,
                 error_message=run.error_message,
                 created_at=run.created_at.isoformat(),
@@ -3468,7 +3670,7 @@ async def get_pipeline_runs(config_id: str):
                         pipeline_config_id=run.pipeline_config_id,
                         run_number=run.run_number,
                         use_cache=run.use_cache,
-                        tools_config=run.tools_config,
+                        tools_config=getattr(run, "tools_config", None),
                         status=run.status.value,
                         error_message=run.error_message,
                         created_at=run.created_at.isoformat(),
@@ -3501,7 +3703,7 @@ async def list_all_pipeline_runs(config_id: Optional[str] = Query(default=None))
                         pipeline_config_id=run.pipeline_config_id,
                         run_number=run.run_number,
                         use_cache=run.use_cache,
-                        tools_config=run.tools_config,
+                        tools_config=getattr(run, "tools_config", None),
                         status=run.status.value,
                         error_message=run.error_message,
                         created_at=run.created_at.isoformat(),
@@ -3568,7 +3770,7 @@ async def stop_pipeline_run(
                 pipeline_config_id=run.pipeline_config_id,
                 run_number=run.run_number,
                 use_cache=run.use_cache,
-                tools_config=run.tools_config,
+                tools_config=getattr(run, "tools_config", None),
                 status=run.status.value,
                 error_message=run.error_message,
                 created_at=run.created_at.isoformat(),
@@ -3668,7 +3870,7 @@ async def restart_pipeline_run(
                 pipeline_config_id=new_run.pipeline_config_id,
                 run_number=new_run.run_number,
                 use_cache=new_run.use_cache,
-                tools_config=new_run.tools_config,
+                tools_config=getattr(new_run, "tools_config", None),
                 status=new_run.status.value,
                 error_message=new_run.error_message,
                 created_at=new_run.created_at.isoformat(),

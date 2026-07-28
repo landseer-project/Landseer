@@ -53,6 +53,7 @@ echo ""
 # Track timing
 START_TIME=$(date +%s)
 
+# Run the pipeline multiple times
 for i in $(seq 1 $NUM_RUNS); do
     RUN_START=$(date +%s)
     

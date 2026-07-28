@@ -92,6 +92,51 @@ class TestArtifactChaining:
         config_file = task_input_dir / "config.json"
         assert config_file.exists(), "config.json should be copied from dependency output"
     
+    def test_identical_output_files_are_hardlinked_to_input_when_macro_enabled(self, temp_workspace, monkeypatch):
+        """A generated output file should become a hard link to the matching input file when content matches."""
+        monkeypatch.setenv("LANDSEER_HARDLINK_MACRO", "1")
+
+        input_dir = temp_workspace / "input_source"
+        input_dir.mkdir(parents=True, exist_ok=True)
+        input_file = input_dir / "shared.txt"
+        input_file.write_text("same content")
+
+        runner = TaskRunner(workspace_dir=temp_workspace)
+        task = TaskInfo(
+            id="task_hardlink",
+            tool_name="hardlink_tool",
+            tool_image="test/image:latest",
+            tool_command="python main.py",
+            tool_runtime=None,
+            tool_is_baseline=False,
+            config={},
+            priority=50,
+            status="pending",
+            task_type="inference",
+            counter=1,
+            workflows=[],
+            pipeline_id="pipeline_1",
+            dependency_ids=[]
+        )
+
+        def fake_run(*args, **kwargs):
+            output_dir = kwargs["output_dir"]
+            output_dir.mkdir(parents=True, exist_ok=True)
+            (output_dir / "shared.txt").write_text("same content")
+            return (0, "Success")
+
+        with patch.object(runner, '_container_runner') as mock_runner:
+            mock_runner.run.side_effect = fake_run
+            mock_runner.pull_image.return_value = True
+
+            result = runner.run_task(task, input_path=input_dir)
+
+        assert result.success
+        output_file = temp_workspace / task.id / "output" / "shared.txt"
+        assert output_file.exists()
+        assert output_file.read_text() == "same content"
+        assert output_file.stat().st_ino == input_file.stat().st_ino
+
     def test_multiple_dependencies_copied(self, temp_workspace):
         """Outputs from multiple dependencies should all be copied."""
         # Create two dependency outputs

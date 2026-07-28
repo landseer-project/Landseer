@@ -5,8 +5,8 @@
 echo "=== Landseer Full Reset ==="
 echo ""
 echo "This will delete:"
-echo "  - Worker workspaces (/tmp/landseer_worker_*)"
-echo "  - Artifact cache (/tmp/landseer_cache)"
+echo "  - Worker workspaces (/data/landseer/workers/*)"
+echo "  - Artifact cache (/data/landseer/cache)"
 echo "  - SQLite database (landseer.db)"
 echo "  - Stopped Docker containers"
 echo ""
@@ -22,10 +22,10 @@ fi
 
 echo ""
 echo "Cleaning worker workspaces..."
-rm -rf /tmp/landseer_worker_* 2>/dev/null && echo "  ✓ Workspaces cleaned" || echo "  - No workspaces found"
+rm -rf /data/landseer/workers/* 2>/dev/null && echo "  ✓ Workspaces cleaned" || echo "  - No workspaces found"
 
 echo "Cleaning cache..."
-rm -rf /tmp/landseer_cache/* 2>/dev/null && echo "  ✓ Cache cleaned" || echo "  - No cache found"
+rm -rf /data/landseer/cache/* 2>/dev/null && echo "  ✓ Cache cleaned" || echo "  - No cache found"
 
 echo "Removing database..."
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

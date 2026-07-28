@@ -30,13 +30,18 @@ def install():
     print("Dependencies installed successfully!")
 
 
-def dev():
+def dev(extra_args=None):
     """Start the development server."""
     _require_npm()
+    if extra_args is None:
+        extra_args = []
     print("Starting development server...")
-    print("Frontend will be available at http://localhost:3000")
+    print("Frontend will be available at http://localhost:5173 (or custom --host/--port)")
     print("Make sure the backend API is running at http://localhost:8000")
-    subprocess.run(["npm", "run", "dev"], cwd=FRONTEND_DIR)
+    cmd = ["npm", "run", "dev"]
+    if extra_args:
+        cmd.extend(["--", *extra_args])
+    subprocess.run(cmd, cwd=FRONTEND_DIR)
 
 
 def build():
@@ -70,10 +75,14 @@ def main():
 
     command = sys.argv[1]
 
+    command_args = sys.argv[2:]
+    if command_args[:1] == ["--"]:
+        command_args = command_args[1:]
+
     if command == "install":
         install()
     elif command == "dev":
-        dev()
+        dev(command_args)
     elif command == "build":
         build()
     elif command == "preview":

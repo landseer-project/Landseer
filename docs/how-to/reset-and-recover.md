@@ -10,8 +10,8 @@ bash helper_scripts/reset_pipeline.sh --yes
 
 This removes:
 
-- `/tmp/landseer_worker_*`
-- `/tmp/landseer_cache`
+- `/data/landseer/workers/*`
+- `/data/landseer/cache`
 - local SQLite DB (`landseer.db`)
 - exited docker containers
 

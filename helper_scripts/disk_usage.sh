@@ -13,10 +13,10 @@ du -sh "$PROJECT_DIR" 2>/dev/null
 echo ""
 
 # Worker workspaces
-echo "Worker workspaces (/tmp/landseer_worker_*):"
-if ls /tmp/landseer_worker_* 1>/dev/null 2>&1; then
-    du -sh /tmp/landseer_worker_* 2>/dev/null
-    TOTAL_WORKSPACE=$(du -sc /tmp/landseer_worker_* 2>/dev/null | tail -1 | cut -f1)
+echo "Worker workspaces (/data/landseer/workers/*):"
+if ls /data/landseer/workers/* 1>/dev/null 2>&1; then
+    du -sh /data/landseer/workers/* 2>/dev/null
+    TOTAL_WORKSPACE=$(du -sc /data/landseer/workers/* 2>/dev/null | tail -1 | cut -f1)
     echo "  Total: $(numfmt --to=iec $((TOTAL_WORKSPACE * 1024)) 2>/dev/null || echo "${TOTAL_WORKSPACE}K")"
 else
     echo "  (none)"
@@ -24,7 +24,7 @@ fi
 echo ""
 
 # Cache
-CACHE_DIR="${LANDSEER_CACHE_DIR:-/tmp/landseer_cache}"
+CACHE_DIR="${LANDSEER_CACHE_DIR:-/data/landseer/cache}"
 echo "Cache ($CACHE_DIR):"
 if [ -d "$CACHE_DIR" ]; then
     du -sh "$CACHE_DIR" 2>/dev/null
