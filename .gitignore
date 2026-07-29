@@ -1,5 +1,5 @@
 cache/
-data/
+/data/
 results/
 logs/
 tools/
@@ -27,3 +27,5 @@ CLAUDE-context.md
 
 # Local credentials
 helper_scripts/*gcs-bucket-key.json
+
+src/.bak
