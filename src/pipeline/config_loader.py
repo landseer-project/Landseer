@@ -42,6 +42,7 @@ def normalize_dataset_token(value: str) -> str:
         "cifar10": "cifar10",
         "cifar100": "cifar100",
         "celeba": "celeba",
+        "mnist": "mnist",
     }
     return aliases.get(token, token)
 

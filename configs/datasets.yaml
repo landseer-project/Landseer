@@ -10,10 +10,10 @@ datasets:
 
   celeba:
     default_image: ghcr.io/landseer-project/dataset_celeba_hf:v1
-    # Full CelebA tree (e.g. celeba/downloaded_dataset/, img_align when present).
+    # Full CelebA downloaded dataset root (contains img_align_celeba/img_align_celeba).
     # Override per host: LANDSEER_DATASET_SOURCE_CELEBA=/path/to/data
-    source_artifacts_dir: /data/landseer/landseer_old_data/data
-    min_total_samples: 100000
+    source_artifacts_dir: /data/landseer/landseer_old_data/data/celeba/downloaded_dataset
+    min_total_samples: 202599
     require_image_dir: true
     variants:
       clean:
