@@ -610,8 +610,8 @@ function CustomRunDialog({
   configs: PipelineConfig[];
   allTools: ToolInfo[];
   onStartRun: (configId: string, opts: {
-    dataset_name: string;
-    dataset_variant: string;
+    dataset_name?: string;
+    dataset_variant?: string;
     use_cache: boolean;
     tools_override: Record<string, string[]> | null;
     model_script: string | null;
@@ -991,10 +991,11 @@ function ConfigCard({
   config: PipelineConfig;
   runs: PipelineRun[];
   onStartRun: (configId: string, opts: {
-    dataset_name: string;
-    dataset_variant: string;
+    dataset_name?: string;
+    dataset_variant?: string;
     use_cache: boolean;
     tools_override: Record<string, string[]> | null;
+    model_script?: string | null;
   }) => void;
   onStopRun: (runId: string) => void;
   isStarting: boolean;
@@ -1170,10 +1171,11 @@ function ConfigCard({
               onClick={() => {
                 setQuickOpen(false);
                 onStartRun(config.id, {
-                  dataset_name: 'cifar10',
-                  dataset_variant: 'clean',
+                  dataset_name: undefined,
+                  dataset_variant: undefined,
                   use_cache: useCache,
                   tools_override: null,
+                  model_script: null,
                 });
               }}
               disabled={isStarting}
@@ -1202,8 +1204,8 @@ export function Pipelines() {
   const [pipelineKeyError, setPipelineKeyError] = useState<string | null>(null);
   const [pendingStartRequest, setPendingStartRequest] = useState<{
     configId: string;
-    dataset_name: string;
-    dataset_variant: string;
+    dataset_name?: string;
+    dataset_variant?: string;
     use_cache: boolean;
     tools_override: Record<string, string[]> | null;
     model_script?: string | null;
@@ -1238,8 +1240,8 @@ export function Pipelines() {
       model_script,
     }: {
       configId: string;
-      dataset_name: string;
-      dataset_variant: string;
+      dataset_name?: string;
+      dataset_variant?: string;
       use_cache: boolean;
       tools_override: Record<string, string[]> | null;
       model_script?: string | null;
@@ -1278,8 +1280,8 @@ export function Pipelines() {
 
   function handleStartRun(request: {
     configId: string;
-    dataset_name: string;
-    dataset_variant: string;
+    dataset_name?: string;
+    dataset_variant?: string;
     use_cache: boolean;
     tools_override: Record<string, string[]> | null;
     model_script?: string | null;

@@ -7,8 +7,11 @@ Provides high-level interface for:
 - Tracking artifact metadata in database
 """
 
+import errno
+import filecmp
 import hashlib
 import json
+import os
 import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -19,6 +22,52 @@ from ..common import get_logger
 from .minio_store import MinioStore, MinioConfig
 
 logger = get_logger(__name__)
+
+
+def _hardlink_macro_enabled() -> bool:
+    """Return True when hardlink mode is explicitly enabled via macro/env."""
+    return os.environ.get("LANDSEER_HARDLINK_MACRO", "").lower() in ("1", "true", "yes")
+
+
+def _same_content(src: Path, dst: Path) -> bool:
+    """Return True when two regular files are byte-for-byte identical."""
+    if not src.exists() or not dst.exists() or not src.is_file() or not dst.is_file():
+        return False
+    try:
+        return src.stat().st_size == dst.stat().st_size and filecmp.cmp(src, dst, shallow=False)
+    except OSError:
+        return False
+
+
+def _link_or_copy(src: Path, dst: Path) -> None:
+    """Copy a file, or hard-link only when the destination is already identical."""
+    if not _hardlink_macro_enabled():
+        shutil.copy2(src, dst)
+        return
+
+    if dst.exists() and dst.is_file() and _same_content(src, dst):
+        try:
+            dst.unlink(missing_ok=True)
+            os.link(src, dst)
+            return
+        except OSError as exc:
+            if exc.errno in (errno.EXDEV, errno.EPERM, errno.EACCES):
+                shutil.copy2(src, dst)
+                return
+            raise
+
+    try:
+        os.link(src, dst)
+    except OSError as exc:
+        if exc.errno in (errno.EXDEV, errno.EPERM, errno.EACCES):
+            shutil.copy2(src, dst)
+        else:
+            raise
+
+
+def _copytree_with_optional_hardlinks(src: Path, dst: Path) -> None:
+    """Copy a directory tree, optionally hard-linking files when macro is enabled."""
+    shutil.copytree(src, dst, copy_function=_link_or_copy)
 
 
 @dataclass
@@ -63,7 +112,7 @@ class ArtifactManager:
         self,
         local_cache_dir: Path,
         minio_store: Optional[MinioStore] = None,
-        use_minio: bool = True
+        use_minio: bool = True,
     ):
         """
         Initialize artifact manager.
@@ -178,11 +227,11 @@ class ArtifactManager:
         # Create directory
         cache_dir.mkdir(parents=True, exist_ok=True)
         
-        # Copy files
+        # Store files. Use hardlinks only when the hardlink macro is enabled.
         if source_dir.exists():
             if output_dir.exists():
                 shutil.rmtree(output_dir)
-            shutil.copytree(source_dir, output_dir)
+            _copytree_with_optional_hardlinks(source_dir, output_dir)
         else:
             output_dir.mkdir(parents=True, exist_ok=True)
         

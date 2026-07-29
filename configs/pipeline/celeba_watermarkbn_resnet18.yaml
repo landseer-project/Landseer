@@ -1,0 +1,28 @@
+dataset:
+  name: celeba
+  variant: clean
+
+model:
+  script: configs/model/config_model_resnet18_celeba.py
+  framework: pytorch
+
+pipeline:
+  pre_training:
+    tools:
+      - tool: pre_watermarkbn
+        command: python3 main.py --trigger_label 1 --exclude_target_class --trigger_size 12
+      - pre_noop
+
+  during_training:
+    tools:
+      - tool: in_fair
+        command: python3 main.py --dataset celeba --target_size 64
+  post_training:
+    tools:
+      - tool: post_neuronprune
+        command: python3 main.py --clean_threshold 0.55
+      - post_noop
+
+  deployment:
+    tools:
+      - deploy_noop

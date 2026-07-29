@@ -5,7 +5,7 @@
 echo "=== Landseer Cache Cleanup ==="
 echo ""
 
-CACHE_DIR="${LANDSEER_CACHE_DIR:-/tmp/landseer_cache}"
+CACHE_DIR="${LANDSEER_CACHE_DIR:-/data/landseer/cache}"
 
 # Show current usage
 echo "Cache directory: $CACHE_DIR"

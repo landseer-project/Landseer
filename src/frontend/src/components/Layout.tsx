@@ -21,6 +21,7 @@ import {
   Database,
   BarChart3,
   Rocket,
+  FlaskConical,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 
@@ -50,6 +51,11 @@ const navItems: NavItem[] = [
     title: 'Combinations',
     href: '/workflows',
     icon: <GitBranch className="h-5 w-5" />,
+  },
+  {
+    title: 'Runs',
+    href: '/runs',
+    icon: <FlaskConical className="h-5 w-5" />,
   },
   {
     title: 'Workers',

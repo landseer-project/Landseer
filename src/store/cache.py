@@ -24,7 +24,6 @@ from .artifact_manager import ArtifactManager, ArtifactInfo
 
 logger = get_logger(__name__)
 
-
 @dataclass
 class CacheConfig:
     """
@@ -39,7 +38,7 @@ class CacheConfig:
     local_cache_dir: Path = field(
         default_factory=lambda: Path(os.getenv(
             "LANDSEER_CACHE_DIR",
-            "/tmp/landseer_cache"
+            "/data/landseer/cache"
         ))
     )
     max_local_size_gb: float = field(
@@ -89,7 +88,7 @@ class TwoLevelCache:
         self.manager = ArtifactManager(
             local_cache_dir=self.config.local_cache_dir,
             minio_store=minio_store,
-            use_minio=self.config.use_minio
+            use_minio=self.config.use_minio,
         )
         
         # Track access times for LRU eviction

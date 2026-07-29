@@ -188,6 +188,21 @@ def initialize_backend(
                         store.upload_directory(ds_info.output_dir, dataset_key)
                         dataset_info["minio_key"] = dataset_key
                         logger.info(f"Dataset uploaded to MinIO: {dataset_key}")
+
+                        model_script = config.model.get("script") if config and config.model else None
+                        if model_script:
+                            model_path = Path(model_script)
+                            if not model_path.is_absolute():
+                                model_path = (Path(pipeline_config_path).resolve().parent / model_path).resolve()
+                            if model_path.exists() and model_path.is_file():
+                                model_script_key = f"{dataset_key}/config_model.py"
+                                if store.upload_file(model_path, model_script_key):
+                                    dataset_info["model_script_minio_key"] = model_script_key
+                                    logger.info(f"Model script uploaded to MinIO: {model_script_key}")
+                                else:
+                                    logger.warning(f"Failed to upload model script to MinIO: {model_path}")
+                            else:
+                                logger.warning(f"Model script path not found for MinIO upload: {model_path}")
                     except Exception as e:
                         logger.warning(f"Failed to upload dataset to MinIO: {e}")
             else:

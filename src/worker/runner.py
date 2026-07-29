@@ -9,6 +9,7 @@ This module handles the actual execution of tasks, including:
 """
 
 import errno
+import filecmp
 import json
 import os
 import shutil
@@ -25,13 +26,22 @@ from .client import TaskInfo
 logger = get_logger(__name__)
 
 
-def _link_or_copy(src: Path, dst: Path) -> None:
-    """Hard-link *src* to *dst*; fall back to copy on cross-filesystem or permission error.
+def _hardlink_macro_enabled() -> bool:
+    """Return True when hardlink mode is explicitly enabled via macro/env."""
+    return os.environ.get("LANDSEER_HARDLINK_MACRO", "").lower() in ("1", "true", "yes")
 
-    Hard links share the same inode so no bytes are duplicated on disk.
-    The fallback preserves behaviour on cross-device mounts (EXDEV) or
-    systems where linking is disallowed (EPERM/EACCES).
+
+def _link_or_copy(src: Path, dst: Path) -> None:
+    """Copy *src* to *dst*; use hard-link optimization only when macro is enabled.
+
+    When LANDSEER_HARDLINK_MACRO is enabled and source/destination are on the
+    same filesystem, files share the same inode and no bytes are duplicated.
+    Otherwise, this function preserves regular copy semantics.
     """
+    if not _hardlink_macro_enabled():
+        shutil.copy2(src, dst)
+        return
+
     try:
         os.link(src, dst)
     except OSError as exc:
@@ -58,6 +68,47 @@ def _mirror_tree_link_or_copy(src_dir: Path, dst_dir: Path) -> None:
                 shutil.copy2(s, d, follow_symlinks=False)
             elif s.is_file():
                 _link_or_copy(s, d)
+
+
+def _same_content(src: Path, dst: Path) -> bool:
+    """Return True when two regular files are byte-for-byte identical."""
+    if not src.exists() or not dst.exists() or not src.is_file() or not dst.is_file():
+        return False
+    try:
+        return src.stat().st_size == dst.stat().st_size and filecmp.cmp(src, dst, shallow=False)
+    except OSError:
+        return False
+
+
+def _link_identical_output_to_input(output_dir: Path, input_dir: Path) -> None:
+    """Replace output files with hard links to matching input files when content matches."""
+    if not _hardlink_macro_enabled():
+        return
+    if not output_dir.exists() or not output_dir.is_dir() or not input_dir.exists() or not input_dir.is_dir():
+        return
+
+    for output_path in output_dir.rglob("*"):
+        if not output_path.is_file() or output_path.is_symlink():
+            continue
+        rel_path = output_path.relative_to(output_dir)
+        candidate = input_dir / rel_path
+        if not candidate.exists() or not candidate.is_file() or candidate.is_symlink():
+            continue
+        if not _same_content(candidate, output_path):
+            continue
+
+        try:
+            output_path.unlink(missing_ok=True)
+            os.link(candidate, output_path)
+            logger.debug("Hard-linked output file to matching input file: %s -> %s", output_path, candidate)
+        except OSError as exc:
+            if exc.errno in (errno.EXDEV, errno.EPERM, errno.EACCES):
+                logger.debug(
+                    "Falling back to regular file for hardlink target due to filesystem limitation: %s",
+                    output_path,
+                )
+            else:
+                raise
 
 
 @dataclass
@@ -904,8 +955,9 @@ class TaskRunner:
                 Kept for backward compatibility; prefer ancestor_dirs.
             ancestor_dirs: Ordered list of all ancestor output directories (earliest stage
                 first). Later entries override earlier ones when filenames collide — so the
-                most-recently-produced model.pt always wins.  Files are hard-linked (same
-                inode, zero data copy) with a shutil.copy2 fallback for cross-filesystem.
+                most-recently-produced model.pt always wins. When
+                LANDSEER_HARDLINK_MACRO is enabled, files are hard-linked where
+                possible; otherwise they are copied.
 
         Returns:
             ExecutionResult with execution details
@@ -1066,9 +1118,12 @@ class TaskRunner:
                 docker_command = None
             
             execution_time_ms = int((time.time() - start_time) * 1000)
+
+            success = exit_code == 0
+            if success:
+                _link_identical_output_to_input(output_dir, input_dir)
             
             # Create result
-            success = exit_code == 0
             result = ExecutionResult(
                 success=success,
                 exit_code=exit_code,

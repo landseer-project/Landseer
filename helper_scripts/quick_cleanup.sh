@@ -6,12 +6,12 @@ echo "=== Quick Cleanup ==="
 
 # Clean workspaces
 echo -n "Cleaning workspaces... "
-rm -rf /tmp/landseer_worker_* 2>/dev/null
+rm -rf /data/landseer/workers/* 2>/dev/null
 echo "done"
 
 # Clean cache (keep the directory)
 echo -n "Cleaning cache... "
-rm -rf /tmp/landseer_cache/* 2>/dev/null
+rm -rf /data/landseer/cache/* 2>/dev/null
 echo "done"
 
 # Remove old stopped containers
@@ -23,4 +23,4 @@ echo ""
 echo "✓ Quick cleanup complete"
 
 # Show remaining disk usage
-df -h /tmp | head -2
+df -h /data | head -2

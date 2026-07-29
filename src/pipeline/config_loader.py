@@ -12,10 +12,11 @@ Workflow generation follows the specification in docs/Tasks.md:
 """
 
 import os
+import shlex
 import yaml
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union
 from itertools import product
 from pydantic import BaseModel, Field, field_validator
 
@@ -69,13 +70,34 @@ def validate_pipeline_tool_dataset_compatibility(
     requested = normalize_dataset_token(requested_dataset_name)
     incompatibilities: List[Dict[str, str]] = []
 
+    # Fallback guardrail for critical tool/dataset constraints when labels are absent.
+    strict_dataset_requirements = {
+        "in_fair": {"celeba"},
+    }
+
     for stage_name in ("pre_training", "during_training", "post_training", "deployment"):
         stage_cfg = pipeline_config.pipeline.get(stage_name)
         if stage_cfg is None:
             continue
-        for tool_id in getattr(stage_cfg, "tools", []) or []:
+        for tool_entry in getattr(stage_cfg, "tools", []) or []:
+            # StageConfig.tools is List[StageToolConfig], but keep backward
+            # compatibility with any legacy list[str] callers.
+            tool_id = tool_entry.tool if hasattr(tool_entry, "tool") else str(tool_entry)
             tool_def = tools_by_id.get(tool_id)
             if tool_def is None:
+                continue
+            required_datasets = strict_dataset_requirements.get(tool_id)
+            if required_datasets and requested not in required_datasets:
+                incompatibilities.append(
+                    {
+                        "stage": stage_name,
+                        "tool_id": tool_id,
+                        "tool_name": tool_def.name,
+                        "image": tool_def.container.image,
+                        "requested_dataset": requested_dataset_name,
+                        "supported_datasets": ", ".join(sorted(required_datasets)),
+                    }
+                )
                 continue
             labels: Dict[str, str] = {}
             if fetch_remote_labels:
@@ -307,11 +329,100 @@ def get_all_evaluators() -> Dict[str, EvaluatorDefinition]:
     return _EVALUATOR_REGISTRY.copy()
 
 
+def load_attack_config(attack_config_path: Optional[str]) -> Dict[str, Any]:
+    """
+    Load optional attack configuration YAML.
+
+    Returns an empty dict when no path is provided. Raises ValueError for invalid
+    files so callers can fail fast with a clear message.
+    """
+    if not attack_config_path:
+        return {}
+
+    path = _resolve_config_path(attack_config_path)
+    if not path.exists() or not path.is_file():
+        raise ValueError(f"Attack configuration file not found: {attack_config_path}")
+
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except yaml.YAMLError as e:
+        raise ValueError(f"Failed to parse attack config YAML '{attack_config_path}': {e}")
+
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"Attack configuration at '{attack_config_path}' must be a mapping/object"
+        )
+
+    attacks = data.get("attacks", {})
+    if attacks is None:
+        attacks = {}
+    if not isinstance(attacks, dict):
+        raise ValueError(
+            f"Attack configuration at '{attack_config_path}' has non-object 'attacks' section"
+        )
+
+    normalized_attacks = {
+        str(k).strip().lower(): bool(v)
+        for k, v in attacks.items()
+        if str(k).strip()
+    }
+    data["attacks"] = normalized_attacks
+    data["_resolved_path"] = str(path.resolve())
+    return data
+
+
+def select_evaluators_for_attack_config(
+    evaluators: Dict[str, EvaluatorDefinition],
+    attack_config: Dict[str, Any],
+) -> Dict[str, EvaluatorDefinition]:
+    """
+    Filter evaluator set based on ``attacks`` flags in attack config.
+
+    ``clean`` is always preserved when present to keep a baseline metric.
+    """
+    if not attack_config:
+        return evaluators
+
+    attacks = attack_config.get("attacks", {})
+    if not isinstance(attacks, dict):
+        return evaluators
+
+    enabled = {k for k, v in attacks.items() if bool(v)}
+
+    attack_to_evaluator = {
+        "backdoor": "backdoor",
+        "adversarial": "adversarial",
+        "evasion": "adversarial",
+        "carlini": "adversarial",
+        "fairness": "fairness",
+        "fingerprinting": "fingerprinting",
+        "watermarking": "watermark",
+        "outlier": "ood",
+        "ood": "ood",
+    }
+
+    selected_keys = {attack_to_evaluator[name] for name in enabled if name in attack_to_evaluator}
+    if "clean" in evaluators:
+        selected_keys.add("clean")
+
+    selected = {k: v for k, v in evaluators.items() if k in selected_keys}
+    if selected:
+        return selected
+
+    # If no enabled attack maps to a registered evaluator, keep clean-only when available.
+    if "clean" in evaluators:
+        return {"clean": evaluators["clean"]}
+    return {}
+
+
 def add_evaluation_tasks_to_workflow(
     workflow: Workflow,
     evaluators: Dict[str, EvaluatorDefinition],
     pipeline_id: str,
-    last_deployment_task: Optional[Task] = None
+    last_deployment_task: Optional[Task] = None,
+    attack_config_path: Optional[str] = None,
+    attack_config: Optional[Dict[str, Any]] = None,
 ) -> List[Task]:
     """
     Add evaluation tasks to a workflow.
@@ -355,6 +466,9 @@ def add_evaluation_tasks_to_workflow(
             "required_artifacts": eval_def.required_artifacts,
             "workflow_tools_by_stage": tools_by_stage,
             "workflow_defense_types": sorted(defense_types),
+            "attack_config_path": attack_config_path,
+            "attack_flags": (attack_config or {}).get("attacks", {}),
+            "attack_config": attack_config or {},
         }
         
         # Create dependencies
@@ -398,13 +512,80 @@ class ModelConfig(BaseModel):
         return v_abs
 
 
+class StageToolConfig(BaseModel):
+    """Pipeline-stage tool selection with optional command override."""
+    tool: str = Field(description="Tool registry key or display name")
+    command: Optional[str] = Field(
+        default=None,
+        description="Optional full command override to execute inside the container",
+    )
+    args: List[str] = Field(
+        default_factory=list,
+        description="Optional CLI arguments appended to the tool default command",
+    )
+
+    @field_validator("tool", mode="after")
+    def validate_tool_name(cls, v):
+        tool_name = str(v).strip()
+        if not tool_name:
+            raise ValueError("tool cannot be empty")
+        return tool_name
+
+    @field_validator("args", mode="after")
+    def validate_args(cls, v):
+        out: List[str] = []
+        for item in v or []:
+            token = str(item).strip()
+            if token:
+                out.append(token)
+        return out
+
+    @property
+    def effective_command(self) -> Optional[str]:
+        """Return explicit command, if any."""
+        cmd = (self.command or "").strip()
+        return cmd or None
+
+
 class StageConfig(BaseModel):
     """Configuration for a pipeline stage.
     
     All tools (including noops) are now in the tools list.
     Noops are identified by their is_baseline=true flag in tools.yaml.
     """
-    tools: List[str] = Field(default_factory=list, description="Tool names in this stage (including noops)")
+    tools: List[StageToolConfig] = Field(
+        default_factory=list,
+        description=(
+            "Tool selections in this stage (including noops). Each entry can provide "
+            "a per-tool command override or extra args."
+        ),
+    )
+
+    @field_validator("tools", mode="before")
+    def normalize_tools(cls, v):
+        """Accept legacy list[str] and new list[object] formats."""
+        if v is None:
+            return []
+        normalized = []
+        for entry in v:
+            if isinstance(entry, str):
+                normalized.append({"tool": entry})
+                continue
+            if isinstance(entry, dict):
+                tool_name = entry.get("tool") or entry.get("id") or entry.get("name")
+                if not tool_name:
+                    raise ValueError(f"Invalid stage tool entry: {entry!r} (missing tool/id/name)")
+                args = entry.get("args", [])
+                normalized.append(
+                    {
+                        "tool": tool_name,
+                        "command": entry.get("command"),
+                        "args": args,
+                    }
+                )
+                continue
+            raise ValueError(f"Invalid stage tool entry type: {type(entry)}")
+        return normalized
 
 
 class PipelineConfig(BaseModel):
@@ -501,7 +682,8 @@ def get_stage_tool_definitions(
     all_tools_dict = get_all_tools()
     name_to_tool: Dict[str, ToolDefinition] = {t.name: t for t in all_tools_dict.values()}
 
-    for tool_name in stage_config.tools:
+    for tool_cfg in stage_config.tools:
+        tool_name = tool_cfg.tool
         tool_def = get_tool(tool_name)
         if tool_def is None:
             # Fallback: try matching by display name (frontend sends this)
@@ -509,6 +691,26 @@ def get_stage_tool_definitions(
         if tool_def is None:
             logger.warning(f"Tool '{tool_name}' not found in registry (tried key and display name), skipping")
             continue
+
+        # Optional stage-level command customization.
+        # - command: replaces tool default command entirely
+        # - args: appends tokens to the selected base command
+        command_override = tool_cfg.effective_command
+        if command_override:
+            effective_command = command_override
+        elif tool_cfg.args:
+            effective_command = f"{tool_def.container.command} {' '.join(shlex.quote(arg) for arg in tool_cfg.args)}"
+        else:
+            effective_command = tool_def.container.command
+
+        if effective_command != tool_def.container.command:
+            tool_def = tool_def.model_copy(
+                update={
+                    "container": tool_def.container.model_copy(
+                        update={"command": effective_command}
+                    )
+                }
+            )
 
         if tool_def.is_baseline:
             baseline_tool = tool_def
@@ -578,7 +780,9 @@ def create_workflow_from_combination(
     combination: Dict[str, List[ToolDefinition]],
     config: PipelineConfig,
     pipeline_id: str = "",
-    evaluators: Optional[Dict[str, EvaluatorDefinition]] = None
+    evaluators: Optional[Dict[str, EvaluatorDefinition]] = None,
+    attack_config_path: Optional[str] = None,
+    attack_config: Optional[Dict[str, Any]] = None,
 ) -> Workflow:
     """
     Create a workflow from a tool combination.
@@ -679,7 +883,9 @@ def create_workflow_from_combination(
             workflow=workflow,
             evaluators=evaluators,
             pipeline_id=pipeline_id,
-            last_deployment_task=last_deployment_task
+            last_deployment_task=last_deployment_task,
+            attack_config_path=attack_config_path,
+            attack_config=attack_config,
         )
     
     return workflow
@@ -696,6 +902,7 @@ def create_pipeline_from_config(
     dataset_variant: Optional[str] = None,
     tools_override: Optional[Dict[str, List[str]]] = None,
     model_script: Optional[str] = None,
+    attack_config_path: Optional[str] = None,
 ) -> Pipeline:
     """
     Create a complete Pipeline instance from a configuration file.
@@ -732,18 +939,25 @@ def create_pipeline_from_config(
     except FileNotFoundError:
         logger.warning(f"Tools config file not found at {tools_yaml_path}, continuing without tool registry")
     
+    # Load optional attack configuration once and propagate to evaluator task payloads.
+    attack_config = load_attack_config(attack_config_path)
+
     # Load evaluators if enabled (built-ins always registered; YAML merges on top)
     evaluators = None
     if include_evaluation:
         try:
             init_evaluator_registry(evaluators_yaml_path)
             evaluators = get_all_evaluators()
+            if attack_config:
+                evaluators = select_evaluators_for_attack_config(evaluators, attack_config)
             logger.info(f"Pipeline will attach {len(evaluators)} evaluator(s) per workflow")
         except Exception as e:
             logger.warning(f"Failed to load evaluators: {e}")
             global _EVALUATOR_REGISTRY
             _EVALUATOR_REGISTRY = _builtin_evaluator_definitions().copy()
             evaluators = get_all_evaluators()
+            if attack_config:
+                evaluators = select_evaluators_for_attack_config(evaluators, attack_config)
     
     # Clear task registry for a fresh start if requested
     if clear_registry:
@@ -772,7 +986,9 @@ def create_pipeline_from_config(
     if tools_override:
         for stage_name, tool_names in tools_override.items():
             if stage_name in config.pipeline:
-                config.pipeline[stage_name] = StageConfig(tools=tool_names)
+                config.pipeline[stage_name] = StageConfig(
+                    tools=[{"tool": tool_name} for tool_name in tool_names]
+                )
             else:
                 logger.warning(f"tools_override: unknown stage '{stage_name}', skipping")
 
@@ -800,7 +1016,9 @@ def create_pipeline_from_config(
         workflow = create_workflow_from_combination(
             combo_id, combo, config, 
             pipeline_id=pipeline.id,
-            evaluators=evaluators
+            evaluators=evaluators,
+            attack_config_path=attack_config_path,
+            attack_config=attack_config,
         )
         pipeline.add_workflow(workflow)
     

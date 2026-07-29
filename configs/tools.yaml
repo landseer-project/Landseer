@@ -17,13 +17,22 @@ tools:
       image: ghcr.io/landseer-project/pre_xgbod:v2
       command: python3 main.py
       runtime: null
+
+  pre_xgbod_celeba:
+    name: pre-xgbod-celeba
+    defense_stage: pre_training
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/pre_xgbod_celeba:v1
+      command: python3 main.py
+      runtime: null
   
   pre_watermarkbn:
     name: pre-watermarkbn
     defense_stage: pre_training
     is_baseline: false
     container:
-      image: ghcr.io/landseer-project/pre_watermarkbn:v1
+      image: ghcr.io/landseer-project/pre_watermarkbn:v2
       command: python3 main.py
       runtime: null
 
@@ -125,6 +134,15 @@ tools:
     is_baseline: false
     container:
       image: ghcr.io/landseer-project/post_magnet:v4
+      command: python3 main.py
+      runtime: null
+
+  post_magnet_celeba:
+    name: post-magnet-celeba
+    defense_stage: post_training
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/post_magnet_celeba:v1
       command: python3 main.py
       runtime: null
 

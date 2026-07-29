@@ -97,7 +97,16 @@ def validate_pipeline_tool_stages(
         stage_cfg = pipeline.get(stage_name)
         if stage_cfg is None:
             continue
-        tool_ids: List[str] = getattr(stage_cfg, "tools", None) or []
+        raw_tools = getattr(stage_cfg, "tools", None) or []
+        tool_ids: List[str] = []
+        for tool_entry in raw_tools:
+            # Supports both legacy list[str] and StageToolConfig/list[dict] styles.
+            if isinstance(tool_entry, str):
+                tool_ids.append(tool_entry)
+            else:
+                tool_name = getattr(tool_entry, "tool", None)
+                if tool_name:
+                    tool_ids.append(str(tool_name))
         allowed = STAGE_SYNONYMS.get(stage_name, frozenset({stage_name}))
 
         for tool_id in tool_ids:

@@ -9,6 +9,7 @@ import { Workers } from '@/pages/Workers';
 import { Tools } from '@/pages/Tools';
 import { Registry } from '@/pages/Registry';
 import { Metrics } from '@/pages/Metrics';
+import { Runs } from '@/pages/Runs';
 
 function App() {
   return (
@@ -24,6 +25,7 @@ function App() {
         <Route path="/registry" element={<Registry />} />
         <Route path="/metrics" element={<Metrics />} />
         <Route path="/pipelines/:id/metrics" element={<Metrics />} />
+        <Route path="/runs" element={<Runs />} />
       </Routes>
     </Layout>
   );

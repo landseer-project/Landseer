@@ -4,7 +4,8 @@ dataset:
   variant: clean
 
 model:
-  script: configs/model/config_model_resnet20.py
+
+  script: configs/model/config_model_resnet18_celeba.py
   framework: pytorch
 
 pipeline:

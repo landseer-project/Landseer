@@ -21,3 +21,9 @@ deviation_*
 node_modules/
 dist/
 docs/_build/
+CLAUDE-context.md
+.venv.bak/
+.cursor/
+
+# Local credentials
+helper_scripts/*gcs-bucket-key.json

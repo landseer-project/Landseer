@@ -392,11 +392,12 @@ class TestDatasetFetching:
         """_fetch_dataset should use manual data_path if provided."""
         worker = Worker(workspace_dir=temp_workspace, data_path=temp_data_dir)
         worker._client = MagicMock()
+        worker._client.get_dataset_info.return_value = {"model_script": None}
         
         result = worker._fetch_dataset()
         
         assert result == temp_data_dir
-        worker._client.get_dataset_info.assert_not_called()
+        worker._client.get_dataset_info.assert_called_once()
     
     def test_fetch_dataset_gets_info_from_backend(self, temp_workspace):
         """_fetch_dataset should get dataset info from backend."""
@@ -440,6 +441,7 @@ class TestDatasetFetching:
         worker = Worker(workspace_dir=temp_workspace, cache_dir=temp_cache_dir)
         worker._client = MagicMock()
         worker._two_level_cache = MagicMock()
+        worker._two_level_cache.manager = MagicMock()
         
         dataset_info = {
             "available": True,
@@ -451,19 +453,50 @@ class TestDatasetFetching:
         }
         worker._client.get_dataset_info.return_value = dataset_info
         
-        # Mock MinIO store
+        # Production path: MinIO client lives on TwoLevelCache.manager.minio
         mock_minio_store = MagicMock()
-        worker._two_level_cache._minio_store = mock_minio_store
+        mock_minio_store.is_available = True
+        worker._two_level_cache.manager.minio = mock_minio_store
         
         download_dir = temp_cache_dir / "datasets" / "cifar10" / "clean"
-        download_dir.mkdir(parents=True, exist_ok=True)
-        (download_dir / "data.npy").write_bytes(b"downloaded data")
         
         result = worker._fetch_dataset()
         
         # Should download from MinIO
         mock_minio_store.download_directory.assert_called_once()
         assert result == download_dir
+    
+    def test_fetch_dataset_downloads_model_script_from_minio(self, temp_workspace, temp_cache_dir):
+        """Model script should be fetched via model_script_minio_key (remote workers)."""
+        worker = Worker(workspace_dir=temp_workspace, cache_dir=temp_cache_dir)
+        worker._client = MagicMock()
+        worker._two_level_cache = MagicMock()
+        worker._two_level_cache.manager = MagicMock()
+        mock_minio_store = MagicMock()
+        mock_minio_store.is_available = True
+        mock_minio_store.download_file.return_value = True
+        worker._two_level_cache.manager.minio = mock_minio_store
+        
+        dataset_info = {
+            "available": True,
+            "name": "cifar10",
+            "variant": "clean",
+            "local_path": None,
+            "minio_key": "datasets/cifar10/clean",
+            "minio_available": True,
+            "model_script_minio_key": "datasets/cifar10/clean/config_model.py",
+        }
+        worker._client.get_dataset_info.return_value = dataset_info
+        
+        (temp_cache_dir / "datasets" / "cifar10" / "clean").mkdir(parents=True)
+        (temp_cache_dir / "datasets" / "cifar10" / "clean" / "data.npy").write_bytes(b"x")
+        
+        worker._fetch_dataset()
+        
+        mock_minio_store.download_file.assert_called_once()
+        call_kw = mock_minio_store.download_file.call_args
+        assert call_kw[0][0] == "datasets/cifar10/clean/config_model.py"
+        assert worker._model_script_path == temp_cache_dir / "datasets" / "cifar10" / "clean" / "config_model.py"
     
     def test_fetch_dataset_handles_missing_dataset(self, temp_workspace):
         """_fetch_dataset should handle missing dataset gracefully."""

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Quick cleanup of worker workspaces in /tmp
+# Quick cleanup of worker workspaces in /data/landseer
 # Run this to free disk space from task execution directories
 
 echo "=== Landseer Worker Workspace Cleanup ==="
@@ -7,11 +7,11 @@ echo ""
 
 # Show current usage
 echo "Current worker workspace usage:"
-du -sh /tmp/landseer_worker_* 2>/dev/null || echo "  No worker workspaces found"
+du -sh /data/landseer/workers/* 2>/dev/null || echo "  No worker workspaces found"
 echo ""
 
 # Count directories
-WORKSPACE_COUNT=$(ls -d /tmp/landseer_worker_* 2>/dev/null | wc -l)
+WORKSPACE_COUNT=$(ls -d /data/landseer/workers/* 2>/dev/null | wc -l)
 
 if [ "$WORKSPACE_COUNT" -eq 0 ]; then
     echo "✓ No worker workspaces to clean"
@@ -28,7 +28,7 @@ else
 fi
 
 if [[ $REPLY =~ ^[Yy]$ ]]; then
-    rm -rf /tmp/landseer_worker_*
+    rm -rf /data/landseer/workers/*
     echo "✓ Cleaned all worker workspaces"
 else
     echo "Skipped cleanup"

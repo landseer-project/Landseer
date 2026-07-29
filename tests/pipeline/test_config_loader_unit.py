@@ -35,6 +35,7 @@ from src.pipeline.config_loader import (
     DatasetConfig,
     ModelConfig,
     StageConfig,
+    StageToolConfig,
     PipelineConfig,
     EvaluatorDefinition,
     EvaluatorContainerConfig,
@@ -241,8 +242,21 @@ class TestStageConfig:
 
     def test_tools_list(self):
         cfg = StageConfig(tools=["pre_noop", "pre_xgbod"])
-        assert "pre_noop" in cfg.tools
+        assert cfg.tools[0].tool == "pre_noop"
         assert len(cfg.tools) == 2
+
+    def test_tools_dict_format_with_command(self):
+        cfg = StageConfig(
+            tools=[
+                {
+                    "tool": "pre_watermarkbn",
+                    "command": "python main.py --trigger_label 1 --exclude_target_class --trigger_size 12",
+                }
+            ]
+        )
+        assert isinstance(cfg.tools[0], StageToolConfig)
+        assert cfg.tools[0].tool == "pre_watermarkbn"
+        assert "--trigger_label 1" in (cfg.tools[0].command or "")
 
 
 # ============================================================================
