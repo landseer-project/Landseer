@@ -329,11 +329,100 @@ def get_all_evaluators() -> Dict[str, EvaluatorDefinition]:
     return _EVALUATOR_REGISTRY.copy()
 
 
+def load_attack_config(attack_config_path: Optional[str]) -> Dict[str, Any]:
+    """
+    Load optional attack configuration YAML.
+
+    Returns an empty dict when no path is provided. Raises ValueError for invalid
+    files so callers can fail fast with a clear message.
+    """
+    if not attack_config_path:
+        return {}
+
+    path = _resolve_config_path(attack_config_path)
+    if not path.exists() or not path.is_file():
+        raise ValueError(f"Attack configuration file not found: {attack_config_path}")
+
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except yaml.YAMLError as e:
+        raise ValueError(f"Failed to parse attack config YAML '{attack_config_path}': {e}")
+
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"Attack configuration at '{attack_config_path}' must be a mapping/object"
+        )
+
+    attacks = data.get("attacks", {})
+    if attacks is None:
+        attacks = {}
+    if not isinstance(attacks, dict):
+        raise ValueError(
+            f"Attack configuration at '{attack_config_path}' has non-object 'attacks' section"
+        )
+
+    normalized_attacks = {
+        str(k).strip().lower(): bool(v)
+        for k, v in attacks.items()
+        if str(k).strip()
+    }
+    data["attacks"] = normalized_attacks
+    data["_resolved_path"] = str(path.resolve())
+    return data
+
+
+def select_evaluators_for_attack_config(
+    evaluators: Dict[str, EvaluatorDefinition],
+    attack_config: Dict[str, Any],
+) -> Dict[str, EvaluatorDefinition]:
+    """
+    Filter evaluator set based on ``attacks`` flags in attack config.
+
+    ``clean`` is always preserved when present to keep a baseline metric.
+    """
+    if not attack_config:
+        return evaluators
+
+    attacks = attack_config.get("attacks", {})
+    if not isinstance(attacks, dict):
+        return evaluators
+
+    enabled = {k for k, v in attacks.items() if bool(v)}
+
+    attack_to_evaluator = {
+        "backdoor": "backdoor",
+        "adversarial": "adversarial",
+        "evasion": "adversarial",
+        "carlini": "adversarial",
+        "fairness": "fairness",
+        "fingerprinting": "fingerprinting",
+        "watermarking": "watermark",
+        "outlier": "ood",
+        "ood": "ood",
+    }
+
+    selected_keys = {attack_to_evaluator[name] for name in enabled if name in attack_to_evaluator}
+    if "clean" in evaluators:
+        selected_keys.add("clean")
+
+    selected = {k: v for k, v in evaluators.items() if k in selected_keys}
+    if selected:
+        return selected
+
+    # If no enabled attack maps to a registered evaluator, keep clean-only when available.
+    if "clean" in evaluators:
+        return {"clean": evaluators["clean"]}
+    return {}
+
+
 def add_evaluation_tasks_to_workflow(
     workflow: Workflow,
     evaluators: Dict[str, EvaluatorDefinition],
     pipeline_id: str,
-    last_deployment_task: Optional[Task] = None
+    last_deployment_task: Optional[Task] = None,
+    attack_config_path: Optional[str] = None,
+    attack_config: Optional[Dict[str, Any]] = None,
 ) -> List[Task]:
     """
     Add evaluation tasks to a workflow.
@@ -377,6 +466,9 @@ def add_evaluation_tasks_to_workflow(
             "required_artifacts": eval_def.required_artifacts,
             "workflow_tools_by_stage": tools_by_stage,
             "workflow_defense_types": sorted(defense_types),
+            "attack_config_path": attack_config_path,
+            "attack_flags": (attack_config or {}).get("attacks", {}),
+            "attack_config": attack_config or {},
         }
         
         # Create dependencies
@@ -688,7 +780,9 @@ def create_workflow_from_combination(
     combination: Dict[str, List[ToolDefinition]],
     config: PipelineConfig,
     pipeline_id: str = "",
-    evaluators: Optional[Dict[str, EvaluatorDefinition]] = None
+    evaluators: Optional[Dict[str, EvaluatorDefinition]] = None,
+    attack_config_path: Optional[str] = None,
+    attack_config: Optional[Dict[str, Any]] = None,
 ) -> Workflow:
     """
     Create a workflow from a tool combination.
@@ -789,7 +883,9 @@ def create_workflow_from_combination(
             workflow=workflow,
             evaluators=evaluators,
             pipeline_id=pipeline_id,
-            last_deployment_task=last_deployment_task
+            last_deployment_task=last_deployment_task,
+            attack_config_path=attack_config_path,
+            attack_config=attack_config,
         )
     
     return workflow
@@ -806,6 +902,7 @@ def create_pipeline_from_config(
     dataset_variant: Optional[str] = None,
     tools_override: Optional[Dict[str, List[str]]] = None,
     model_script: Optional[str] = None,
+    attack_config_path: Optional[str] = None,
 ) -> Pipeline:
     """
     Create a complete Pipeline instance from a configuration file.
@@ -842,18 +939,25 @@ def create_pipeline_from_config(
     except FileNotFoundError:
         logger.warning(f"Tools config file not found at {tools_yaml_path}, continuing without tool registry")
     
+    # Load optional attack configuration once and propagate to evaluator task payloads.
+    attack_config = load_attack_config(attack_config_path)
+
     # Load evaluators if enabled (built-ins always registered; YAML merges on top)
     evaluators = None
     if include_evaluation:
         try:
             init_evaluator_registry(evaluators_yaml_path)
             evaluators = get_all_evaluators()
+            if attack_config:
+                evaluators = select_evaluators_for_attack_config(evaluators, attack_config)
             logger.info(f"Pipeline will attach {len(evaluators)} evaluator(s) per workflow")
         except Exception as e:
             logger.warning(f"Failed to load evaluators: {e}")
             global _EVALUATOR_REGISTRY
             _EVALUATOR_REGISTRY = _builtin_evaluator_definitions().copy()
             evaluators = get_all_evaluators()
+            if attack_config:
+                evaluators = select_evaluators_for_attack_config(evaluators, attack_config)
     
     # Clear task registry for a fresh start if requested
     if clear_registry:
@@ -912,7 +1016,9 @@ def create_pipeline_from_config(
         workflow = create_workflow_from_combination(
             combo_id, combo, config, 
             pipeline_id=pipeline.id,
-            evaluators=evaluators
+            evaluators=evaluators,
+            attack_config_path=attack_config_path,
+            attack_config=attack_config,
         )
         pipeline.add_workflow(workflow)
     

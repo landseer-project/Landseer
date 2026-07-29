@@ -77,7 +77,7 @@ The backend manages tasks, workers, and pipeline state:
 cd /path/to/Landseer
 
 # Activate your virtualenv
-source ~/landseer-env/bin/activate
+source ../.shared/envs/landseer-dev-restructure/bin/activate
 
 # Start backend server
 PYTHONPATH=./src:. python -m src.backend.cli \
@@ -116,7 +116,7 @@ Workers execute tasks on the pipeline. Start at least one (typically matches you
 
 ```bash
 # Activate virtualenv
-source ~/landseer-env/bin/activate
+source .shared/envs/landseer-dev-restructure/bin/activate
 cd /path/to/Landseer
 
 # Terminal 1: Start worker 1 (GPU 0)
@@ -340,8 +340,8 @@ Landseer/
 ├── results/                    # CSV results
 │   ├── results_combinations.csv
 │   └── results_tools.csv
-├── cache/                      # Cached artifacts and logs
-└── run_logs/                   # Pipeline execution logs
+├── logs/                       # Pipeline execution logs
+└── /data/landseer/cache/        # Worker cache (if using the default worker cache path)
 ```
 
 ### Results CSV Format
@@ -473,6 +473,118 @@ docker run -d --name landseer-minio \
 
 ---
 
+## Configuration Macros
+
+Beyond command-line flags, Landseer supports environment variables for advanced configuration. These are useful for deployment scenarios, performance tuning, and integrations.
+
+### Worker Configuration
+
+| Variable | Purpose | Default | Example |
+|----------|---------|---------|---------|
+| `LANDSEER_TASK_TIMEOUT_SECONDS` | Task execution timeout | `7200` (2 hours) | `export LANDSEER_TASK_TIMEOUT_SECONDS=14400` |
+| `LANDSEER_USE_MINIO` | Enable remote MinIO caching | `true` | `export LANDSEER_USE_MINIO=false` |
+| `LANDSEER_WORKSPACE_RETENTION_HOURS` | Clean up old task workspace dirs after N hours | `24` | `export LANDSEER_WORKSPACE_RETENTION_HOURS=48` |
+
+### Dataset Configuration
+
+| Variable | Purpose | Default | Example |
+|----------|---------|---------|---------|
+| `LANDSEER_DATASETS_CONFIG` | Path to datasets registry YAML | `configs/datasets.yaml` | `export LANDSEER_DATASETS_CONFIG=/custom/datasets.yaml` |
+| `LANDSEER_CELEBA_DATA_PATH` | Override CelebA data location | `/data/landseer/landseer_old_data/data/celeba/clean` | `export LANDSEER_CELEBA_DATA_PATH=/mnt/celeba` |
+| `LANDSEER_DATASET_SOURCE_CIFAR10` | CIFAR10 source artifacts (optional) | None | `export LANDSEER_DATASET_SOURCE_CIFAR10=/data/sources` |
+| `LANDSEER_DATASET_SOURCE_CELEBA` | CelebA source artifacts (optional) | None | `export LANDSEER_DATASET_SOURCE_CELEBA=/data/sources` |
+| `LANDSEER_DATASET_IMAGE_CIFAR10` | Container image for CIFAR10 prep | `ghcr.io/landseer-project/dataset_cifar10:v1` | Set custom image registry |
+| `LANDSEER_DATASET_IMAGE_CELEBA` | Container image for CelebA prep | `ghcr.io/landseer-project/dataset_celeba:v1` | Set custom image registry |
+
+### Cache Configuration
+
+| Variable | Purpose | Default | Example |
+|----------|---------|---------|---------|
+| `LANDSEER_CACHE_MAX_SIZE_GB` | Maximum local cache size | `50` GB | `export LANDSEER_CACHE_MAX_SIZE_GB=200` |
+| `LANDSEER_CACHE_RETENTION_HOURS` | Clean up old cache artifacts after N hours | `72` | `export LANDSEER_CACHE_RETENTION_HOURS=168` |
+| `LANDSEER_HARDLINK_MACRO` | Enable hardlink optimization (deduplicate files on same filesystem) | `false` | `export LANDSEER_HARDLINK_MACRO=true` |
+| `LANDSEER_CONFIG_MODEL_SYMLINK` | Use symlinks for model configs | `false` | `export LANDSEER_CONFIG_MODEL_SYMLINK=true` |
+
+### Container Runtime Configuration
+
+| Variable | Purpose | Default | Example |
+|----------|---------|---------|---------|
+| `LANDSEER_DOCKER_SHM_SIZE` | Docker `/dev/shm` size (needed for large datasets) | `8g` (CelebA) or `1g` (other) | `export LANDSEER_DOCKER_SHM_SIZE=16g` |
+| `LANDSEER_DOCKER_NOFILE` | Docker max open files limit | `65535` | `export LANDSEER_DOCKER_NOFILE=131072` |
+
+### Remote Storage (MinIO) Configuration
+
+When using distributed workers or multi-machine setups, configure MinIO for artifact caching:
+
+| Variable | Purpose | Default | Example |
+|----------|---------|---------|---------|
+| `MINIO_ENDPOINT` | MinIO server address | `localhost:9000` | `export MINIO_ENDPOINT=minio.example.com:9000` |
+| `MINIO_ACCESS_KEY` | MinIO access key | `minioadmin` | `export MINIO_ACCESS_KEY=landseer_key` |
+| `MINIO_SECRET_KEY` | MinIO secret key | `minioadmin` | `export MINIO_SECRET_KEY=secret_key_here` |
+| `MINIO_BUCKET` | MinIO bucket name | `landseer-artifacts` | `export MINIO_BUCKET=my-artifacts` |
+| `MINIO_SECURE` | Use HTTPS for MinIO | `false` | `export MINIO_SECURE=true` |
+| `MINIO_REGION` | MinIO region | `us-east-1` | `export MINIO_REGION=eu-west-1` |
+
+### Database Configuration
+
+For result persistence with MySQL (optional; SQLite is default):
+
+| Variable | Purpose | Default | Example |
+|----------|---------|---------|---------|
+| `LANDSEER_DB_TYPE` | Database backend | `sqlite` | `export LANDSEER_DB_TYPE=mysql` |
+| `LANDSEER_DB_HOST` | MySQL host | `localhost` | `export LANDSEER_DB_HOST=db.example.com` |
+| `LANDSEER_DB_PORT` | MySQL port | `3306` | `export LANDSEER_DB_PORT=3307` |
+| `LANDSEER_DB_USER` | MySQL username | `landseer` | `export LANDSEER_DB_USER=app_user` |
+| `LANDSEER_DB_PASSWORD` | MySQL password | Empty string | `export LANDSEER_DB_PASSWORD=secure_pass` |
+| `LANDSEER_DB_NAME` | MySQL database name | `landseer` | `export LANDSEER_DB_NAME=landseer_prod` |
+
+### Error Tracking (Sentry)
+
+For production monitoring and error reporting:
+
+| Variable | Purpose | Default | Example |
+|----------|---------|---------|---------|
+| `SENTRY_DSN` | Sentry project URL | None (disabled) | `export SENTRY_DSN=https://key@sentry.io/123456` |
+| `SENTRY_ENVIRONMENT` | Environment label | `development` | `export SENTRY_ENVIRONMENT=production` |
+| `SENTRY_TRACES_SAMPLE_RATE` | Trace sampling rate (0.0-1.0) | `0.0` | `export SENTRY_TRACES_SAMPLE_RATE=0.1` |
+
+### Quick Configuration Examples
+
+**Development (Local, Single Worker)**
+```bash
+# Default setup with minimal config
+export LANDSEER_DB_TYPE=sqlite
+export LANDSEER_USE_MINIO=false
+export LANDSEER_CACHE_DIR=./cache
+```
+
+**Production (Multi-Worker with Shared Cache)**
+```bash
+# Enable distributed caching and persistent storage
+export LANDSEER_DB_TYPE=mysql
+export LANDSEER_DB_HOST=db.example.com
+export LANDSEER_DB_USER=landseer
+export LANDSEER_DB_PASSWORD=secure_password
+export LANDSEER_USE_MINIO=true
+export MINIO_ENDPOINT=minio.example.com:9000
+export MINIO_ACCESS_KEY=landseer_key
+export MINIO_SECRET_KEY=secret_key
+export LANDSEER_HARDLINK_MACRO=true
+export LANDSEER_CACHE_MAX_SIZE_GB=500
+export LANDSEER_CACHE_RETENTION_HOURS=168
+```
+
+**Large Dataset Processing (CelebA)**
+```bash
+# Tuned for memory-intensive dataset operations
+export LANDSEER_DOCKER_SHM_SIZE=16g
+export LANDSEER_CACHE_MAX_SIZE_GB=500
+export LANDSEER_DOCKER_NOFILE=131072
+export LANDSEER_CELEBA_DATA_PATH=/mnt/fast_storage/celeba
+```
+
+---
+
 ## Troubleshooting
 
 ### Backend won't start
@@ -554,6 +666,22 @@ PYTHONPATH=./src:. python -m src.worker.cli \
 # Check disk usage
 du -sh /data/landseer/cache
 du -sh results/
+```
+
+### Optional: Enable hardlink mode
+
+Use this to reduce duplicate file copies when source/destination are on the same filesystem.
+
+```bash
+# Enable hardlink macro (accepted truthy values: 1, true, yes)
+export LANDSEER_HARDLINK_MACRO=true
+
+# Then start worker normally
+PYTHONPATH=./src:. python -m src.worker.cli \
+  --backend-url http://localhost:8000 \
+  --workspace /data/landseer/workers/worker_1 \
+  --cache-dir /data/landseer/cache \
+  --gpu 0
 ```
 
 ---

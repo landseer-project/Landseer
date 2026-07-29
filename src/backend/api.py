@@ -15,11 +15,9 @@ import asyncio
 import csv
 from contextlib import asynccontextmanager
 from datetime import datetime
-import json
 import os
 import socket
 from pathlib import Path
-import time
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Depends, Query, Header
@@ -42,17 +40,6 @@ except ImportError:
     DatabaseService = None
 
 logger = get_logger(__name__)
-
-
-def _debug_log(
-    run_id: str,
-    hypothesis_id: str,
-    location: str,
-    message: str,
-    data: Dict[str, Any],
-) -> None:
-    # Debug-session instrumentation disabled.
-    return
 
 
 # ==============================================================================
@@ -329,26 +316,8 @@ class SchedulerState:
         self.pipeline = pipeline
         
         if scheduler_type == "priority":
-            # region agent log
-            _debug_log(
-                "scheduler-init",
-                "W8",
-                "api.py:SchedulerState.initialize:before_priority_scheduler_ctor",
-                "About to construct PriorityScheduler",
-                {"workflow_count": len(pipeline.workflows), "pid": os.getpid(), "hostname": socket.gethostname()},
-            )
-            # endregion
             t_sched_ctor_start = time.time()
             self.scheduler = PriorityScheduler(pipeline)
-            # region agent log
-            _debug_log(
-                "scheduler-init",
-                "W8",
-                "api.py:SchedulerState.initialize:after_priority_scheduler_ctor",
-                "PriorityScheduler constructed",
-                {"duration_ms": int((time.time() - t_sched_ctor_start) * 1000), "has_scheduler": self.scheduler is not None},
-            )
-            # endregion
         else:
             raise ValueError(f"Unknown scheduler type: {scheduler_type}")
         
@@ -1108,16 +1077,6 @@ async def get_all_tasks(
     Query Parameters:
         status: Filter by task status (pending, running, completed, failed)
     """
-    # region agent log
-    t_tasks_start = time.time()
-    _debug_log(
-        "tasks-list",
-        "W11",
-        "api.py:get_all_tasks:entry",
-        "Tasks endpoint requested",
-        {"status": status, "limit": limit, "offset": offset},
-    )
-    # endregion
     if status:
         try:
             task_status = TaskStatus(status.lower())
@@ -1133,22 +1092,6 @@ async def get_all_tasks(
     total_matching = len(tasks)
     paged_tasks = tasks[offset:offset + limit]
     task_responses = [task_to_response(t, state) for t in paged_tasks]
-    # region agent log
-    _debug_log(
-        "tasks-list",
-        "W11",
-        "api.py:get_all_tasks:exit",
-        "Tasks endpoint response prepared",
-        {
-            "status": status,
-            "total_matching": total_matching,
-            "returned": len(task_responses),
-            "limit": limit,
-            "offset": offset,
-            "duration_ms": int((time.time() - t_tasks_start) * 1000),
-        },
-    )
-    # endregion
     return TaskListResponse(
         tasks=task_responses,
         total=total_matching
@@ -1611,32 +1554,7 @@ async def worker_claim_task(
     """
     if worker_id not in state.workers:
         raise HTTPException(status_code=404, detail=f"Worker '{worker_id}' not found")
-    # region agent log
-    _debug_log(
-        state.workers.get(worker_id, {}).get("current_task_id") or "worker-claim",
-        "W1",
-        "api.py:worker_claim_task:entry",
-        "Worker claim request received",
-        {
-            "worker_id": worker_id,
-            "pid": os.getpid(),
-            "hostname": socket.gethostname(),
-            "state_initialized": state.is_initialized(),
-            "has_scheduler": state.scheduler is not None,
-            "worker_status": state.workers.get(worker_id, {}).get("status"),
-        },
-    )
-    # endregion
     if not state.is_initialized() or state.scheduler is None:
-        # region agent log
-        _debug_log(
-            "worker-claim",
-            "W1",
-            "api.py:worker_claim_task:not_initialized",
-            "Claim rejected because scheduler is not initialized",
-            {"worker_id": worker_id},
-        )
-        # endregion
         return NextTaskResponse(
             has_task=False,
             task=None,
@@ -1657,24 +1575,6 @@ async def worker_claim_task(
         pass
     task = scheduler.get_next_task()
     progress = scheduler.get_progress()
-    # region agent log
-    _debug_log(
-        task.id if task else "worker-claim",
-        "W1",
-        "api.py:worker_claim_task:after_get_next_task",
-        "Scheduler get_next_task evaluated",
-        {
-            "worker_id": worker_id,
-            "has_task": task is not None,
-            "pending": progress.get("pending"),
-            "running": progress.get("running"),
-            "completed": progress.get("completed"),
-            "failed": progress.get("failed"),
-            "ready_count": ready_count,
-            "blocked_pending_count": blocked_pending_count,
-        },
-    )
-    # endregion
     
     if task is None:
         if progress["running"] > 0:
@@ -2930,6 +2830,7 @@ class PipelineRunListResponse(BaseModel):
 class RestartPipelineRunRequest(BaseModel):
     """Request to restart a pipeline run."""
     use_cache: bool = Field(default=True, description="Whether to use cache")
+    attack_config_path: Optional[str] = Field(default=None, description="Override attack config path")
 
 
 @app.get("/api/pipeline-configs", response_model=PipelineConfigListResponse, tags=["Pipeline Configs"])
@@ -3017,21 +2918,6 @@ async def start_pipeline_run(
     _auth: None = Depends(_require_pipeline_key),
 ):
     """Start a new pipeline run for a configuration."""
-    # region agent log
-    _debug_log(
-        "run-start",
-        "W4",
-        "api.py:start_pipeline_run:entry",
-        "Start pipeline run request received",
-        {
-            "config_id": config_id,
-            "pid": os.getpid(),
-            "hostname": socket.gethostname(),
-            "state_initialized": state.is_initialized(),
-            "has_scheduler": state.scheduler is not None,
-        },
-    )
-    # endregion
 
     def _start_pipeline_run_background(
         run_id: str,
@@ -3052,15 +2938,6 @@ async def start_pipeline_run(
         from ..data import DatasetManager
 
         try:
-            # region agent log
-            _debug_log(
-                run_id,
-                "W6",
-                "api.py:_start_pipeline_run_background:entry",
-                "Background initializer entered",
-                {"pid": os.getpid(), "hostname": socket.gethostname(), "run_number": run_number},
-            )
-            # endregion
             # Step 1b: transition to RUNNING immediately after background init starts.
             # Pipeline creation for large configs can take minutes; keeping PENDING
             # that whole time makes the UI look stuck even though work is active.
@@ -3080,19 +2957,12 @@ async def start_pipeline_run(
                 dataset_variant=request_data.get("dataset_variant") or None,
                 tools_override=request_data.get("tools_override") or None,
                 model_script=request_data.get("model_script") or None,
+                attack_config_path=(
+                    request_data.get("attack_config_path")
+                    or request_data.get("config_attack_config_path")
+                    or None
+                ),
             )
-            # region agent log
-            _debug_log(
-                run_id,
-                "W6",
-                "api.py:_start_pipeline_run_background:after_create_pipeline",
-                "create_pipeline_from_config completed in background",
-                {
-                    "duration_ms": int((time.time() - t_create_start) * 1000),
-                    "workflow_count": len(pipeline.workflows),
-                },
-            )
-            # endregion
 
             # Bind pipeline and all tasks/workflows to this run's ID
             pipeline.id = run_id
@@ -3108,15 +2978,6 @@ async def start_pipeline_run(
             # Step 3: Dataset context (best-effort)
             ctx = get_backend_context()
             if ctx:
-                # region agent log
-                _debug_log(
-                    run_id,
-                    "W7",
-                    "api.py:_start_pipeline_run_background:dataset_ctx_entry",
-                    "Entered dataset context setup",
-                    {"has_dataset_info": bool(ctx.dataset_info), "has_store": bool(ctx.store)},
-                )
-                # endregion
                 ctx.pipeline = pipeline
                 try:
                     cfg = load_pipeline_config(config_path)
@@ -3128,19 +2989,6 @@ async def start_pipeline_run(
                         or current_ds.get("name") != effective_ds_name
                         or current_ds.get("variant") != effective_ds_variant
                     )
-                    # region agent log
-                    _debug_log(
-                        run_id,
-                        "W7",
-                        "api.py:_start_pipeline_run_background:dataset_ctx_needs_prepare",
-                        "Computed dataset prepare requirement",
-                        {
-                            "effective_ds_name": effective_ds_name,
-                            "effective_ds_variant": effective_ds_variant,
-                            "needs_prepare": needs_prepare,
-                        },
-                    )
-                    # endregion
                     if needs_prepare:
                         base_dir = Path("./data").resolve()
                         manager = ctx.dataset_manager or DatasetManager(base_dir)
@@ -3156,15 +3004,6 @@ async def start_pipeline_run(
                             poisoning=poisoning,
                             **cfg.dataset.params,
                         )
-                        # region agent log
-                        _debug_log(
-                            run_id,
-                            "W7",
-                            "api.py:_start_pipeline_run_background:dataset_prepare_done",
-                            "Dataset prepare call finished",
-                            {"duration_ms": int((time.time() - t_prepare_start) * 1000), "has_ds_info": bool(ds_info)},
-                        )
-                        # endregion
                         if ds_info:
                             ctx.dataset_info = ds_info.to_dict()
                             ctx.dataset_manager = manager
@@ -3174,15 +3013,6 @@ async def start_pipeline_run(
                                 try:
                                     t_upload_start = time.time()
                                     ctx.store.upload_directory(ds_info.output_dir, dataset_key)
-                                    # region agent log
-                                    _debug_log(
-                                        run_id,
-                                        "W7",
-                                        "api.py:_start_pipeline_run_background:dataset_upload_done",
-                                        "Dataset upload to object store finished",
-                                        {"duration_ms": int((time.time() - t_upload_start) * 1000), "dataset_key": dataset_key},
-                                    )
-                                    # endregion
                                     ctx.dataset_info["minio_key"] = dataset_key
 
                                     model_script = cfg.model.get("script") if cfg and cfg.model else None
@@ -3220,43 +3050,9 @@ async def start_pipeline_run(
                 except Exception as e:
                     logger.warning(f"Dataset context setup failed for run {run_id}: {e}")
                 set_backend_context(ctx)
-                # region agent log
-                _debug_log(
-                    run_id,
-                    "W7",
-                    "api.py:_start_pipeline_run_background:dataset_ctx_exit",
-                    "Finished dataset context setup",
-                    {"has_dataset_info": bool(ctx.dataset_info)},
-                )
-                # endregion
 
             # Step 4: Initialize scheduler
-            # region agent log
-            _debug_log(
-                run_id,
-                "W7",
-                "api.py:_start_pipeline_run_background:before_initialize",
-                "About to initialize scheduler",
-                {"pid": os.getpid(), "hostname": socket.gethostname()},
-            )
-            # endregion
             state.initialize(pipeline, scheduler_type="priority")
-            # region agent log
-            _debug_log(
-                run_id,
-                "W2",
-                "api.py:_start_pipeline_run_background:post_initialize",
-                "Scheduler initialized for run",
-                {
-                    "is_initialized": state.is_initialized(),
-                    "pid": os.getpid(),
-                    "hostname": socket.gethostname(),
-                    "workflow_count": len(pipeline.workflows),
-                    "run_use_cache": bool(request_data.get("use_cache", True)),
-                    "progress": state.scheduler.get_progress() if state.scheduler else None,
-                },
-            )
-            # endregion
 
             # Step 5: Mark RUNNING and sync to DB
             with session_scope() as session:
@@ -3269,15 +3065,6 @@ async def start_pipeline_run(
             logger.info(f"Run {run_id} initialized in background and marked RUNNING")
         except Exception as e:
             logger.error(f"Failed to initialize run {run_id} in background: {e}", exc_info=True)
-            # region agent log
-            _debug_log(
-                run_id,
-                "W3",
-                "api.py:_start_pipeline_run_background:exception",
-                "Background initialization failed",
-                {"error_type": type(e).__name__, "error": str(e)},
-            )
-            # endregion
             # Persist failure state so UI reflects startup errors.
             try:
                 with session_scope() as session:
@@ -3291,6 +3078,7 @@ async def start_pipeline_run(
         from ..db import get_session, session_scope, PipelineRunRepository, PipelineRunStatus
         from ..pipeline.config_loader import (
             load_pipeline_config,
+            load_attack_config,
             validate_pipeline_tool_dataset_compatibility,
         )
         from ..pipeline.stage_validation import load_tools_and_validate_pipeline_stages
@@ -3300,16 +3088,13 @@ async def start_pipeline_run(
         # Get config
         config = get_config_by_id(config_id)
         if not config:
-            # region agent log
-            _debug_log(
-                "run-start",
-                "W5",
-                "api.py:start_pipeline_run:config_not_found",
-                "Pipeline config not found",
-                {"config_id": config_id},
-            )
-            # endregion
             raise HTTPException(status_code=404, detail=f"Pipeline config '{config_id}' not found")
+
+        effective_attack_config_path = request.attack_config_path or config.attack_config_path
+        try:
+            load_attack_config(effective_attack_config_path)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
         config_path_obj = Path(config.config_path)
         if config_path_obj.exists():
@@ -3334,20 +3119,6 @@ async def start_pipeline_run(
             )
             if compatibility_issues:
                 first = compatibility_issues[0]
-                # region agent log
-                _debug_log(
-                    "run-start",
-                    "W5",
-                    "api.py:start_pipeline_run:compatibility_reject",
-                    "Compatibility validation rejected run start",
-                    {
-                        "tool_id": first.get("tool_id"),
-                        "stage": first.get("stage"),
-                        "requested_dataset": first.get("requested_dataset"),
-                        "supported_datasets": first.get("supported_datasets"),
-                    },
-                )
-                # endregion
                 raise HTTPException(
                     status_code=400,
                     detail=(
@@ -3368,15 +3139,6 @@ async def start_pipeline_run(
             run_repo = PipelineRunRepository(session)
             active_runs = run_repo.get_active_runs_for_config(config_id)
             if active_runs:
-                # region agent log
-                _debug_log(
-                    "run-start",
-                    "W5",
-                    "api.py:start_pipeline_run:active_run_conflict",
-                    "Run start blocked due to active runs",
-                    {"config_id": config_id, "active_run_count": len(active_runs)},
-                )
-                # endregion
                 raise HTTPException(
                     status_code=409,
                     detail=f"Cannot start new run: {len(active_runs)} active run(s) already exist for this config"
@@ -3401,18 +3163,10 @@ async def start_pipeline_run(
             run_created_at = run_obj.created_at.isoformat()
             run_started_at = run_obj.started_at.isoformat() if run_obj.started_at else None
         # ── session closed here; SQLite lock released ──────────────────────────
-        # region agent log
-        _debug_log(
-            run_id_val,
-            "W5",
-            "api.py:start_pipeline_run:db_run_created",
-            "Run row created in DB and pending background enqueue",
-            {"config_id": config_id, "run_number": run_number_val, "status": run_status},
-        )
-        # endregion
 
         # Heavy initialization moved to background task so UI/API call can return fast.
         request_data = request.model_dump()
+        request_data["config_attack_config_path"] = config.attack_config_path
         asyncio.create_task(
             asyncio.to_thread(
                 _start_pipeline_run_background,
@@ -3424,15 +3178,6 @@ async def start_pipeline_run(
                 state,
             )
         )
-        # region agent log
-        _debug_log(
-            run_id_val,
-            "W5",
-            "api.py:start_pipeline_run:enqueued",
-            "Background initialization enqueued",
-            {"config_id": config_id, "run_number": run_number_val},
-        )
-        # endregion
 
         # Once initialization is successfully enqueued, report running to clients.
         # The DB row may still be pending for a brief moment until background
@@ -3458,15 +3203,6 @@ async def start_pipeline_run(
     except HTTPException:
         raise
     except Exception as e:
-        # region agent log
-        _debug_log(
-            "run-start",
-            "W5",
-            "api.py:start_pipeline_run:exception",
-            "Unhandled exception in start_pipeline_run",
-            {"error_type": type(e).__name__, "error": str(e)},
-        )
-        # endregion
         logger.error(f"Failed to start pipeline run: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to start pipeline run: {str(e)}")
 
@@ -3794,7 +3530,7 @@ async def restart_pipeline_run(
     try:
         from ..db import get_session, session_scope, PipelineRunRepository, PipelineRunStatus
         from .config_discovery import get_config_by_id
-        from ..pipeline.config_loader import create_pipeline_from_config
+        from ..pipeline.config_loader import create_pipeline_from_config, load_attack_config
         import uuid
         from datetime import datetime
         
@@ -3816,6 +3552,12 @@ async def restart_pipeline_run(
             config = get_config_by_id(old_run.pipeline_config_id)
             if not config:
                 raise HTTPException(status_code=404, detail=f"Pipeline config '{old_run.pipeline_config_id}' not found")
+
+            effective_attack_config_path = request.attack_config_path or config.attack_config_path
+            try:
+                load_attack_config(effective_attack_config_path)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
             
             # If not using cache, delete cache from previous run
             if not request.use_cache:
@@ -3841,7 +3583,8 @@ async def restart_pipeline_run(
                 evaluators_yaml_path="configs/evaluators.yaml",
                 pipeline_name=f"{config.name} (Run {run_number})",
                 clear_registry=True,
-                include_evaluation=True
+                include_evaluation=True,
+                attack_config_path=effective_attack_config_path,
             )
             
             # Set pipeline ID to new run_id

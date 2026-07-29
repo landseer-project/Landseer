@@ -34,24 +34,6 @@ except ImportError:
     CacheConfig = None
 
 logger = get_logger(__name__)
-DEBUG_LOG_PATH = "/share/landseer/workspace-ayushi/Landseer/.cursor/debug-26edf1.log"
-
-
-def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: Dict[str, Any]) -> None:
-    try:
-        payload = {
-            "sessionId": "26edf1",
-            "runId": run_id,
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data,
-            "timestamp": int(time.time() * 1000),
-        }
-        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, separators=(",", ":")) + "\n")
-    except Exception:
-        pass
 
 
 class Worker:
@@ -647,18 +629,6 @@ class Worker:
                 # per-task output lineage cache to avoid mixing dependency outputs
                 # from prior runs (e.g. CIFAR ancestry leaking into CelebA runs).
                 self._task_outputs.clear()
-                # region agent log
-                _debug_log(
-                    run_id=task.id,
-                    hypothesis_id="W4",
-                    location="src/worker/cli.py:_execute_task",
-                    message="cleared per-run task output cache on run switch",
-                    data={
-                        "previous_run_id": self._active_run_id,
-                        "new_run_id": task.run_id,
-                    },
-                )
-                # endregion
                 self._active_run_id = task.run_id
 
             # Build parent_hashes (for cache key) and ancestor_dirs (ordered
@@ -708,20 +678,6 @@ class Worker:
             run_use_cache = bool(task.config.get("_run_use_cache", True))
             effective_use_cache = self.use_cache and run_use_cache
             extra_mounts: Optional[Dict[str, str]] = None
-            # region agent log
-            _debug_log(
-                run_id=task.id,
-                hypothesis_id="W3",
-                location="src/worker/cli.py:_execute_task",
-                message="resolved cache policy for task",
-                data={
-                    "worker_use_cache": self.use_cache,
-                    "run_use_cache": run_use_cache,
-                    "effective_use_cache": effective_use_cache,
-                    "run_id": task.run_id,
-                },
-            )
-            # endregion
 
             if effective_use_cache:
                 cached_path = self._check_cache(cache_key, task, parent_hashes, cache_context)

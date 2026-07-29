@@ -3,7 +3,6 @@ data/
 results/
 logs/
 tools/
-
 .venv/
 venv/
 __pycache__/
@@ -13,11 +12,14 @@ __pycache__/
 .env*
 *.log
 *.csv
-
 deviation_*
-
 # Node.js (local installation)
 .node/
 node_modules/
 dist/
-docs/_build/helper_scripts/landseer-494115-4f746115c9cf-gcs-bucket-key.json
+docs/_build/
+CLAUDE-context.md
+.venv.bak/
+.cursor/
+# Local credentials
+helper_scripts/*gcs-bucket-key.json
