@@ -62,6 +62,7 @@ import type { PipelineConfig, PipelineRun, ToolInfo } from '@/types/api';
 const DATASETS = [
   { id: 'cifar10', label: 'CIFAR-10', description: 'Image classification (10 classes)' },
   { id: 'celeba', label: 'CelebA', description: 'Face attribute recognition' },
+  { id: 'mnist', label: 'MNIST', description: 'Handwritten digit recognition' },
 ] as const;
 type DatasetId = (typeof DATASETS)[number]['id'];
 
