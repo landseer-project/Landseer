@@ -31,6 +31,8 @@ def _hardlink_macro_enabled() -> bool:
 
 def _same_content(src: Path, dst: Path) -> bool:
     """Return True when two regular files are byte-for-byte identical."""
+    src = Path(src)
+    dst = Path(dst)
     if not src.exists() or not dst.exists() or not src.is_file() or not dst.is_file():
         return False
     try:
@@ -39,8 +41,13 @@ def _same_content(src: Path, dst: Path) -> bool:
         return False
 
 
-def _link_or_copy(src: Path, dst: Path) -> None:
-    """Copy a file, or hard-link only when the destination is already identical."""
+def _link_or_copy(src, dst) -> None:
+    """Copy a file, or hard-link only when the destination is already identical.
+
+    Note: shutil.copytree passes str paths to copy_function, so coerce to Path.
+    """
+    src = Path(src)
+    dst = Path(dst)
     if not _hardlink_macro_enabled():
         shutil.copy2(src, dst)
         return
