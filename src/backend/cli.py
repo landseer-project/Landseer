@@ -58,6 +58,13 @@ def create_parser() -> argparse.ArgumentParser:
         default="configs/tools.yaml",
         help="Path to tools configuration file (default: configs/tools.yaml)",
     )
+
+    parser.add_argument(
+        "--data-dir",
+        type=str,
+        default="/data/landseer/landseer_old_data/data/",
+        help="Path to the data directory (default: /data/landseer/landseer_old_data/data/)",
+    )
     
     return parser
 
@@ -88,6 +95,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         context = initialize_backend(
             tools_config_path=args.tools_config,
             pipeline_config_path=args.config,
+            data_dir=args.data_dir
         )
         set_backend_context(context)
         
