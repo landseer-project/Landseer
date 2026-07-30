@@ -1,6 +1,11 @@
 datasets:
   cifar10:
     default_image: ghcr.io/landseer-project/dataset_cifar10:v1
+    required_files:
+      - data.npy
+      - labels.npy
+      - test_data.npy
+      - test_labels.npy
     variants:
       clean:
         image: ghcr.io/landseer-project/dataset_cifar10:v1
@@ -9,15 +14,34 @@ datasets:
           landseer.variant: clean
 
   celeba:
-    default_image: ghcr.io/landseer-project/dataset_celeba_hf:v1
-    # Full CelebA downloaded dataset root (contains img_align_celeba/img_align_celeba).
-    # Override per host: LANDSEER_DATASET_SOURCE_CELEBA=/path/to/data
+    default_image: ghcr.io/landseer-project/dataset_celeba:v1
     source_artifacts_dir: /data/landseer/landseer_old_data/data/celeba/downloaded_dataset
-    min_total_samples: 202599
-    require_image_dir: true
+    required_files:
+      - data.npy
+      - labels.npy
+      - test_data.npy
+      - test_labels.npy
+      - filenames.npy
+      - test_filenames.npy
+    required_dirs:
+      - img_align_celeba
     variants:
       clean:
-        image: ghcr.io/landseer-project/dataset_celeba_hf:v1
+        image: ghcr.io/landseer-project/dataset_celeba:v1
         labels:
           landseer.dataset: celeba
+          landseer.variant: clean
+
+  mnist:
+    # TODO: add dataset_mnist container image when available
+    default_image: ""
+    required_files:
+      - data.npy
+      - labels.npy
+      - test_data.npy
+      - test_labels.npy
+    variants:
+      clean:
+        labels:
+          landseer.dataset: mnist
           landseer.variant: clean
