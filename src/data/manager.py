@@ -154,22 +154,27 @@ class DatasetManager:
                 "and no container image configured."
             )
 
+        # Write directly into output_dir. Run as the host user so created files
+        # are owned by us (no root-owned temp dirs to clean up later).
+        if force_reprepare and output_dir.exists():
+            shutil.rmtree(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-        target_output_dir = output_dir
-        temp_output_dir: Optional[Path] = None
-        if force_reprepare:
-            temp_output_dir = output_dir.parent / f"{output_dir.name}__reprepare_tmp"
-            if temp_output_dir.exists():
-                shutil.rmtree(temp_output_dir, ignore_errors=True)
-            temp_output_dir.mkdir(parents=True, exist_ok=True)
-            target_output_dir = temp_output_dir
 
-        cmd = [
-            "docker",
-            "run",
-            "--rm",
+        cmd = ["docker", "run", "--rm"]
+        if hasattr(os, "getuid") and hasattr(os, "getgid"):
+            cmd += ["--user", f"{os.getuid()}:{os.getgid()}"]
+
+        source_artifacts_dir = runtime_cfg.get("source_artifacts_dir")
+        if source_artifacts_dir:
+            source_dir = Path(str(source_artifacts_dir)).expanduser()
+            if not source_dir.is_absolute():
+                source_dir = source_dir.resolve()
+            if source_dir.exists():
+                cmd += ["-v", f"{source_dir}:/source_artifacts:ro"]
+
+        cmd += [
             "-v",
-            f"{target_output_dir}:/output:rw",
+            f"{output_dir}:/output:rw",
             "-e",
             f"DATASET_NAME={key}",
             "-e",
@@ -180,37 +185,10 @@ class DatasetManager:
             f"LANDSEER_DATASET_LABELS={json.dumps(runtime_cfg.get('labels', {}), sort_keys=True)}",
             image,
         ]
-        source_artifacts_dir = runtime_cfg.get("source_artifacts_dir")
-        if source_artifacts_dir:
-            source_dir = Path(str(source_artifacts_dir)).expanduser()
-            if not source_dir.is_absolute():
-                source_dir = source_dir.resolve()
-            if source_dir.exists():
-                cmd[3:3] = ["-v", f"{source_dir}:/source_artifacts:ro"]
 
         try:
             subprocess.run(cmd, capture_output=True, text=True, check=True)
-            if temp_output_dir is not None:
-                required = list(runtime_cfg.get("required_files") or ())
-                required_dirs = list(runtime_cfg.get("required_dirs") or ())
-                has_required = all((temp_output_dir / name).exists() for name in required)
-                has_dirs = all((temp_output_dir / name).is_dir() for name in required_dirs)
-                if not has_required or not has_dirs:
-                    raise RuntimeError(
-                        f"Forced reprepare for {key}/{variant} produced incomplete artifacts "
-                        f"(required_files={has_required}, required_dirs={has_dirs})."
-                    )
-                for child in output_dir.iterdir():
-                    if child.is_dir():
-                        shutil.rmtree(child, ignore_errors=True)
-                    else:
-                        child.unlink(missing_ok=True)
-                for child in temp_output_dir.iterdir():
-                    shutil.move(str(child), str(output_dir / child.name))
-                shutil.rmtree(temp_output_dir, ignore_errors=True)
         except subprocess.CalledProcessError as exc:
-            if temp_output_dir is not None and temp_output_dir.exists():
-                shutil.rmtree(temp_output_dir, ignore_errors=True)
             raise RuntimeError(
                 f"Dataset preparation container failed for {key}/{variant} using image {image}"
             ) from exc
@@ -247,7 +225,7 @@ class DatasetManager:
         required_dirs = list(
             variant_cfg.get("required_dirs") or dataset_cfg.get("required_dirs") or []
         )
-        
+
         return {
             "image": image,
             "labels": labels,
