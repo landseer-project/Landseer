@@ -1,0 +1,139 @@
+name: Build Dataset Images
+
+on:
+  push:
+    branches:
+      - main
+      - dev/restructure
+    paths:
+      - 'containers/datasets/**'
+      - '.github/workflows/build-datasets.yml'
+  pull_request:
+    paths:
+      - 'containers/datasets/**'
+  workflow_dispatch:
+    inputs:
+      dataset:
+        description: 'Specific dataset to build (or "all")'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - cifar10
+          - celeba
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/landseer-project/dataset
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      has_changes: ${{ steps.set-matrix.outputs.has_changes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changed datasets
+        id: set-matrix
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ inputs.dataset }}" != "all" ]; then
+            echo "matrix=[\"${{ inputs.dataset }}\"]" >> $GITHUB_OUTPUT
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ inputs.dataset }}" == "all" ]; then
+            DATASETS='["cifar10","celeba"]'
+            echo "matrix=$DATASETS" >> $GITHUB_OUTPUT
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          CHANGED_DIRS=$(git diff --name-only HEAD~1 HEAD -- 'containers/datasets/' | cut -d'/' -f3 | sort -u | grep -v '^$' || true)
+
+          if [ -z "$CHANGED_DIRS" ]; then
+            echo "No dataset changes detected"
+            echo "matrix=[]" >> $GITHUB_OUTPUT
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            MATRIX=$(echo "$CHANGED_DIRS" | jq -R -s -c 'split("\n") | map(select(length > 0))')
+            echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          fi
+
+  build:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dataset: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_PREFIX }}_${{ matrix.dataset }}
+          tags: |
+            type=sha,prefix=
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=v1
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: containers/datasets/${{ matrix.dataset }}
+          file: containers/datasets/${{ matrix.dataset }}/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Output image info
+        run: |
+          echo "Built dataset: ${{ matrix.dataset }}"
+          echo "Tags: ${{ steps.meta.outputs.tags }}"
+
+  summary:
+    needs: [detect-changes, build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summary
+        run: |
+          echo "## Dataset Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.detect-changes.outputs.has_changes }}" == "false" ]; then
+            echo "No dataset changes detected, no builds needed." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Built datasets: ${{ needs.detect-changes.outputs.matrix }}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Images pushed to \`ghcr.io/landseer-project/dataset_<name>\`" >> $GITHUB_STEP_SUMMARY
+          fi
