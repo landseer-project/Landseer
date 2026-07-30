@@ -51,24 +51,10 @@ class DatasetManager:
     def _resolve_output_dir(self, key: str, variant: str) -> Path:
         """
         Resolve dataset output dir with dataset-specific defaults.
-
-        - celeba: prefer shared /data location when present
-        - cifar10/cifar100: keep using repo-local Landseer/data tree
         """
-        if key in {"cifar10", "cifar100"}:
-            return self.base_dir / key / variant
-
-        # Preserve historical CelebA location when available.
-        if key == "celeba":
-            celeba_override = os.getenv(
-                "LANDSEER_CELEBA_DATA_PATH",
-                "/data/landseer/landseer_old_data/data/celeba/clean",
-            )
-            celeba_path = Path(celeba_override)
-            if celeba_path.exists():
-                return celeba_path
-
-        return self.base_dir / key / variant
+        if key in {"cifar10", "cifar100", "celeba", "mnist"}:
+            variant_path = self.base_dir / key / variant
+            return variant_path
 
     def prepare_dataset(
         self,
@@ -96,17 +82,7 @@ class DatasetManager:
         missing = [name for name in required_files if not (output_dir / name).exists()]
         runtime_cfg = self._resolve_dataset_runtime_config(key=key, variant=variant)
         force_reprepare = False
-        min_total_samples = int(runtime_cfg.get("min_total_samples") or 0)
         require_image_dir = bool(runtime_cfg.get("require_image_dir"))
-        if not missing and min_total_samples > 0:
-            try:
-                train_count = int(np.load(output_dir / "labels.npy", allow_pickle=False).shape[0])
-                test_count = int(np.load(output_dir / "test_labels.npy", allow_pickle=False).shape[0])
-                total_count = train_count + test_count
-                if total_count < min_total_samples:
-                    force_reprepare = True
-            except Exception:
-                pass
         if key == "celeba" and variant == "clean" and require_image_dir:
             image_dir = output_dir / "img_align_celeba"
             if not image_dir.exists():
@@ -122,7 +98,7 @@ class DatasetManager:
             )
 
         info = loader.prepare(output_dir=output_dir, variant=variant, params=params)
-        self._enforce_legacy_dataset_contract(dataset_key=key, output_dir=output_dir)
+
         info.poisoning = poisoning
 
         meta = {
@@ -138,20 +114,6 @@ class DatasetManager:
         (dataset_root / "dataset_meta.json").write_text(json.dumps(meta, indent=2, default=str))
 
         return info
-
-    def _enforce_legacy_dataset_contract(self, dataset_key: str, output_dir: Path) -> None:
-        """
-        Enforce the historical flat-`.npy` dataset contract expected by legacy tools.
-        """
-        required: List[str] = ["data.npy", "labels.npy", "test_data.npy", "test_labels.npy"]
-        if dataset_key == "celeba":
-            required.extend(["filenames.npy", "test_filenames.npy"])
-
-        missing = [name for name in required if not (output_dir / name).exists()]
-        if missing:
-            raise FileNotFoundError(
-                f"Dataset contract check failed for {dataset_key} in {output_dir}: missing {missing}"
-            )
 
     def _prepare_with_container(
         self,
