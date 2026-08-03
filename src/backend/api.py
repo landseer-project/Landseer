@@ -2442,9 +2442,6 @@ def _export_run_metrics_csv(run_id: str, scheduler: Scheduler) -> Optional[Path]
 
     with session_scope() as session:
         run = session.query(PipelineRunModel).filter(PipelineRunModel.id == run_id).first()
-        if not run:
-            logger.warning(f"Run {run_id} not found while exporting metrics CSV")
-            return None
 
         results = session.query(EvaluationResultModel).filter(
             EvaluationResultModel.run_id == run_id
@@ -2455,6 +2452,19 @@ def _export_run_metrics_csv(run_id: str, scheduler: Scheduler) -> Optional[Path]
             results = session.query(EvaluationResultModel).filter(
                 EvaluationResultModel.pipeline_id == run_id
             ).all()
+ 
+    if run is not None:
+        config_id = run.pipeline_config_id
+    else:
+        pipeline_name = getattr(pipeline, "name", None) or "unknown_config"
+        config_id = (
+            pipeline_name
+            if str(pipeline_name).startswith("config_")
+            else f"config_{pipeline_name}"
+        )
+        logger.warning(
+            f"Run {run_id} not found in pipeline_runs; exporting CSV under {config_id}/{run_id}"
+        )
 
     result_lookup: Dict[tuple, Any] = {}
     observed_metric_names_by_evaluator: Dict[str, set] = {}
@@ -2480,7 +2490,7 @@ def _export_run_metrics_csv(run_id: str, scheduler: Scheduler) -> Optional[Path]
     if not all_evaluators:
         return None
 
-    output_dir = Path("results") / run.pipeline_config_id / run_id
+    output_dir = Path("results") / config_id / run_id
     output_dir.mkdir(parents=True, exist_ok=True)
     csv_path = output_dir / "metrics_summary.csv"
 
