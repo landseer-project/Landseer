@@ -3,10 +3,35 @@ cache/
 results/
 logs/
 tools/
+.venv/
+venv/
+/data/
+results/
+logs/
+tools/
 
 .venv/
 venv/
 __pycache__/
+*.pyc
+*.csv
+*.lock
+.env*
+*.log
+*.csv
+deviation_*
+# Node.js (local installation)
+.node/
+node_modules/
+dist/
+docs/_build/
+CLAUDE-context.md
+.venv.bak/
+.cursor/
+# Local credentials
+helper_scripts/*gcs-bucket-key.json
+src/.bak
+
 *.pyc
 *.csv
 *.lock

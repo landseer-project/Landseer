@@ -91,3 +91,16 @@ evaluators:
       - detection_rate
     defense_types:
       - watermarking
+
+  fingerprinting_llm:
+    name: fingerprinting_llm
+    container:
+      image: ghcr.io/landseer-project/evals/cka:v1
+      command: ""
+    required_artifacts: []
+    metrics:
+      - cka_sim
+    defense_types:
+      - reef
+      
+
