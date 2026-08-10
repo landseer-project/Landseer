@@ -118,21 +118,21 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     # Check for required sensitive attributes
-    sensitive_path = input_dir / "sensitive_attributes.npy"
+    sensitive_path = input_dir / "test_sensitive.npy"
     if not sensitive_path.exists():
         # Graceful skip
         results = {
             "evaluator": "fairness",
             "success": True,
             "skipped": True,
-            "skip_reason": "sensitive_attributes.npy not found",
+            "skip_reason": "test_sensitive.npy not found",
             "metrics": {
                 "demographic_parity": None,
                 "equalized_odds_diff": None
             }
         }
         (output_dir / "evaluation_results.json").write_text(json.dumps(results, indent=2))
-        print("Skipping: sensitive_attributes.npy not found")
+        print("Skipping: test_sensitive.npy not found")
         return
     
     # Load model
