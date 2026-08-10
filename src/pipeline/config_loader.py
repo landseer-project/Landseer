@@ -189,7 +189,15 @@ def _builtin_evaluator_definitions() -> Dict[str, EvaluatorDefinition]:
             "name": "clean",
             "container": {"image": "ghcr.io/landseer-project/evals/clean:v2", "command": ""},
             "required_artifacts": [],
-            "metrics": ["clean_accuracy"],
+            "metrics": [
+                "clean_accuracy",
+                "clean_train_accuracy",
+                "poisoned_train_accuracy",
+                "poisoned_test_accuracy",
+                "mia_auc",
+                "privacy_epsilon",
+                "dp_accuracy",
+            ],
             "defense_types": [],
         },
         "backdoor": {
@@ -209,7 +217,7 @@ def _builtin_evaluator_definitions() -> Dict[str, EvaluatorDefinition]:
         "fairness": {
             "name": "fairness",
             "container": {"image": "ghcr.io/landseer-project/evals/fairness:v2", "command": ""},
-            "required_artifacts": ["sensitive_attributes.npy"],
+            "required_artifacts": [],
             "metrics": ["demographic_parity", "equalized_odds_diff"],
             "defense_types": ["fairness"],
         },
@@ -231,8 +239,22 @@ def _builtin_evaluator_definitions() -> Dict[str, EvaluatorDefinition]:
             "name": "watermark",
             "container": {"image": "ghcr.io/landseer-project/evals/watermark:v2", "command": ""},
             "required_artifacts": ["watermark_key.json"],
-            "metrics": ["watermark_accuracy", "bit_accuracy", "detection_rate"],
+            "metrics": ["watermark_accuracy", "bit_accuracy", "detection_rate", "wmacc_badnets"],
             "defense_types": ["watermarking"],
+        },
+        "reef_cka": {
+            "name": "reef_cka",
+            "container": {"image": "ghcr.io/landseer-project/evals/cka:v1", "command": ""},
+            "required_artifacts": [],
+            "metrics": ["cka_sim"],
+            "defense_types": ["reef"],
+        },
+        "explanations": {
+            "name": "explanations",
+            "container": {"image": "ghcr.io/landseer-project/evals/explanations:v1", "command": ""},
+            "required_artifacts": [],
+            "metrics": ["drop10_score"],
+            "defense_types": ["explainability"],
         },
     }
     out: Dict[str, EvaluatorDefinition] = {}
@@ -398,9 +420,12 @@ def select_evaluators_for_attack_config(
         "carlini": "adversarial",
         "fairness": "fairness",
         "fingerprinting": "fingerprinting",
+        "reef": "reef_cka",
         "watermarking": "watermark",
         "outlier": "ood",
         "ood": "ood",
+        "explanations": "explanations",
+        "explainability": "explanations",
     }
 
     selected_keys = {attack_to_evaluator[name] for name in enabled if name in attack_to_evaluator}

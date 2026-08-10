@@ -11,6 +11,12 @@ evaluators:
     required_artifacts: []
     metrics:
       - clean_accuracy
+      - clean_train_accuracy
+      - poisoned_train_accuracy
+      - poisoned_test_accuracy
+      - mia_auc
+      - privacy_epsilon
+      - dp_accuracy
     defense_types: []
 
   backdoor:
@@ -89,6 +95,7 @@ evaluators:
       - watermark_accuracy
       - bit_accuracy
       - detection_rate
+      - wmacc_badnets
     defense_types:
       - watermarking
 
@@ -102,5 +109,15 @@ evaluators:
       - cka_sim
     defense_types:
       - reef
-      
+
+  explanations:
+    name: explanations
+    container:
+      image: ghcr.io/landseer-project/evals/explanations:v1
+      command: ""
+    required_artifacts: []
+    metrics:
+      - drop10_score
+    defense_types:
+      - explainability
 

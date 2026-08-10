@@ -238,7 +238,8 @@ def main():
             "metrics": {
                 "watermark_accuracy": None,
                 "bit_accuracy": None,
-                "detection_rate": None
+                "detection_rate": None,
+                "wmacc_badnets": None,
             }
         }
         (output_dir / "evaluation_results.json").write_text(json.dumps(results, indent=2))
@@ -328,7 +329,9 @@ def main():
         "bit_accuracy": float(watermark_accuracy),  # Same for now
         "detection_rate": float(detection_rate)
     }
-    
+    if method_info and method_info.get("method") == "trigger_based":
+        metrics["wmacc_badnets"] = float(watermark_accuracy)
+
     print(f"\nFinal watermark accuracy: {watermark_accuracy:.4f}")
     print(f"Detection: {'YES' if detected else 'NO'}")
     

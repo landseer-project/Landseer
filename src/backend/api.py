@@ -2467,7 +2467,7 @@ def _export_run_metrics_csv(run_id: str, scheduler: Scheduler) -> Optional[Path]
         )
 
     result_lookup: Dict[tuple, Any] = {}
-    observed_metric_names_by_evaluator: Dict[str, set] = {}
+    observed_metric_names_by_evaluator:  Dict[str, set] = {}
     for result in results:
         key = (result.workflow_id, result.evaluator_name)
         result_lookup[key] = result
@@ -2494,7 +2494,18 @@ def _export_run_metrics_csv(run_id: str, scheduler: Scheduler) -> Optional[Path]
     output_dir.mkdir(parents=True, exist_ok=True)
     csv_path = output_dir / "metrics_summary.csv"
 
-    header: List[str] = ["run_id", "workflow_id", "workflow_name", "is_baseline"]
+    workflow_by_id = {wf.id: wf for wf in pipeline.workflows}
+    header: List[str] = [
+        "run_id",
+        "workflow_id",
+        "workflow_name",
+        "pre_training",
+        "in_training",
+        "post_training",
+        "deployment",
+        "is_baseline",
+        "combination_success",
+    ]
     for evaluator_name in all_evaluators:
         header.append(f"{evaluator_name}.status")
         for metric_name in metric_names_by_evaluator.get(evaluator_name, []):
@@ -2505,13 +2516,21 @@ def _export_run_metrics_csv(run_id: str, scheduler: Scheduler) -> Optional[Path]
         writer.writeheader()
 
         for workflow_id in sorted(expected_evaluators_by_workflow.keys()):
+            wf = workflow_by_id.get(workflow_id)
+            tools_meta = _workflow_tools_metadata(wf.tasks if wf else [])
+            tools = tools_meta["workflow_tools"]
             row: Dict[str, Any] = {
                 "run_id": run_id,
                 "workflow_id": workflow_id,
                 "workflow_name": workflow_name_by_id.get(workflow_id, workflow_id),
+                "pre_training": tools.get("pre", []),
+                "in_training": tools.get("in", []),
+                "post_training": tools.get("post", []),
+                "deployment": tools.get("deploy", []),
                 "is_baseline": workflow_is_baseline.get(workflow_id, False),
             }
             expected_evaluators = expected_evaluators_by_workflow.get(workflow_id, set())
+            statuses: List[str] = []
             for evaluator_name in all_evaluators:
                 result = result_lookup.get((workflow_id, evaluator_name))
                 if evaluator_name not in expected_evaluators:
@@ -2524,6 +2543,7 @@ def _export_run_metrics_csv(run_id: str, scheduler: Scheduler) -> Optional[Path]
                     status = "failed"
                 else:
                     status = "ok"
+                statuses.append(status)
                 row[f"{evaluator_name}.status"] = status
 
                 for metric_name in metric_names_by_evaluator.get(evaluator_name, []):
@@ -2534,6 +2554,13 @@ def _export_run_metrics_csv(run_id: str, scheduler: Scheduler) -> Optional[Path]
                     metric_val = (result.metrics or {}).get(metric_name) if result else None
                     row[col] = metric_val if metric_val is not None else -1
 
+            # success if nothing expected failed/missing (skipped is ok)
+            relevant = [s for s, name in zip(statuses, all_evaluators) if name in expected_evaluators]
+            row["combination_success"] = (
+                "success"
+                if relevant and all(s in ("ok", "skipped") for s in relevant)
+                else "failure"
+            )
             writer.writerow(row)
 
     return csv_path
