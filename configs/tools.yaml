@@ -9,6 +9,16 @@ tools:
       command: python main.py
       runtime: null
 
+  pre_noop_llm:
+    name: noop_llm
+    defense_stage: pre_training
+    is_baseline: true
+    container:
+      image: ghcr.io/landseer-project/pre_noop_llm:v1
+      command: python main.py
+      runtime: null
+    
+
   pre_xgbod:
     name: pre-xgbod
     defense_stage: pre_training
@@ -64,6 +74,15 @@ tools:
       command: python main.py
       runtime: null
 
+  in_noop_llm:
+    name: in_noop_llm
+    defense_stage: during_training
+    is_baseline: true
+    container:
+      image: ghcr.io/landseer-project/in_noop_llm:v1
+      command: python main.py
+      runtime: null
+
   in_trades:
     name: in-trades
     defense_stage: during_training
@@ -107,6 +126,15 @@ tools:
     is_baseline: true
     container:
       image: ghcr.io/landseer-project/post_noop_new:v1
+      command: python main.py
+      runtime: null
+
+  post_noop_llm:
+    name: post_noop_llm
+    defense_stage: post_training
+    is_baseline: true
+    container:
+      image: ghcr.io/landseer-project/post_noop_llm:v1
       command: python main.py
       runtime: null
 
@@ -174,6 +202,15 @@ tools:
       command: python main.py
       runtime: null
 
+  deploy_noop_llm:
+    name: deploy_noop_llm
+    defense_stage: deployment
+    is_baseline: true
+    container:
+      image: ghcr.io/landseer-project/deploy_noop_llm:v1
+      command: python main.py
+      runtime: null
+
   deploy_dp:
     name: deploy_dp
     defense_stage: deployment
@@ -200,3 +237,14 @@ tools:
       image: ghcr.io/landseer-project/deploy_dataset_inference:v2
       command: python3 main.py
       runtime: null
+
+  deploy_reef_llm:
+    name: deploy_reef_llm
+    defense_stage: deployment
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/deploy_reef_llm:v1
+      command: python3 main.py
+      runtime: null
+
+    

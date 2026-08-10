@@ -1,0 +1,18 @@
+FROM pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime
+
+LABEL org.opencontainers.image.title="REEF CKA Evaluator"
+LABEL org.opencontainers.image.description="Computes REEF CKA similarity from saved model activations"
+LABEL org.landseer.type="evaluator"
+LABEL org.landseer.category="evals"
+LABEL org.landseer.metrics="cka_sim"
+LABEL org.landseer.required_artifacts=""
+LABEL org.landseer.defense_types="reef"
+
+WORKDIR /app
+
+COPY requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY evaluate.py ./evaluate.py
+
+ENTRYPOINT ["python", "evaluate.py"]
