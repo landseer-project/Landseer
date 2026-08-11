@@ -1,6 +1,6 @@
 # LLM
 dataset:
-  name: cifar10
+  name: llm_data
   variant: clean
 
 model:

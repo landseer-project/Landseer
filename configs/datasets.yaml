@@ -32,6 +32,25 @@ datasets:
           landseer.dataset: celeba
           landseer.variant: clean
 
+  llm_data:
+    default_image: ""
+    source_artifacts_dir: /data/landseer/landseer_old_data/data
+    required_files:
+      - truthfulqa.csv
+      - data.npy
+      - labels.npy
+      - test_data.npy
+      - test_labels.npy
+
+    required_dirs:
+      - gpt2
+      - gpt2-imdb
+    variants:
+      clean:
+        labels:
+          landseer.dataset: llm_data
+          landseer.variant: clean
+
   mnist:
     # TODO: add dataset_mnist container image when available
     default_image: ""

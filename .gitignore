@@ -53,4 +53,5 @@ CLAUDE-context.md
 # Local credentials
 helper_scripts/*gcs-bucket-key.json
 
-src/.bak
+src/.bakcommands.txt
+landseer.db
