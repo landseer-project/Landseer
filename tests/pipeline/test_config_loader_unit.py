@@ -568,6 +568,29 @@ class TestAddEvaluationTasksToWorkflow:
 
         assert "poisoning_metadata.json" in tasks[0].required_artifacts
 
+    def test_artifact_roots_propagated_into_task_config(self, monkeypatch):
+        import src.pipeline.config_loader as cl
+
+        monkeypatch.setattr(cl, "_EVALUATOR_ARTIFACT_ROOTS", ["/global/eval_root"])
+        wf = Workflow(name="wf", pipeline_id="p1")
+        eval_def = EvaluatorDefinition(
+            name="clean",
+            container=EvaluatorContainerConfig(
+                image="img:v1",
+                command="",
+            ),
+            required_artifacts=["celeba_shadow"],
+            artifact_roots=["/per/eval/root"],
+            metrics=["clean_accuracy"],
+        )
+        tasks = add_evaluation_tasks_to_workflow(wf, {"clean": eval_def}, "p1")
+
+        assert tasks[0].config["artifact_roots"] == [
+            "/global/eval_root",
+            "/per/eval/root",
+        ]
+        assert "celeba_shadow" in tasks[0].config["required_artifacts"]
+
     def test_empty_evaluators_adds_no_tasks(self):
         wf = Workflow(name="wf", pipeline_id="p1")
         tasks = add_evaluation_tasks_to_workflow(wf, {}, "p1")

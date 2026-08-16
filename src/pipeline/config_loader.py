@@ -143,6 +143,10 @@ class EvaluatorDefinition(BaseModel):
     name: str = Field(description="Evaluator name")
     container: EvaluatorContainerConfig = Field(description="Container config")
     required_artifacts: List[str] = Field(default_factory=list, description="Required files")
+    artifact_roots: List[str] = Field(
+        default_factory=list,
+        description="Host directories searched for required_artifacts (in addition to dataset dir)",
+    )
     metrics: List[str] = Field(default_factory=list, description="Metrics produced")
     defense_types: List[str] = Field(default_factory=list, description="Applicable defense types")
     
@@ -161,6 +165,8 @@ class EvaluatorDefinition(BaseModel):
 
 # Global evaluator registry
 _EVALUATOR_REGISTRY: Dict[str, EvaluatorDefinition] = {}
+# Top-level artifact_roots from evaluators.yaml (shared by all evaluators)
+_EVALUATOR_ARTIFACT_ROOTS: List[str] = []
 
 
 def _repo_root() -> Path:
@@ -284,11 +290,13 @@ def load_evaluators_from_yaml(yaml_path: str) -> Dict[str, EvaluatorDefinition]:
     Returns:
         Dictionary mapping evaluator names to definitions
     """
+    global _EVALUATOR_ARTIFACT_ROOTS
     evaluators = {}
     yaml_file = _resolve_config_path(yaml_path)
     
     if not yaml_file.exists():
         logger.debug(f"Evaluators config not found: {yaml_file}")
+        _EVALUATOR_ARTIFACT_ROOTS = []
         return evaluators
     
     with open(yaml_file, 'r') as f:
@@ -296,19 +304,47 @@ def load_evaluators_from_yaml(yaml_path: str) -> Dict[str, EvaluatorDefinition]:
     
     if not data or 'evaluators' not in data:
         logger.warning(f"No evaluators found in {yaml_path}")
+        _EVALUATOR_ARTIFACT_ROOTS = []
         return evaluators
+
+    global_roots = data.get("artifact_roots") or []
+    if not isinstance(global_roots, list):
+        global_roots = []
+    _EVALUATOR_ARTIFACT_ROOTS = [str(p).strip() for p in global_roots if str(p).strip()]
     
     for eval_name, eval_data in data['evaluators'].items():
+        per_roots = eval_data.get("artifact_roots") or []
+        if not isinstance(per_roots, list):
+            per_roots = []
         evaluators[eval_name] = EvaluatorDefinition(
             name=eval_data.get('name', eval_name),
             container=EvaluatorContainerConfig(**eval_data['container']),
             required_artifacts=eval_data.get('required_artifacts', []),
+            artifact_roots=[str(p).strip() for p in per_roots if str(p).strip()],
             metrics=eval_data.get('metrics', []),
             defense_types=eval_data.get('defense_types', [])
         )
     
     logger.info(f"Loaded {len(evaluators)} evaluators from {yaml_path}")
     return evaluators
+
+
+def get_evaluator_artifact_roots() -> List[str]:
+    """Return top-level artifact_roots declared in evaluators.yaml."""
+    return list(_EVALUATOR_ARTIFACT_ROOTS)
+
+
+def _merged_artifact_roots(eval_def: EvaluatorDefinition) -> List[str]:
+    """Global then per-evaluator roots, de-duplicated while preserving order."""
+    merged: List[str] = []
+    seen = set()
+    for root in list(_EVALUATOR_ARTIFACT_ROOTS) + list(eval_def.artifact_roots):
+        key = str(root).strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        merged.append(key)
+    return merged
 
 
 def init_evaluator_registry(yaml_path: str = "configs/evaluators.yaml"):
@@ -318,11 +354,12 @@ def init_evaluator_registry(yaml_path: str = "configs/evaluators.yaml"):
     Built-in evaluators are always registered. If ``configs/evaluators.yaml`` exists,
     its entries override or extend the built-ins by evaluator key.
     """
-    global _EVALUATOR_REGISTRY
+    global _EVALUATOR_REGISTRY, _EVALUATOR_ARTIFACT_ROOTS
     base = _builtin_evaluator_definitions()
     path = _resolve_config_path(yaml_path)
     if not path.exists():
         _EVALUATOR_REGISTRY = base.copy()
+        _EVALUATOR_ARTIFACT_ROOTS = []
         logger.info(
             "Using %d built-in evaluators (%s not found; optional overrides there)",
             len(_EVALUATOR_REGISTRY),
@@ -339,6 +376,7 @@ def init_evaluator_registry(yaml_path: str = "configs/evaluators.yaml"):
         )
     except Exception as e:
         _EVALUATOR_REGISTRY = base.copy()
+        _EVALUATOR_ARTIFACT_ROOTS = []
         logger.warning(
             "Failed to parse evaluators YAML %s (%s); using %d built-in evaluators only",
             path,
@@ -490,6 +528,7 @@ def add_evaluation_tasks_to_workflow(
             "tool_name": eval_def.name,
             "metrics": eval_def.metrics,
             "required_artifacts": eval_def.required_artifacts,
+            "artifact_roots": _merged_artifact_roots(eval_def),
             "workflow_tools_by_stage": tools_by_stage,
             "workflow_defense_types": sorted(defense_types),
             "attack_config_path": attack_config_path,

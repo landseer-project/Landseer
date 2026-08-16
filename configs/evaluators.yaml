@@ -1,6 +1,11 @@
 # Evaluator containers (merged on top of built-in defaults in code).
 # Built-ins always include all evaluators; override here for registry paths/tags.
-# Published images: ghcr.io/landseer-project/evals/<name>:<tag>
+# Published images: ghcr.io/landseer-project/evals/<name>:<tag>.
+# artifact_roots: optional host directories that contain evaluator sidecars.
+# Can be set globally (here) and/or per evaluator.
+#
+# artifact_roots:
+#   - /data/landseer/eval_artifacts
 
 evaluators:
   clean:

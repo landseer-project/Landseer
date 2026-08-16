@@ -255,8 +255,10 @@ class EvaluationTask(Task):
     They have lowest priority (50) to ensure they run after all defense stages.
     
     Attributes:
-        required_artifacts: List of artifacts this evaluator needs (e.g., ["watermark_key.json"])
-                          If any required artifact is missing, the evaluator skips gracefully.
+        required_artifacts: Relative file/dir names this evaluator needs under /input.
+            The worker loads missing ones from the prepared dataset dir or
+            LANDSEER_EVAL_ARTIFACTS_DIR before running the container. If any are
+            still missing, the evaluator skips gracefully.
     """
     required_artifacts: List[str] = field(default_factory=list)
     

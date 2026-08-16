@@ -80,6 +80,33 @@ def _same_content(src: Path, dst: Path) -> bool:
         return False
 
 
+def _safe_artifact_relpath(name: str) -> Optional[Path]:
+    """Return a relative Path for an artifact name, or None if unsafe/invalid."""
+    raw = str(name or "").strip()
+    if not raw:
+        return None
+    rel = Path(raw)
+    if rel.is_absolute() or ".." in rel.parts:
+        return None
+    return rel
+
+
+def _copy_artifact_into_input(src: Path, dest: Path) -> None:
+    """Copy/link a file or directory artifact into the task input directory."""
+    if dest.exists() or dest.is_symlink():
+        if dest.is_dir() and not dest.is_symlink():
+            shutil.rmtree(dest)
+        else:
+            dest.unlink()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if src.is_dir():
+        shutil.copytree(src, dest)
+    elif src.is_symlink():
+        shutil.copy2(src, dest, follow_symlinks=False)
+    else:
+        _link_or_copy(src, dest)
+
+
 def _link_identical_output_to_input(output_dir: Path, input_dir: Path) -> None:
     """Replace output files with hard links to matching input files when content matches."""
     if not _hardlink_macro_enabled():
@@ -848,6 +875,172 @@ class TaskRunner:
             d.mkdir(parents=True, exist_ok=True)
 
         return task_dir, input_dir, output_dir
+
+    @staticmethod
+    def _evaluator_required_artifacts(task: TaskInfo) -> List[str]:
+        """Return required artifact names declared for an evaluation task."""
+        if task.task_type != "evaluation" or not isinstance(task.config, dict):
+            return []
+        raw = task.config.get("required_artifacts") or []
+        if not isinstance(raw, list):
+            return []
+        return [str(item).strip() for item in raw if str(item).strip()]
+
+    @staticmethod
+    def _eval_artifact_search_roots(
+        data_dir: Optional[Path],
+        task: Optional[TaskInfo] = None,
+    ) -> List[Path]:
+        """Host directories searched when materializing evaluator required artifacts."""
+        roots: List[Path] = []
+        seen: set[str] = set()
+
+        def _add(path: Path) -> None:
+            try:
+                key = str(path.resolve()) if path.exists() else str(path)
+            except Exception:
+                key = str(path)
+            if key in seen:
+                return
+            if path.exists():
+                seen.add(key)
+                roots.append(path)
+
+        if data_dir and data_dir.exists():
+            _add(data_dir)
+
+        config_roots: List[str] = []
+        if task is not None and isinstance(task.config, dict):
+            raw = task.config.get("artifact_roots") or []
+            if isinstance(raw, list):
+                config_roots = [str(p).strip() for p in raw if str(p).strip()]
+        for root in config_roots:
+            path = Path(root).expanduser()
+            if not path.is_absolute():
+                path = (Path.cwd() / path).resolve()
+            _add(path)
+
+        env_root = os.environ.get("LANDSEER_EVAL_ARTIFACTS_DIR", "").strip()
+        if env_root:
+            _add(Path(env_root).expanduser())
+        return roots
+
+    def _materialize_required_artifacts(
+        self,
+        task: TaskInfo,
+        input_dir: Path,
+        data_dir: Optional[Path],
+    ) -> List[str]:
+        """
+        Ensure evaluator required_artifacts exist under input_dir.
+
+        Resolution order for each relative name:
+          1. Already present in input_dir (dataset copy and/or tool ancestry)
+          2. data_dir / name (prepared dataset directory)
+          3. artifact_roots from evaluators.yaml (global + per-evaluator)
+          4. $LANDSEER_EVAL_ARTIFACTS_DIR / name (optional env override)
+
+        Returns the list of artifact names that could not be resolved.
+        """
+        required = self._evaluator_required_artifacts(task)
+        if not required:
+            return []
+
+        search_roots = self._eval_artifact_search_roots(data_dir, task=task)
+        missing: List[str] = []
+
+        for name in required:
+            rel = _safe_artifact_relpath(name)
+            if rel is None:
+                logger.warning(
+                    "Ignoring unsafe required_artifact %r for task %s", name, task.id
+                )
+                missing.append(name)
+                continue
+
+            dest = input_dir / rel
+            if dest.exists():
+                continue
+
+            found: Optional[Path] = None
+            for root in search_roots:
+                candidate = root / rel
+                if candidate.exists():
+                    found = candidate
+                    break
+
+            if found is None:
+                missing.append(name)
+                continue
+
+            try:
+                _copy_artifact_into_input(found, dest)
+                logger.info(
+                    "Materialized required artifact %s for evaluator task %s from %s",
+                    name,
+                    task.id,
+                    found,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to materialize required artifact %s for task %s: %s",
+                    name,
+                    task.id,
+                    exc,
+                )
+                missing.append(name)
+
+        return missing
+
+    def _skip_evaluation_missing_artifacts(
+        self,
+        task: TaskInfo,
+        task_dir: Path,
+        output_dir: Path,
+        missing: List[str],
+        start_time: float,
+    ) -> "ExecutionResult":
+        """Write a skipped evaluation_results.json and return a successful skip result."""
+        output_dir.mkdir(parents=True, exist_ok=True)
+        expected_metrics = []
+        if isinstance(task.config, dict):
+            expected_metrics = list(task.config.get("metrics") or [])
+        payload = {
+            "evaluator": task.tool_name,
+            "success": True,
+            "skipped": True,
+            "skip_reason": f"missing required artifacts: {', '.join(missing)}",
+            "metrics": {name: -1.0 for name in expected_metrics},
+            "parameters": {
+                "source": "worker_required_artifacts",
+                "missing_artifacts": missing,
+            },
+        }
+        (output_dir / "evaluation_results.json").write_text(
+            json.dumps(payload, indent=2)
+        )
+        execution_time_ms = int((time.time() - start_time) * 1000)
+        result = ExecutionResult(
+            success=True,
+            exit_code=0,
+            execution_time_ms=execution_time_ms,
+            output_path=output_dir,
+            logs=f"Skipping evaluator: missing required artifacts: {', '.join(missing)}\n",
+            artifacts={
+                "skipped": True,
+                "missing_artifacts": missing,
+            },
+        )
+        self._write_task_log(task_dir, task, result, docker_command=None)
+        logger.info(
+            "Skipping evaluation task %s (%s): missing required artifacts %s",
+            task.id,
+            task.tool_name,
+            missing,
+        )
+        return result
+
+        return task_dir, input_dir, output_dir
     
     def _cleanup_task_workspace(self, task_dir: Path, keep_logs: bool = True) -> None:
         """
@@ -1062,6 +1255,24 @@ class TaskRunner:
             if isinstance(task.config, dict):
                 config_json_path = input_dir / "config.json"
                 config_json_path.write_text(json.dumps(task.config, indent=2, default=str))
+
+            # Evaluation tasks: materialize required_artifacts from dataset /
+            # LANDSEER_EVAL_ARTIFACTS_DIR when not already present from tool ancestry.
+            # Skip gracefully if still missing (do not run the container).
+            if task.task_type == "evaluation":
+                missing_artifacts = self._materialize_required_artifacts(
+                    task=task,
+                    input_dir=input_dir,
+                    data_dir=input_path if (input_path and input_path.is_dir()) else None,
+                )
+                if missing_artifacts:
+                    return self._skip_evaluation_missing_artifacts(
+                        task=task,
+                        task_dir=task_dir,
+                        output_dir=output_dir,
+                        missing=missing_artifacts,
+                        start_time=start_time,
+                    )
 
             # Build environment
             task_env = env or {}
