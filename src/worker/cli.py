@@ -1264,8 +1264,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     # Determine runtime
     runtime = None if args.runtime == "auto" else args.runtime
     
-    # Configure MinIO via environment
-    if args.no_minio:
+    # Configure MinIO via environment. --no-minio always wins; otherwise honor
+    # LANDSEER_USE_MINIO (the CLI used to force this back to true whenever
+    # --minio-endpoint was present, which made the env var a no-op).
+    env_minio = os.environ.get("LANDSEER_USE_MINIO", "true").strip().lower()
+    if args.no_minio or env_minio in {"0", "false", "no", "off"}:
         os.environ["LANDSEER_USE_MINIO"] = "false"
     else:
         os.environ["LANDSEER_USE_MINIO"] = "true"

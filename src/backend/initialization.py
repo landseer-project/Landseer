@@ -142,7 +142,10 @@ def initialize_backend(
 
     # -- MinIO store -----------------------------------------------------------
     store = None
-    if enable_store and STORE_AVAILABLE:
+    use_minio = os.getenv("LANDSEER_USE_MINIO", "true").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    if enable_store and STORE_AVAILABLE and use_minio:
         try:
             store = init_store()
             if store.is_available:
@@ -151,6 +154,8 @@ def initialize_backend(
                 logger.warning("MinIO store not available")
         except Exception as e:
             logger.warning(f"Failed to initialize MinIO store: {e}")
+    elif not use_minio:
+        logger.info("MinIO store disabled (LANDSEER_USE_MINIO=false)")
     elif not STORE_AVAILABLE:
         logger.info("Store module not available")
 
