@@ -4,8 +4,12 @@
 # artifact_roots: optional host directories that contain evaluator sidecars.
 # Can be set globally (here) and/or per evaluator.
 #
-# artifact_roots:
-#   - /data/landseer/eval_artifacts
+artifact_roots:
+  - /data/landseer/eval_artifacts
+evaluators:
+  clean:
+    required_artifacts:
+      - celeba_shadows
 
 evaluators:
   clean:
@@ -125,4 +129,15 @@ evaluators:
       - drop10_score
     defense_types:
       - explainability
+
+  privacy:
+    name: privacy
+    container:
+      image: ghcr.io/landseer-project/evals/privacy:v1
+      command: ""
+    required_artifacts: []
+    metrics:
+      - mia_auc
+    defense_types:
+      - differential_privacy
 

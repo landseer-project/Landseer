@@ -25,25 +25,88 @@ def add_trigger(images, trigger_info):
     """
     technique = trigger_info.get("technique", "badnets")
     
+    # if technique == "badnets":
+    #     trigger_size = trigger_info.get("trigger_size", 3)
+    #     trigger_value = trigger_info.get("trigger_value", 1.0)
+    #     trigger_position = trigger_info.get("trigger_position", "bottom_right")
+        
+    #     triggered = images.copy()
+    #     _, c, h, w = triggered.shape
+        
+    #     if trigger_position == "bottom_right":
+    #         triggered[:, :, h-trigger_size:, w-trigger_size:] = trigger_value
+    #     elif trigger_position == "top_left":
+    #         triggered[:, :, :trigger_size, :trigger_size] = trigger_value
+    #     elif trigger_position == "bottom_left":
+    #         triggered[:, :, h-trigger_size:, :trigger_size] = trigger_value
+    #     elif trigger_position == "top_right":
+    #         triggered[:, :, :trigger_size, w-trigger_size:] = trigger_value
+    #     else:
+    #         triggered[:, :, h-trigger_size:, w-trigger_size:] = trigger_value
+        
+    #     return triggered
     if technique == "badnets":
-        trigger_size = trigger_info.get("trigger_size", 3)
-        trigger_value = trigger_info.get("trigger_value", 1.0)
-        trigger_position = trigger_info.get("trigger_position", "bottom_right")
-        
+        trigger_size = int(trigger_info.get("trigger_size", 3))
+
+        # if "trigger_value" not in trigger_info:
+        #     raise ValueError(
+        #         "BadNets evaluation requires trigger_value in poisoning metadata."
+        #     )
+
+        # trigger_value = float(trigger_info["trigger_value"])
+        trigger_value = resolve_eval_trigger_value(images) 
+        trigger_position = trigger_info.get(
+            "trigger_position",
+            "bottom_right"
+        )
+
         triggered = images.copy()
-        _, c, h, w = triggered.shape
-        
+
+        if triggered.ndim != 4:
+            raise ValueError(
+                f"Expected [N,C,H,W] test images, got {triggered.shape}"
+            )
+
+        _, _, h, w = triggered.shape
+
+        if trigger_size <= 0 or trigger_size > min(h, w):
+            raise ValueError(
+                f"Invalid trigger_size={trigger_size} "
+                f"for images of size {h}x{w}"
+            )
+
         if trigger_position == "bottom_right":
-            triggered[:, :, h-trigger_size:, w-trigger_size:] = trigger_value
-        elif trigger_position == "top_left":
-            triggered[:, :, :trigger_size, :trigger_size] = trigger_value
+            row_start = h - trigger_size
+            col_start = w - trigger_size
+
         elif trigger_position == "bottom_left":
-            triggered[:, :, h-trigger_size:, :trigger_size] = trigger_value
+            row_start = h - trigger_size
+            col_start = 0
+
         elif trigger_position == "top_right":
-            triggered[:, :, :trigger_size, w-trigger_size:] = trigger_value
+            row_start = 0
+            col_start = w - trigger_size
+
+        elif trigger_position == "top_left":
+            row_start = 0
+            col_start = 0
+
+        elif trigger_position == "center":
+            row_start = (h - trigger_size) // 2
+            col_start = (w - trigger_size) // 2
+
         else:
-            triggered[:, :, h-trigger_size:, w-trigger_size:] = trigger_value
-        
+            raise ValueError(
+                f"Unsupported trigger_position: {trigger_position}"
+            )
+
+        triggered[
+            :,
+            :,
+            row_start:row_start + trigger_size,
+            col_start:col_start + trigger_size,
+        ] = trigger_value
+
         return triggered
     
     elif technique == "blend":
@@ -63,6 +126,46 @@ def add_trigger(images, trigger_info):
         triggered[:, :, h-trigger_size:, w-trigger_size:] = 1.0
         return triggered
 
+def get_predictions(outputs):
+    """
+    Convert model outputs to integer class predictions.
+
+    Supports:
+        multiclass / binary two-logit: [N, K]
+        binary single-logit:           [N] or [N, 1]
+    """
+
+    if outputs.ndim == 1:
+        return (outputs >= 0).long()
+
+    if outputs.ndim == 2 and outputs.shape[1] == 1:
+        return (outputs[:, 0] >= 0).long()
+
+    if outputs.ndim == 2 and outputs.shape[1] >= 2:
+        return outputs.argmax(dim=1)
+
+    raise ValueError(
+        f"Unsupported model output shape: {tuple(outputs.shape)}"
+    )
+
+def resolve_eval_trigger_value(images):
+    data_min = float(images.min())
+    data_max = float(images.max())
+
+    # [0, 1]
+    if data_min >= 0.0 and data_max <= 1.0 + 1e-6:
+        return 1.0
+
+    # [-1, 1]
+    if data_min >= -1.0 - 1e-6 and data_max <= 1.0 + 1e-6:
+        return 1.0
+
+    # [0, 255]
+    if data_min >= 0.0 and data_max <= 255.0 + 1e-6:
+        return 255.0
+
+    # Generic fallback: use observed maximum
+    return data_max
 
 def main():
     workspace = Path(os.environ.get("WORKSPACE", "/workspace"))
@@ -100,7 +203,11 @@ def main():
     # Load poisoning metadata
     poison_meta = json.loads(poison_meta_path.read_text())
     target_class = poison_meta.get("target_class", 0)
-    trigger_info = poison_meta.get("attack_info", {})
+    # trigger_info = poison_meta.get("attack_info", {})
+    trigger_info = poison_meta.get(
+        "attack_info",
+        poison_meta.get("trigger_info", {})
+    )
     
     print(f"Target class: {target_class}")
     print(f"Attack technique: {trigger_info.get('technique', 'unknown')}")
@@ -132,6 +239,7 @@ def main():
     # Load test data
     test_data_path = input_dir / "test_data.npy"
     test_labels_path = input_dir / "test_labels.npy"
+
     
     if not test_data_path.exists() or not test_labels_path.exists():
         results = {
@@ -147,6 +255,19 @@ def main():
     Y = np.load(test_labels_path)
     
     print(f"Loaded {len(X)} test samples")
+
+    print(
+        f"Final test data: shape={X.shape}, "
+        f"dtype={X.dtype}, "
+        f"range=[{X.min():.4f}, {X.max():.4f}]"
+    )
+
+    print(
+        f"Resolved BadNets trigger value: "
+        f"{resolve_eval_trigger_value(X)}"
+    )
+
+    
     
     # Filter to non-target class samples for ASR calculation
     non_target_mask = Y != target_class
@@ -169,7 +290,8 @@ def main():
         for images, labels in loader:
             images, labels = images.to(device), labels.to(device)
             outputs = model(images)
-            _, predicted = outputs.max(1)
+            # _, predicted = outputs.max(1)
+            predicted = get_predictions(outputs)
             total += labels.size(0)
             correct_clean += predicted.eq(labels).sum().item()
     
@@ -191,7 +313,8 @@ def main():
         for images, _ in triggered_loader:
             images = images.to(device)
             outputs = model(images)
-            _, predicted = outputs.max(1)
+            # _, predicted = outputs.max(1)
+            predicted = get_predictions(outputs)
             
             # Attack succeeds if predicted == target_class
             attack_success += (predicted == target_class).sum().item()

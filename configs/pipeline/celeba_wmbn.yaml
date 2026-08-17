@@ -1,24 +1,20 @@
-# Fairness pipeline (new-format tool ids from configs/tools.yaml)
 dataset:
   name: celeba
   variant: clean
-
 model:
-
   script: configs/model/config_model_resnet20_celeba.py
   framework: pytorch
-
 pipeline:
   pre_training:
     tools:
       - pre_noop
+      - pre_watermarkbn_celeba
   during_training:
     tools:
-      - in_fair
       - in_noop_celeba
   post_training:
     tools:
       - post_noop
   deployment:
     tools:
-      - deploy_noop
+      - deploy_noop 

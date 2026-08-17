@@ -57,7 +57,7 @@ class Worker:
         data_path: Optional[Path] = None,
         gpu_id: Optional[int] = None,
         poll_interval: float = 5.0,
-        task_timeout: int = 7200,
+        task_timeout: int = 14000,
         heartbeat_interval: float = 30.0,
         use_cache: bool = True,
         runtime: Optional[str] = None
@@ -80,10 +80,14 @@ class Worker:
         """
         self.backend_url = backend_url
         self.worker_id = worker_id or f"worker_{uuid.uuid4().hex[:8]}"
+
         
         # Directories
         self.workspace_dir = workspace_dir or Path(f"/data/landseer/workers/{self.worker_id}")
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
+        logger.warning(
+                f"Timeout is {task_timeout} seconds."
+            )
         
         self.cache_dir = cache_dir or Path("/data/landseer/cache")
         self.data_path = data_path  # Path to input data (manual override)
@@ -1156,9 +1160,9 @@ Examples:
     exec_group.add_argument(
         "--timeout",
         type=int,
-        default=int(os.environ.get("LANDSEER_TASK_TIMEOUT_SECONDS", "7200")),
+        default=int(os.environ.get("LANDSEER_TASK_TIMEOUT_SECONDS", "14000")),
         metavar="SECONDS",
-        help="Task execution timeout in seconds (default: 7200, env: LANDSEER_TASK_TIMEOUT_SECONDS). Use 0 or a negative value to disable timeout.",
+        help="Task execution timeout in seconds (default: 14000, env: LANDSEER_TASK_TIMEOUT_SECONDS). Use 0 or a negative value to disable timeout.",
     )
     exec_group.add_argument(
         "--runtime",

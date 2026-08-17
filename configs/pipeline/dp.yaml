@@ -2,7 +2,7 @@ dataset:
   name: cifar10
   variant: clean
 model:
-  script: configs/model/config_model_resnet20.py
+  script: configs/model/config_model_resnet20_dp.py
   framework: pytorch
 pipeline:
   pre_training:
@@ -10,7 +10,7 @@ pipeline:
       - pre_noop
   during_training:
     tools:
-      - in_dp
+      - in_dp_celeba
       - in_noop
   post_training:
     tools:

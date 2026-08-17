@@ -46,6 +46,15 @@ tools:
       command: python3 main.py
       runtime: null
 
+  pre_watermarkbn_celeba:
+    name: pre-watermarkbn-celeba
+    defense_stage: pre_training
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/pre_watermarkbn:v2
+      command: python3 main.py
+      runtime: null
+
   # In-training (during training) tools
   in_dp:
     name: in-dp
@@ -54,6 +63,15 @@ tools:
     container:
       image: ghcr.io/landseer-project/in_dp:v10
       command: python3 main.py
+      runtime: null
+
+  in_dp_celeba:
+    name: in-dp-celeba
+    defense_stage: during_training
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/in_dp:v10
+      command: python3 main.py --dataset celeba --epochs 30
       runtime: null
 
   in_noop:
@@ -243,7 +261,7 @@ tools:
     defense_stage: deployment
     is_baseline: false
     container:
-      image: ghcr.io/landseer-project/deploy_reef_llm:v1
+      image: ghcr.io/landseer-project/deploy_reef_llm:v2
       command: python3 main.py
       runtime: null
 
