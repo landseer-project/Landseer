@@ -2291,9 +2291,26 @@ class PipelineMetricsResponse(BaseModel):
     )
 
 
+def _task_type_token(task_type: Any) -> str:
+    """Normalize TaskType enums/strings to a lowercase stage token."""
+    if task_type is None:
+        return ""
+    if isinstance(task_type, TaskType):
+        return task_type.value
+    value = getattr(task_type, "value", None)
+    if isinstance(value, str):
+        return value
+    text = str(task_type).strip()
+    prefix = "tasktype."
+    lowered = text.lower()
+    if lowered.startswith(prefix):
+        return lowered[len(prefix):]
+    return lowered
+
+
 def _stage_rank(task_type: Any) -> int:
     """Sort task stages in pipeline order, putting unknowns at the end."""
-    key = str(task_type).lower()
+    key = _task_type_token(task_type)
     order = {
         TaskType.PRE_TRAINING.value: 0,
         "pre": 0,
@@ -2313,7 +2330,7 @@ def _stage_rank(task_type: Any) -> int:
 
 def _stage_label(task_type: Any) -> str:
     """Map task type to a user-friendly short stage label."""
-    key = str(task_type).lower()
+    key = _task_type_token(task_type)
     mapping = {
         TaskType.PRE_TRAINING.value: "pre",
         "pre": "pre",
@@ -2331,32 +2348,61 @@ def _stage_label(task_type: Any) -> str:
     return mapping.get(key, key)
 
 
-def _workflow_tools_metadata(tasks: List[Any]) -> Dict[str, Any]:
-    """Return grouped stage tools and a compact label for workflow display."""
-    grouped: Dict[str, List[str]] = {}
-    for task in sorted(tasks, key=lambda t: (_stage_rank(getattr(t, "task_type", "")), getattr(t, "tool_name", ""))):
-        task_type = getattr(task, "task_type", "")
-        if str(task_type).lower() in {TaskType.EVALUATION.value, "evaluation"}:
-            continue
+def _task_tool_name(task: Any) -> Optional[str]:
+    tool_name = getattr(task, "tool_name", None)
+    if tool_name:
+        return str(tool_name)
+    tool_obj = getattr(task, "tool", None)
+    name = getattr(tool_obj, "name", None)
+    if name:
+        return str(name)
+    config = getattr(task, "config", None) or {}
+    config_name = config.get("tool_name")
+    return str(config_name) if config_name else None
 
-        stage = _stage_label(task_type)
-        tool_name = getattr(task, "tool_name", None)
-        if tool_name is None:
-            tool_obj = getattr(task, "tool", None)
-            tool_name = getattr(tool_obj, "name", None)
+
+def _task_stage_label(task: Any) -> str:
+    task_type = getattr(task, "task_type", "")
+    stage = _stage_label(task_type)
+    if stage in {"pre", "in", "post", "deploy"}:
+        return stage
+    config = getattr(task, "config", None) or {}
+    return _stage_label(config.get("stage", ""))
+
+
+def _join_stage_tools(names: List[str]) -> str:
+    """Render a stage's tools in execution order for CSV/display."""
+    return " -> ".join(names)
+
+
+def _workflow_tools_metadata(tasks: List[Any]) -> Dict[str, Any]:
+    """Return grouped stage tools and a compact label for workflow display.
+
+    Tool names are kept in execution order: stages pre → in → post → deploy,
+    and within a stage the sequence the combo actually runs.
+    """
+    grouped: Dict[str, List[str]] = {stage: [] for stage in ("pre", "in", "post", "deploy")}
+    ordered = sorted(
+        enumerate(tasks),
+        key=lambda item: (_stage_rank(getattr(item[1], "task_type", "")), item[0]),
+    )
+    for _, task in ordered:
+        if _task_type_token(getattr(task, "task_type", "")) == TaskType.EVALUATION.value:
+            continue
+        stage = _task_stage_label(task)
+        if stage not in grouped:
+            continue
+        tool_name = _task_tool_name(task)
         if not tool_name:
             continue
-
-        grouped.setdefault(stage, [])
-        if tool_name not in grouped[stage]:
-            grouped[stage].append(str(tool_name))
+        grouped[stage].append(tool_name)
 
     label_parts: List[str] = []
     for stage in ("pre", "in", "post", "deploy"):
         tools = grouped.get(stage, [])
         if not tools:
             continue
-        label_parts.append(f"{stage}: {', '.join(tools)}")
+        label_parts.append(f"{stage}: {_join_stage_tools(tools)}")
 
     return {
         "workflow_tools": grouped,
@@ -2499,6 +2545,10 @@ def _export_run_metrics_csv(run_id: str, scheduler: Scheduler) -> Optional[Path]
         "run_id",
         "workflow_id",
         "workflow_name",
+        "pre",
+        "in",
+        "post",
+        "deploy",
         "pre_training",
         "in_training",
         "post_training",
@@ -2523,10 +2573,14 @@ def _export_run_metrics_csv(run_id: str, scheduler: Scheduler) -> Optional[Path]
                 "run_id": run_id,
                 "workflow_id": workflow_id,
                 "workflow_name": workflow_name_by_id.get(workflow_id, workflow_id),
-                "pre_training": tools.get("pre", []),
-                "in_training": tools.get("in", []),
-                "post_training": tools.get("post", []),
-                "deployment": tools.get("deploy", []),
+                "pre": _join_stage_tools(tools.get("pre", [])),
+                "in": _join_stage_tools(tools.get("in", [])),
+                "post": _join_stage_tools(tools.get("post", [])),
+                "deploy": _join_stage_tools(tools.get("deploy", [])),
+                "pre_training": _join_stage_tools(tools.get("pre", [])),
+                "in_training": _join_stage_tools(tools.get("in", [])),
+                "post_training": _join_stage_tools(tools.get("post", [])),
+                "deployment": _join_stage_tools(tools.get("deploy", [])),
                 "is_baseline": workflow_is_baseline.get(workflow_id, False),
             }
             expected_evaluators = expected_evaluators_by_workflow.get(workflow_id, set())
