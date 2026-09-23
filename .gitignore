@@ -55,3 +55,7 @@ helper_scripts/*gcs-bucket-key.json
 
 src/.bakcommands.txt
 landseer.db
+commands.txt
+containers/evals/privacy/celeba_shadows/
+containers/evals/watermark/watermark_triggers/
+containers/evals/watermark/watermark_triggers_old/

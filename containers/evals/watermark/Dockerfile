@@ -5,7 +5,8 @@ LABEL org.opencontainers.image.description="Evaluates watermark detection and ex
 LABEL org.landseer.type="evaluator"
 LABEL org.landseer.category="evals"
 LABEL org.landseer.metrics="watermark_accuracy,bit_accuracy,detection_rate"
-LABEL org.landseer.required_artifacts="watermark_key.json"
+# LABEL org.landseer.required_artifacts="watermark_key.json"
+LABEL org.landseer.required_artifacts=""
 LABEL org.landseer.defense_types="watermarking"
 
 WORKDIR /app
@@ -19,5 +20,8 @@ RUN pip install --no-cache-dir \
 
 COPY common/model_loader.py ./model_loader.py
 COPY watermark/evaluate.py ./evaluate.py
+
+# Include all watermark trigger files in the evaluator image
+COPY watermark/watermark_triggers/ ./watermark_triggers/
 
 ENTRYPOINT ["python", "evaluate.py"]

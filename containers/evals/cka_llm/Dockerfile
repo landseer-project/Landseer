@@ -10,9 +10,9 @@ LABEL org.landseer.defense_types="reef"
 
 WORKDIR /app
 
-COPY cka_llm/requirements.txt ./requirements.txt
+COPY requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY cka_llm/evaluate.py ./evaluate.py
+COPY evaluate.py ./evaluate.py
 
 ENTRYPOINT ["python", "evaluate.py"]

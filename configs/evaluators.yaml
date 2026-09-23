@@ -31,7 +31,7 @@ evaluators:
   backdoor:
     name: backdoor
     container:
-      image: ghcr.io/landseer-project/evals/backdoor:v2
+      image: ghcr.io/landseer-project/evals/backdoor:v3
       command: ""
     required_artifacts:
       - poisoning_metadata.json
@@ -62,7 +62,7 @@ evaluators:
       image: ghcr.io/landseer-project/evals/fairness:v2
       command: ""
     required_artifacts:
-      - sensitive_attributes.npy
+      - test_sensitive.npy
     metrics:
       - demographic_parity
       - equalized_odds_diff
@@ -84,7 +84,7 @@ evaluators:
   ood:
     name: ood
     container:
-      image: ghcr.io/landseer-project/evals/ood:v2
+      image: ghcr.io/landseer-project/evals/ood:v4
       command: ""
     required_artifacts: []
     metrics:
@@ -96,10 +96,10 @@ evaluators:
   watermark:
     name: watermark
     container:
-      image: ghcr.io/landseer-project/evals/watermark:v2
+      image: ghcr.io/landseer-project/evals/watermark:v3
       command: ""
-    required_artifacts:
-      - watermark_key.json
+    required_artifacts: []
+      # - watermark_key.json
     metrics:
       - watermark_accuracy
       - bit_accuracy
@@ -111,7 +111,7 @@ evaluators:
   fingerprinting_llm:
     name: fingerprinting_llm
     container:
-      image: ghcr.io/landseer-project/evals/cka:v1
+      image: ghcr.io/landseer-project/evals/cka_llm:v3
       command: ""
     required_artifacts: []
     metrics:
@@ -122,7 +122,7 @@ evaluators:
   explanations:
     name: explanations
     container:
-      image: ghcr.io/landseer-project/evals/explanations:v1
+      image: ghcr.io/landseer-project/evals/explanations:v3
       command: ""
     required_artifacts: []
     metrics:
@@ -133,11 +133,11 @@ evaluators:
   privacy:
     name: privacy
     container:
-      image: ghcr.io/landseer-project/evals/privacy:v1
+      image: ghcr.io/landseer-project/evals/privacy:v4
       command: ""
     required_artifacts: []
     metrics:
       - mia_auc
     defense_types:
-      - differential_privacy
+      - differential_privacys
 

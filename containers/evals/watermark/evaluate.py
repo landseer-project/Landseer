@@ -111,94 +111,246 @@ def evaluate_weight_based_watermark(model, wm_matrix_path, wm_bits_path, device)
     }
 
 
+# def evaluate_trigger_based_watermark(model, triggers_path, device):
+#     """
+#     Evaluate trigger-based watermarking (WatermarkNN style).
+#     Tests model accuracy on watermark trigger images.
+#     """
+#     print(f"Evaluating trigger-based watermarking from: {triggers_path}")
+    
+#     # Load triggers
+#     trigger_images = None
+#     trigger_labels = None
+    
+#     # Check for numpy format
+#     for img_name in ["trigger_images.npy", "watermark_images.npy", "wm_images.npy"]:
+#         img_path = triggers_path / img_name
+#         if img_path.exists():
+#             trigger_images = np.load(img_path)
+#             break
+    
+#     for label_name in ["trigger_labels.npy", "watermark_labels.npy", "wm_labels.npy", "labels.npy"]:
+#         label_path = triggers_path / label_name
+#         if label_path.exists():
+#             trigger_labels = np.load(label_path)
+#             break
+    
+#     # Try text labels file (WatermarkNN format)
+#     if trigger_labels is None:
+#         for labels_txt in ["labels.txt", "labels-cifar.txt"]:
+#             txt_path = triggers_path / labels_txt
+#             if txt_path.exists():
+#                 trigger_labels = np.loadtxt(txt_path)
+#                 break
+    
+#     # Try loading from image folder if numpy not found
+#     if trigger_images is None:
+#         image_files = glob(str(triggers_path / "*.png")) + glob(str(triggers_path / "pics/*.png"))
+#         if image_files and trigger_labels is not None:
+#             try:
+#                 from PIL import Image
+#                 from torchvision import transforms
+                
+#                 transform = transforms.Compose([
+#                     transforms.Resize(32),
+#                     transforms.CenterCrop(32),
+#                     transforms.ToTensor(),
+#                     transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+#                 ])
+                
+#                 images = []
+#                 for img_file in sorted(image_files)[:len(trigger_labels)]:
+#                     img = Image.open(img_file).convert('RGB')
+#                     img_tensor = transform(img)
+#                     images.append(img_tensor.numpy())
+                
+#                 trigger_images = np.stack(images)
+#             except Exception as e:
+#                 print(f"Failed to load images from folder: {e}")
+    
+#     if trigger_images is None or trigger_labels is None:
+#         print("No trigger images or labels found")
+#         return None, None
+    
+#     print(f"Loaded {len(trigger_images)} trigger images")
+    
+#     # Create dataloader
+#     dataset = TensorDataset(
+#         torch.tensor(trigger_images).float(),
+#         torch.tensor(trigger_labels).long()
+#     )
+#     loader = DataLoader(dataset, batch_size=32, shuffle=False)
+    
+#     # Evaluate
+#     model.eval()
+#     correct = 0
+#     total = 0
+    
+#     with torch.no_grad():
+#         for data, targets in loader:
+#             data, targets = data.to(device), targets.to(device)
+#             outputs = model(data)
+#             _, predicted = outputs.max(1)
+#             total += targets.size(0)
+#             correct += (predicted == targets).sum().item()
+    
+#     accuracy = correct / total if total > 0 else 0.0
+#     print(f"Trigger-based watermark accuracy: {accuracy * 100:.2f}%")
+    
+#     return accuracy, {
+#         "method": "trigger_based",
+#         "n_triggers": total
+#     }
+
 def evaluate_trigger_based_watermark(model, triggers_path, device):
     """
-    Evaluate trigger-based watermarking (WatermarkNN style).
-    Tests model accuracy on watermark trigger images.
+    Evaluate BadNets-style trigger watermark accuracy.
+
+    Supported numpy formats:
+      CIFAR-10: (N,3,32,32), [0,1]
+      CelebA:   (N,3,64,64), [0,1]
     """
+    from torchvision import transforms
+
     print(f"Evaluating trigger-based watermarking from: {triggers_path}")
-    
-    # Load triggers
+
     trigger_images = None
     trigger_labels = None
-    
-    # Check for numpy format
-    for img_name in ["trigger_images.npy", "watermark_images.npy", "wm_images.npy"]:
+    image_file = None
+    label_file = None
+
+    # Numpy trigger files
+    for img_name in ["wm_test_data.npy", "trigger_images.npy", "watermark_images.npy", "wm_images.npy"]:
         img_path = triggers_path / img_name
         if img_path.exists():
-            trigger_images = np.load(img_path)
+            trigger_images = np.load(img_path).astype(np.float32)
+            image_file = img_name
             break
-    
-    for label_name in ["trigger_labels.npy", "watermark_labels.npy", "wm_labels.npy", "labels.npy"]:
+
+    for label_name in ["wm_test_labels.npy", "trigger_labels.npy", "watermark_labels.npy", "wm_labels.npy"]:
         label_path = triggers_path / label_name
         if label_path.exists():
-            trigger_labels = np.load(label_path)
+            trigger_labels = np.load(label_path).astype(np.int64)
+            label_file = label_name
             break
-    
-    # Try text labels file (WatermarkNN format)
+
+    # WatermarkNN text labels
     if trigger_labels is None:
         for labels_txt in ["labels.txt", "labels-cifar.txt"]:
             txt_path = triggers_path / labels_txt
             if txt_path.exists():
-                trigger_labels = np.loadtxt(txt_path)
+                trigger_labels = np.loadtxt(txt_path).astype(np.int64)
+                label_file = labels_txt
                 break
-    
-    # Try loading from image folder if numpy not found
+
+    # WatermarkNN image-folder format
     if trigger_images is None:
         image_files = glob(str(triggers_path / "*.png")) + glob(str(triggers_path / "pics/*.png"))
+
         if image_files and trigger_labels is not None:
             try:
                 from PIL import Image
-                from torchvision import transforms
-                
+
                 transform = transforms.Compose([
-                    transforms.Resize(32),
-                    transforms.CenterCrop(32),
+                    transforms.Resize((32, 32)),
                     transforms.ToTensor(),
-                    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
                 ])
-                
+
                 images = []
                 for img_file in sorted(image_files)[:len(trigger_labels)]:
-                    img = Image.open(img_file).convert('RGB')
-                    img_tensor = transform(img)
-                    images.append(img_tensor.numpy())
-                
-                trigger_images = np.stack(images)
+                    img = Image.open(img_file).convert("RGB")
+                    images.append(transform(img).numpy())
+
+                trigger_images = np.stack(images).astype(np.float32)
+                image_file = "PNG trigger images"
+
             except Exception as e:
                 print(f"Failed to load images from folder: {e}")
-    
+
     if trigger_images is None or trigger_labels is None:
         print("No trigger images or labels found")
         return None, None
-    
+
+    if trigger_images.ndim != 4 or trigger_images.shape[1] != 3:
+        raise ValueError(f"Expected trigger images (N,3,H,W), got {trigger_images.shape}")
+
+    if len(trigger_images) != len(trigger_labels):
+        raise ValueError(f"Trigger image/label count mismatch: {len(trigger_images)} vs {len(trigger_labels)}")
+
+    H, W = trigger_images.shape[2:]
+    data_min = float(trigger_images.min())
+    data_max = float(trigger_images.max())
+
+    print(f"Trigger image file: {image_file}")
+    print(f"Trigger label file: {label_file}")
     print(f"Loaded {len(trigger_images)} trigger images")
-    
-    # Create dataloader
-    dataset = TensorDataset(
-        torch.tensor(trigger_images).float(),
-        torch.tensor(trigger_labels).long()
-    )
-    loader = DataLoader(dataset, batch_size=32, shuffle=False)
-    
-    # Evaluate
+    print(f"Trigger shape: {trigger_images.shape}")
+    print(f"Trigger range: {data_min:.3f} to {data_max:.3f}")
+
+    if data_min < -1e-6 or data_max > 1.0001:
+        raise ValueError(
+            f"Expected trigger images in [0,1], got range [{data_min:.3f},{data_max:.3f}]"
+        )
+
+    # Detect dataset from current Landseer data format and match test preprocessing.
+    if (H, W) == (64, 64):
+        dataset_type = "celeba"
+        preprocess = transforms.Compose([
+            transforms.Resize((32, 32)),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+        ])
+
+    elif (H, W) == (32, 32):
+        dataset_type = "cifar10"
+        preprocess = transforms.Normalize(
+            (0.4914, 0.4822, 0.4465),
+            (0.2023, 0.1994, 0.2010)
+        )
+
+    else:
+        raise ValueError(
+            f"Unsupported trigger format: shape={(H, W)}, range=[{data_min:.3f},{data_max:.3f}]. "
+            "Expected CIFAR-10 (32x32, [0,1]) or CelebA (64x64, [0,1])."
+        )
+
+    print(f"Detected trigger dataset: {dataset_type}")
+
+    dataset = TensorDataset(torch.tensor(trigger_images).float(), torch.tensor(trigger_labels).long())
+    loader = DataLoader(dataset, batch_size=128, shuffle=False)
+
     model.eval()
     correct = 0
     total = 0
-    
+    prediction_counts = {}
+
     with torch.no_grad():
         for data, targets in loader:
             data, targets = data.to(device), targets.to(device)
+
+            # Match deterministic test preprocessing used by the trainer.
+            data = preprocess(data)
+
             outputs = model(data)
-            _, predicted = outputs.max(1)
+            predicted = outputs.argmax(1)
+
             total += targets.size(0)
             correct += (predicted == targets).sum().item()
-    
+
+            for label, count in zip(*torch.unique(predicted, return_counts=True)):
+                label = int(label.item())
+                prediction_counts[label] = prediction_counts.get(label, 0) + int(count.item())
+
     accuracy = correct / total if total > 0 else 0.0
+
+    print(f"Prediction counts: {prediction_counts}")
     print(f"Trigger-based watermark accuracy: {accuracy * 100:.2f}%")
-    
+
     return accuracy, {
         "method": "trigger_based",
+        "dataset": dataset_type,
+        "trigger_source": str(triggers_path),
+        "trigger_images": image_file,
+        "trigger_labels": label_file,
         "n_triggers": total
     }
 
@@ -218,11 +370,35 @@ def main():
     
     # Check for watermark key (required file for graceful skip)
     watermark_key_path = input_dir / "watermark_key.json"
-    
+
     # Also check for alternative watermark files
     wm_matrix_path = input_dir / "wm_matrix.npy"
     wm_bits_path = input_dir / "wm_bits.npy"
-    triggers_path = input_dir / "watermark_triggers"
+
+    # Trigger source priority:
+    # 1. wm_test_* generated by an upstream BadNets pre-watermarking tool
+    # 2. watermark_triggers directory supplied upstream
+    # 3. watermark test set baked into this evaluator image
+    if (input_dir / "wm_test_data.npy").exists() and (input_dir / "wm_test_labels.npy").exists():
+        triggers_path = input_dir
+        print("Using upstream BadNets wm_test_data.npy / wm_test_labels.npy")
+
+    elif (input_dir / "watermark_triggers").exists():
+        triggers_path = input_dir / "watermark_triggers"
+        print("Using upstream watermark_triggers directory")
+
+    else:
+        triggers_path = Path("/app/watermark_triggers")
+        print("Using baked-in watermark trigger set")
+    
+    # # Also check for alternative watermark files
+    # wm_matrix_path = input_dir / "wm_matrix.npy"
+    # wm_bits_path = input_dir / "wm_bits.npy"
+    # triggers_path = input_dir / "watermark_triggers"
+
+    # # Otherwise use the watermark test set baked into the evaluator image.
+    # if not triggers_path.exists():
+    #     triggers_path = Path("/app/watermark_triggers")
     
     has_weight_based = wm_matrix_path.exists() and wm_bits_path.exists()
     has_trigger_based = triggers_path.exists() and triggers_path.is_dir()

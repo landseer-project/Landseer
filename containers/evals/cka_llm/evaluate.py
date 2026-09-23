@@ -3,14 +3,13 @@
 """
 REEF CKA Evaluator
 
-Computes linear CKA similarity between two sets of saved
-model activations and reports the mean corresponding-layer
-CKA as the Landseer metric `cka_sim`.
+Computes linear CKA similarity between two sets of saved model
+activations and reports the mean corresponding-layer CKA as `cka_sim`.
 """
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -27,45 +26,16 @@ class CudaCKA:
 
     def centering(self, K):
         n = K.shape[0]
-
-        unit = torch.ones(
-            (n, n),
-            device=self.device,
-            dtype=K.dtype,
-        )
-
-        identity = torch.eye(
-            n,
-            device=self.device,
-            dtype=K.dtype,
-        )
-
-        H = identity - unit / n
-
+        H = torch.eye(n, device=self.device, dtype=K.dtype) - torch.ones((n, n), device=self.device, dtype=K.dtype) / n
         return H @ K @ H
 
     def linear_HSIC(self, X, Y):
-
-        L_X = X @ X.T
-        L_Y = Y @ Y.T
-
-        return torch.sum(
-            self.centering(L_X)
-            * self.centering(L_Y)
-        )
+        return torch.sum(self.centering(X @ X.T) * self.centering(Y @ Y.T))
 
     def linear_CKA(self, X, Y):
-
         hsic = self.linear_HSIC(X, Y)
-
-        var1 = torch.sqrt(
-            self.linear_HSIC(X, X)
-        )
-
-        var2 = torch.sqrt(
-            self.linear_HSIC(Y, Y)
-        )
-
+        var1 = torch.sqrt(self.linear_HSIC(X, X))
+        var2 = torch.sqrt(self.linear_HSIC(Y, Y))
         return hsic / (var1 * var2)
 
 
@@ -74,261 +44,112 @@ class CudaCKA:
 # ============================================================
 
 def find_layers(model_dir):
-    """
-    Find available layer numbers from files such as:
-        layer_0_0.pt
-        layer_1_0.pt
-        ...
-    """
-
+    """Return available layer numbers from layer_<layer>_<batch>.pt files."""
     layers = set()
 
     for path in model_dir.glob("layer_*_*.pt"):
-
         parts = path.stem.split("_")
-
         if len(parts) >= 3:
             layers.add(int(parts[1]))
 
     return sorted(layers)
 
 
-def load_layer_acts(
-    model_dir,
-    layer,
-    device,
-    center=True,
-    scale=True,
-):
-    """
-    Load all activation chunks belonging to one layer.
-    """
-
-    files = list(
-        model_dir.glob(
-            f"layer_{layer}_*.pt"
-        )
+def load_layer_acts(model_dir, layer, device, center=True, scale=True):
+    """Load and preprocess all saved activation chunks for one layer."""
+    files = sorted(
+        model_dir.glob(f"layer_{layer}_*.pt"),
+        key=lambda p: int(p.stem.split("_")[-1]),
     )
 
     if not files:
-        raise FileNotFoundError(
-            f"No activation files found for "
-            f"layer {layer} in {model_dir}"
-        )
+        raise FileNotFoundError(f"No activation files found for layer {layer} in {model_dir}")
 
-    # Sort using the final batch index
-    files = sorted(
-        files,
-        key=lambda p: int(
-            p.stem.split("_")[-1]
-        ),
-    )
+    acts = torch.cat([torch.load(f, map_location="cpu") for f in files], dim=0).float().to(device)
 
-    activations = [
-        torch.load(
-            file,
-            map_location="cpu",
-        )
-        for file in files
-    ]
-
-    acts = torch.cat(
-        activations,
-        dim=0,
-    ).float()
-
-    acts = acts.to(device)
-
-    # Match original REEF preprocessing
     if center:
-        acts = (
-            acts
-            - torch.mean(
-                acts,
-                dim=0,
-            )
-        )
+        acts = acts - torch.mean(acts, dim=0)
 
     if scale:
-
-        std = torch.std(
-            acts,
-            dim=0,
-        )
-
-        acts = (
-            acts
-            / std.clamp_min(1e-8)
-        )
+        std = torch.std(acts, dim=0)
+        acts = acts / std.clamp_min(1e-8)
 
     return acts
 
 
+# ============================================================
+# Metadata
+# ============================================================
 
 def load_metadata(model_dir):
-
-    metadata_path = (
-        model_dir / "metadata.json"
-    )
-
-    if not metadata_path.exists():
-        return None
-
-    return json.loads(
-        metadata_path.read_text()
-    )
+    metadata_path = model_dir / "metadata.json"
+    return json.loads(metadata_path.read_text()) if metadata_path.exists() else None
 
 
-def validate_metadata(
-    base_metadata,
-    test_metadata,
-):
-    """
-    Check that both fingerprints were generated using
-    equivalent evaluation inputs.
-    """
-
-    if (
-        base_metadata is None
-        or test_metadata is None
-    ):
+def validate_metadata(base_metadata, test_metadata):
+    """Ensure both activation sets were generated from identical inputs."""
+    if base_metadata is None or test_metadata is None:
         return
 
-    checks = [
-        "sample_count",
-        "token_position",
-        "dataset_sha256",
-    ]
-
-    for key in checks:
-
-        if (
-            base_metadata.get(key)
-            != test_metadata.get(key)
-        ):
+    for key in ["sample_count", "token_position", "dataset_sha256"]:
+        if base_metadata.get(key) != test_metadata.get(key):
             raise ValueError(
-                f"Activation metadata mismatch "
-                f"for '{key}': "
-                f"{base_metadata.get(key)} != "
-                f"{test_metadata.get(key)}"
+                f"Activation metadata mismatch for '{key}': "
+                f"{base_metadata.get(key)} != {test_metadata.get(key)}"
             )
 
 
 # ============================================================
-# Evaluation
+# CKA evaluation
 # ============================================================
 
-def compute_cka_similarity(
-    base_dir,
-    test_dir,
-    device,
-):
-
-    base_layers = find_layers(
-        base_dir
-    )
-
-    test_layers = find_layers(
-        test_dir
-    )
+def compute_cka_similarity(base_dir, test_dir, device):
+    base_layers = find_layers(base_dir)
+    test_layers = find_layers(test_dir)
 
     if not base_layers:
-        raise ValueError(
-            f"No activation layers found in "
-            f"{base_dir}"
-        )
+        raise ValueError(f"No activation layers found in {base_dir}")
 
     if not test_layers:
-        raise ValueError(
-            f"No activation layers found in "
-            f"{test_dir}"
-        )
+        raise ValueError(f"No activation layers found in {test_dir}")
 
-    print(
-        f"Base layers: {base_layers}"
-    )
-
-    print(
-        f"Test layers: {test_layers}"
-    )
-
-    # Corresponding layer numbers available
-    # in BOTH models
-    common_layers = sorted(
-        set(base_layers)
-        & set(test_layers)
-    )
+    common_layers = sorted(set(base_layers) & set(test_layers))
 
     if not common_layers:
-        raise ValueError(
-            "The two models have no common "
-            "layer indices."
-        )
+        raise ValueError("The two models have no common layer indices.")
 
-    print(
-        f"Corresponding layers: "
-        f"{common_layers}"
-    )
+    print(f"Base layers: {base_layers}")
+    print(f"Test layers: {test_layers}")
+    print(f"Corresponding layers: {common_layers}")
 
     cka = CudaCKA(device)
-
     diagonal_scores = []
 
     for layer in common_layers:
-
-        X = load_layer_acts(
-            base_dir,
-            layer,
-            device,
-            center=True,
-            scale=True,
-        )
-
-        Y = load_layer_acts(
-            test_dir,
-            layer,
-            device,
-            center=True,
-            scale=True,
-        )
+        X = load_layer_acts(base_dir, layer, device, center=True, scale=True)
+        Y = load_layer_acts(test_dir, layer, device, center=True, scale=True)
 
         if X.shape[0] != Y.shape[0]:
-            raise ValueError(
-                f"Sample count mismatch at "
-                f"layer {layer}: "
-                f"{X.shape[0]} vs "
-                f"{Y.shape[0]}"
-            )
+            raise ValueError(f"Sample count mismatch at layer {layer}: {X.shape[0]} vs {Y.shape[0]}")
 
-        score = cka.linear_CKA(
-            X,
-            Y,
-        )
+        score = float(cka.linear_CKA(X, Y).detach().cpu())
+        diagonal_scores.append(score)
 
-        score = float(
-            score.detach().cpu()
-        )
+        print(f"Layer {layer}: CKA = {score:.6f}")
 
-        diagonal_scores.append(
-            score
-        )
+    cka_sim = float(np.mean(diagonal_scores))
 
-        print(
-            f"Layer {layer}: "
-            f"CKA = {score:.6f}"
-        )
+    return cka_sim, common_layers, diagonal_scores
 
-    cka_sim = float(
-        np.mean(
-            diagonal_scores
-        )
-    )
 
-    return (
-        cka_sim,
-        common_layers,
-        diagonal_scores,
-    )
+# ============================================================
+# Output helper
+# ============================================================
+
+def save_results(output_dir, results):
+    result_path = output_dir / "evaluation_results.json"
+    result_path.write_text(json.dumps(results, indent=2))
+    print(f"Results saved to {result_path}")
 
 
 # ============================================================
@@ -336,201 +157,74 @@ def compute_cka_similarity(
 # ============================================================
 
 def main():
+    workspace = Path(os.environ.get("WORKSPACE", "/workspace"))
+    input_dir = workspace / "input"
+    output_dir = workspace / "output"
+    output_dir.mkdir(exist_ok=True, parents=True)
 
-    workspace = Path(
-        os.environ.get(
-            "WORKSPACE",
-            "/workspace",
-        )
-    )
+    config_path = input_dir / "config.json"
+    config = json.loads(config_path.read_text()) if config_path.exists() else {}
 
-    input_dir = (
-        workspace / "input"
-    )
+    base_model = config.get("base_model", "gemma-2-2b")
+    test_model = config.get("test_model", "gemma-2-2b-it")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    output_dir = (
-        workspace / "output"
-    )
-
-    output_dir.mkdir(
-        exist_ok=True,
-        parents=True,
-    )
-
-    config_path = (
-        input_dir / "config.json"
-    )
-
-    config = {}
-
-    if config_path.exists():
-
-        config = json.loads(
-            config_path.read_text()
-        )
-
-    # Model folder names produced during deployment
-    base_model = config.get(
-        "base_model",
-        "gpt2",
-    )
-
-    test_model = config.get(
-        "test_model",
-        "gpt2-imdb",
-    )
-
-    device = (
-        "cuda"
-        if torch.cuda.is_available()
-        else "cpu"
-    )
-
-    base_dir = (
-        input_dir / base_model
-    )
-
-    test_dir = (
-        input_dir / test_model
-    )
+    base_dir = input_dir / base_model
+    test_dir = input_dir / test_model
 
     print("=" * 60)
     print("REEF CKA EVALUATION")
     print("=" * 60)
-
-    print(
-        f"Input directory: {input_dir}"
-    )
-
-    print(
-        f"Base model:      {base_model}"
-    )
-
-    print(
-        f"Test model:      {test_model}"
-    )
-
-    print(
-        f"Device:          {device}"
-    )
-
+    print(f"Input directory: {input_dir}")
+    print(f"Base model:      {base_model}")
+    print(f"Test model:      {test_model}")
+    print(f"Device:          {device}")
     print("=" * 60)
 
-    # --------------------------------------------------------
-    # Verify activation directories
-    # --------------------------------------------------------
-
     if not base_dir.exists():
-
-        results = {
+        save_results(output_dir, {
             "evaluator": "reef_cka",
             "success": False,
-            "error": (
-                f"Base activation directory "
-                f"not found: {base_dir}"
-            ),
+            "error": f"Base activation directory not found: {base_dir}",
             "metrics": {},
-        }
-
-        (
-            output_dir
-            / "evaluation_results.json"
-        ).write_text(
-            json.dumps(
-                results,
-                indent=2,
-            )
-        )
-
+        })
         return
 
     if not test_dir.exists():
-
-        results = {
+        save_results(output_dir, {
             "evaluator": "reef_cka",
             "success": False,
-            "error": (
-                f"Test activation directory "
-                f"not found: {test_dir}"
-            ),
+            "error": f"Test activation directory not found: {test_dir}",
             "metrics": {},
-        }
-
-        (
-            output_dir
-            / "evaluation_results.json"
-        ).write_text(
-            json.dumps(
-                results,
-                indent=2,
-            )
-        )
-
+        })
         return
 
     try:
+        base_metadata = load_metadata(base_dir)
+        test_metadata = load_metadata(test_dir)
+        validate_metadata(base_metadata, test_metadata)
 
-        # ----------------------------------------------------
-        # Validate metadata
-        # ----------------------------------------------------
+        cka_sim, layers, layer_scores = compute_cka_similarity(base_dir, test_dir, device)
 
-        base_metadata = (
-            load_metadata(base_dir)
-        )
-
-        test_metadata = (
-            load_metadata(test_dir)
-        )
-
-        validate_metadata(
-            base_metadata,
-            test_metadata,
-        )
-
-        # ----------------------------------------------------
-        # CKA
-        # ----------------------------------------------------
-
-        (
-            cka_sim,
-            layers,
-            layer_scores,
-        ) = compute_cka_similarity(
-            base_dir,
-            test_dir,
-            device,
-        )
-
-        metrics = {
-            "cka_sim": cka_sim,
-        }
-
-        print()
-        print(
-            f"Mean diagonal CKA: "
-            f"{cka_sim:.6f}"
-        )
+        print(f"\nMean diagonal CKA: {cka_sim:.6f}")
 
         results = {
             "evaluator": "reef_cka",
             "success": True,
             "skipped": False,
-            "metrics": metrics,
+            "metrics": {
+                "cka_sim": cka_sim,
+            },
             "details": {
                 "base_model": base_model,
                 "test_model": test_model,
                 "layers": layers,
                 "layer_cka": layer_scores,
             },
-            "timestamp": (
-                datetime.utcnow()
-                .isoformat()
-                + "Z"
-            ),
+            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         }
 
     except Exception as e:
-
         results = {
             "evaluator": "reef_cka",
             "success": False,
@@ -538,26 +232,7 @@ def main():
             "metrics": {},
         }
 
-    # --------------------------------------------------------
-    # Save Landseer result
-    # --------------------------------------------------------
-
-    result_path = (
-        output_dir
-        / "evaluation_results.json"
-    )
-
-    result_path.write_text(
-        json.dumps(
-            results,
-            indent=2,
-        )
-    )
-
-    print(
-        f"Results saved to "
-        f"{result_path}"
-    )
+    save_results(output_dir, results)
 
 
 if __name__ == "__main__":

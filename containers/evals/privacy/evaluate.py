@@ -52,12 +52,14 @@ from model_loader import load_torch_model_for_eval
 
 # Folder containing ONLY shadow models model_000 to model_127.
 SHADOW_SCORES_SUBDIR = "celeba_shadows"
+# SHADOW_SCORES_DIR = Path("/app/celeba_shadows")
+BUILTIN_SHADOW_DIR = Path("/app/celeba_shadows")
 
 
 # Must match how the target model and shadow models were trained.
 # For our CelebA ResNet20 code, we used "half" by default:
 #     x -> (x - 0.5) / 0.5
-NORMALIZE_MODE = "none"   # choices: "none", "half", "imagenet", "cifar10"
+NORMALIZE_MODE = "half"   # choices: "none", "half", "imagenet", "cifar10"
 
 # ResNet20 CelebA setup used 32x32 images.
 IMAGE_SIZE = 32
@@ -469,7 +471,15 @@ def main():
     workspace = Path(os.environ.get("WORKSPACE", "/workspace"))
     input_dir = workspace / "input"
     output_dir = workspace / "output"
-    shadow_scores_dir = input_dir / SHADOW_SCORES_SUBDIR
+
+    INPUT_SHADOW_DIR = input_dir / "celeba_shadows"
+
+    if INPUT_SHADOW_DIR.exists():
+        shadow_scores_dir = INPUT_SHADOW_DIR
+    else:
+        shadow_scores_dir = BUILTIN_SHADOW_DIR
+    # shadow_scores_dir = input_dir / SHADOW_SCORES_SUBDIR
+    # shadow_scores_dir = SHADOW_SCORES_DIR
     output_dir.mkdir(exist_ok=True, parents=True)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"

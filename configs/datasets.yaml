@@ -14,7 +14,7 @@ datasets:
           landseer.variant: clean
 
   celeba:
-    default_image: ghcr.io/landseer-project/dataset_celeba:v1
+    default_image: ghcr.io/landseer-project/datasets/celeba:v2
     source_artifacts_dir: /data/landseer/landseer_old_data/data/celeba/downloaded_dataset
     required_files:
       - data.npy
@@ -27,10 +27,15 @@ datasets:
       - img_align_celeba
     variants:
       clean:
-        image: ghcr.io/landseer-project/dataset_celeba:v1
+        image: ghcr.io/landseer-project/datasets/celeba:v2
         labels:
           landseer.dataset: celeba
           landseer.variant: clean
+      poisoned:
+        image: ghcr.io/landseer-project/dataset_celeba_poisoned:v2
+        labels:
+          landseer.dataset: celeba
+          landseer.variant: poisoned
 
   llm_data:
     default_image: ""
@@ -41,10 +46,17 @@ datasets:
       - labels.npy
       - test_data.npy
       - test_labels.npy
+      - gemma-2-2b-it-prefix-good.jsonl
+      - gemma-2-2b-it-prefix-bad.jsonl
+      - alpaca_cleaned.jsonl
+      - gemma-2-2b-it-bad-eval.jsonl
+      - config.json
 
     required_dirs:
-      - gpt2
-      - gpt2-imdb
+      - gemma-2-2b
+      - gemma-2-2b-it
+      # - gpt2
+      # - gpt2-imdb
     variants:
       clean:
         labels:

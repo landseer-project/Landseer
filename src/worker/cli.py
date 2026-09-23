@@ -55,7 +55,7 @@ class Worker:
         data_path: Optional[Path] = None,
         gpu_id: Optional[int] = None,
         poll_interval: float = 5.0,
-        task_timeout: int = 14000,
+        task_timeout: int = 28000,
         heartbeat_interval: float = 30.0,
         use_cache: bool = True,
         runtime: Optional[str] = None
@@ -1146,9 +1146,9 @@ Examples:
     exec_group.add_argument(
         "--timeout",
         type=int,
-        default=int(os.environ.get("LANDSEER_TASK_TIMEOUT_SECONDS", "14000")),
+        default=int(os.environ.get("LANDSEER_TASK_TIMEOUT_SECONDS", "28000")),
         metavar="SECONDS",
-        help="Task execution timeout in seconds (default: 14000, env: LANDSEER_TASK_TIMEOUT_SECONDS). Use 0 or a negative value to disable timeout.",
+        help="Task execution timeout in seconds (default: 28000, env: LANDSEER_TASK_TIMEOUT_SECONDS). Use 0 or a negative value to disable timeout.",
     )
     exec_group.add_argument(
         "--runtime",

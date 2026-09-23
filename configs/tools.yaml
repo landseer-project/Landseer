@@ -42,7 +42,7 @@ tools:
     defense_stage: pre_training
     is_baseline: false
     container:
-      image: ghcr.io/landseer-project/pre_watermarkbn:v2
+      image: ghcr.io/landseer-project/pre_watermarkbn:v3
       command: python3 main.py
       runtime: null
 
@@ -51,8 +51,8 @@ tools:
     defense_stage: pre_training
     is_baseline: false
     container:
-      image: ghcr.io/landseer-project/pre_watermarkbn:v2
-      command: python3 main.py
+      image: ghcr.io/landseer-project/pre_watermarkbn:v3
+      command: python3 main.py --trigger_label 1 --exclude_target_class --trigger_size 10 --wm_rate 0.1
       runtime: null
 
   # In-training (during training) tools
@@ -71,7 +71,7 @@ tools:
     is_baseline: false
     container:
       image: ghcr.io/landseer-project/in_dp:v10
-      command: python3 main.py --dataset celeba --epochs 30
+      command: python3 main.py --dataset celeba --epochs 30 --target_epsilon 2
       runtime: null
 
   in_noop:
@@ -88,7 +88,7 @@ tools:
     defense_stage: during_training
     is_baseline: true
     container:
-      image: ghcr.io/landseer-project/in_noop_celeba:v3
+      image: ghcr.io/landseer-project/in_noop_celeba:v4
       command: python main.py
       runtime: null
 
@@ -110,6 +110,15 @@ tools:
       command: python3 main.py
       runtime: null
 
+  in_trades_celeba:
+    name: in-trades-celeba
+    defense_stage: during_training
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/in_trades:v4
+      command: python3 main.py --dataset celeba
+      runtime: null
+
   in_fair:
     name: in-fair
     defense_stage: during_training
@@ -126,6 +135,15 @@ tools:
     container:
       image: ghcr.io/landseer-project/in_teaching:v9
       command: python3 main.py
+      runtime: null
+
+  in_teaching_celeba:
+    name: in-teaching-celeba
+    defense_stage: during_training
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/in_teaching:v11
+      command: python3 main.py --dataset celeba --num_workers 0 --noise_type symmetric --noise_rate 0.2
       runtime: null
 
   watermarknn:
@@ -156,14 +174,14 @@ tools:
       command: python main.py
       runtime: null
 
-  post_fineprune:
-    name: fine pruning
-    defense_stage: post_training
-    is_baseline: false
-    container:
-      image: ghcr.io/landseer-project/post_fineprune:v2
-      command: python3 main.py --prune-percentage 0.1
-      runtime: null
+  # post_fineprune:
+  #   name: fine pruning
+  #   defense_stage: post_training
+  #   is_baseline: false
+  #   container:
+  #     image: ghcr.io/landseer-project/post_fineprune:v2
+  #     command: python3 main.py --prune-percentage 0.1
+  #     runtime: null
   
   post_dp:
     name: post_dp
@@ -210,6 +228,16 @@ tools:
       command: python3 main.py 
       runtime: null
 
+  post_neuronprune_celeba:
+    name: post_neuronprune_celeba
+    defense_stage: post_training
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/post_neuronprune:v3
+      command: python3 main.py --clean_threshold 0.55  --pruning-by number --export-number 4  
+      runtime: null
+
+
   # Deployment tools
   deploy_noop:
     name: deploy_noop
@@ -247,6 +275,15 @@ tools:
       command: python3 main.py
       runtime: null
 
+  deploy_explainshap_celeba:
+    name: deploy_explainshap_celeba
+    defense_stage: deployment
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/deploy_explainshap:v4
+      command: python3 main.py 
+      runtime: null
+
   deploy_dataset_inference:
     name: deploy_dataset_inference
     defense_stage: deployment
@@ -255,13 +292,15 @@ tools:
       image: ghcr.io/landseer-project/deploy_dataset_inference:v2
       command: python3 main.py
       runtime: null
+  
+
 
   deploy_reef_llm:
     name: deploy_reef_llm
     defense_stage: deployment
     is_baseline: false
     container:
-      image: ghcr.io/landseer-project/deploy_reef_llm:v2
+      image: ghcr.io/landseer-project/deploy_reef_llm:v3
       command: python3 main.py
       runtime: null
 

@@ -18,7 +18,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from model_loader import load_torch_model_for_eval
 
 
-def evaluate_fairness(model, test_X, test_y, sensitive_attrs, device, method="fairlearn"):
+def evaluate_fairness(model, test_X, test_y, sensitive_attrs, device, method="custom"):
     """
     Evaluate fairness metrics.
     

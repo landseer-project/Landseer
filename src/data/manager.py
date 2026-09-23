@@ -73,12 +73,13 @@ class DatasetManager:
         force_reprepare = bool(missing_dirs)
 
         # Containers are the only place that create/modify dataset artifacts.
-        if variant == "clean" and (missing or force_reprepare):
+        if missing or force_reprepare:
             if not runtime_cfg.get("image"):
                 raise FileNotFoundError(
                     f"Dataset artifacts missing for {key}/{variant} in {output_dir}: "
                     f"files={missing}, dirs={missing_dirs}"
                 )
+
             self._prepare_with_container(
                 key=key,
                 output_dir=output_dir,
@@ -87,6 +88,24 @@ class DatasetManager:
                 runtime_cfg=runtime_cfg,
                 force_reprepare=force_reprepare,
             )
+
+
+        # # Containers are the only place that create/modify dataset artifacts.
+        # if variant == "clean" and (missing or force_reprepare):
+        #     if not runtime_cfg.get("image"):
+        #         raise FileNotFoundError(
+        #             f"Dataset artifacts missing for {key}/{variant} in {output_dir}: "
+        #             f"files={missing}, dirs={missing_dirs}"
+        #         )
+        #     self._prepare_with_container(
+        #         key=key,
+        #         output_dir=output_dir,
+        #         variant=variant,
+        #         params=params,
+        #         runtime_cfg=runtime_cfg,
+        #         force_reprepare=force_reprepare,
+        #     )
+
 
         info = self._build_dataset_info(
             key=key,
