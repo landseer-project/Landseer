@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import signal
 import sys
 import threading
@@ -21,17 +22,14 @@ import yaml
 
 from ..common import get_logger, init_sentry
 from .client import LandseerClient, TaskInfo
-from .db import ArtifactCacheDB, CacheManager
 from .runner import TaskRunner, ExecutionResult, ContainerRuntime
 
-# Import two-level cache if available
 try:
     from ..store import TwoLevelCache, CacheConfig
-    TWO_LEVEL_CACHE_AVAILABLE = True
-except ImportError:
-    TWO_LEVEL_CACHE_AVAILABLE = False
-    TwoLevelCache = None
-    CacheConfig = None
+except ImportError as exc:  # pragma: no cover - install deps
+    raise ImportError(
+        "Worker cache requires src.store TwoLevelCache (MinIO). Install project deps."
+    ) from exc
 
 logger = get_logger(__name__)
 
@@ -124,9 +122,7 @@ class Worker:
         # Components (initialized on start)
         self._client: Optional[LandseerClient] = None
         self._runner: Optional[TaskRunner] = None
-        self._cache: Optional[CacheManager] = None
         self._two_level_cache: Optional["TwoLevelCache"] = None
-        self._use_minio: bool = os.environ.get("LANDSEER_USE_MINIO", "true").lower() == "true"
         self._model_script_path: Optional[Path] = None  # Path to model config script (e.g., config_model.py)
         self._dataset_info: Dict[str, Any] = {}
         self._active_run_id: Optional[str] = None
@@ -175,7 +171,7 @@ class Worker:
         if minio is None:
             logger.warning(
                 "Dataset advertises model_script_minio_key but worker has no MinIO client "
-                "(enable two-level cache + MinIO or check LANDSEER_USE_MINIO)"
+                "(enable two-level cache + MinIO)"
             )
             return
         dest = self._model_script_cache_path(dataset_info)
@@ -217,18 +213,19 @@ class Worker:
             runtime=self.runtime
         )
         
-        # Cache manager - prefer two-level cache with MinIO if available
+        # Cache: local staging + required MinIO (GCS via ILM); local dropped after upload.
         if self.use_cache:
-            if TWO_LEVEL_CACHE_AVAILABLE and self._use_minio:
-                cache_config = CacheConfig(
-                    local_cache_dir=self.cache_dir,
-                    use_minio=True
+            self._two_level_cache = TwoLevelCache(
+                CacheConfig(local_cache_dir=self.cache_dir)
+            )
+            minio = getattr(self._two_level_cache.manager, "minio", None)
+            if minio is None or not minio.is_available:
+                endpoint = os.environ.get("MINIO_ENDPOINT", "localhost:9000")
+                raise RuntimeError(
+                    f"Cache requires MinIO (GCS-backed) but it is unavailable at {endpoint}. "
+                    "Run helper_scripts/setup_minio_tiering.sh and check .env.db."
                 )
-                self._two_level_cache = TwoLevelCache(cache_config)
-                logger.info("Using two-level cache (local + MinIO)")
-            else:
-                self._cache = CacheManager(self.cache_dir)
-                logger.info("Using local-only cache")
+            logger.info("Using two-level cache (local staging + MinIO/GCS)")
     
     def _fetch_dataset(self) -> Optional[Path]:
         """
@@ -351,7 +348,7 @@ class Worker:
                 if minio is None:
                     logger.warning(
                         "Dataset is in MinIO but worker has no MinIO client "
-                        "(two-level cache / LANDSEER_USE_MINIO)"
+                        "(two-level cache / MinIO)"
                     )
                 elif (download_dir / "data.npy").exists():
                     self._try_download_model_script_via_minio(dataset_info)
@@ -687,16 +684,24 @@ class Worker:
                 cached_path = self._check_cache(cache_key, task, parent_hashes, cache_context)
                 if cached_path:
                     logger.info(f"Cache hit for task {task.id}")
-                    symlink_target = self._runner.workspace_dir / task.id / "output"
-                    if not symlink_target.exists():
-                        symlink_target.parent.mkdir(parents=True, exist_ok=True)
-                        symlink_target.symlink_to(cached_path.resolve())
-                    self._task_outputs[task.id] = (cache_key, cached_path, list(ancestor_dirs))
+                    # Materialize into the task workspace so we can free the shared
+                    # local cache dir (durable copy lives in MinIO/GCS).
+                    workspace_out = self._runner.workspace_dir / task.id / "output"
+                    if workspace_out.exists() or workspace_out.is_symlink():
+                        if workspace_out.is_dir() and not workspace_out.is_symlink():
+                            shutil.rmtree(workspace_out)
+                        else:
+                            workspace_out.unlink()
+                    workspace_out.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copytree(cached_path, workspace_out)
+                    if self._two_level_cache is not None:
+                        self._two_level_cache.manager.delete_local(cache_key)
+                    self._task_outputs[task.id] = (cache_key, workspace_out, list(ancestor_dirs))
                     return ExecutionResult(
                         success=True,
                         exit_code=0,
                         execution_time_ms=0,
-                        output_path=cached_path,
+                        output_path=workspace_out,
                         artifacts={"cache_hit": True, "cache_key": cache_key}
                     )
 
@@ -763,16 +768,10 @@ class Worker:
         parent_hashes: List[str],
         cache_context: Optional[Dict[str, Any]] = None,
     ) -> Optional[Path]:
-        """Check cache for a task output."""
-        # Prefer two-level cache
-        if self._two_level_cache:
-            return self._two_level_cache.get(cache_key)
-        
-        # Fall back to local-only cache
-        if self._cache:
-            return self._cache.check_cache(task, parent_hashes, cache_context=cache_context)
-        
-        return None
+        """Check MinIO-backed cache for a task output."""
+        if not self._two_level_cache:
+            return None
+        return self._two_level_cache.get(cache_key)
     
     def _store_in_cache(
         self,
@@ -783,30 +782,17 @@ class Worker:
         parent_hashes: List[str],
         cache_context: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Store task output in cache."""
-        # Prefer two-level cache
-        if self._two_level_cache:
-            self._two_level_cache.put(
-                cache_key=cache_key,
-                source_dir=output_path,
-                task_id=task.id,
-                tool_name=task.tool_name,
-                parent_hashes=parent_hashes,
-                metadata={"execution_time_ms": execution_time_ms}
-            )
-            return
-        
-        # Fall back to local-only cache
-        if self._cache:
-            run_id = getattr(task, 'run_id', None)
-            self._cache.store_result(
-                task=task,
-                output_path=output_path,
-                execution_time_ms=execution_time_ms,
-                parent_hashes=parent_hashes,
-                run_id=run_id,
-                cache_context=cache_context,
-            )
+        """Store task output locally and upload to MinIO (GCS via ILM)."""
+        if not self._two_level_cache:
+            raise RuntimeError("Cache store requested but two-level cache is not initialized")
+        self._two_level_cache.put(
+            cache_key=cache_key,
+            source_dir=output_path,
+            task_id=task.id,
+            tool_name=task.tool_name,
+            parent_hashes=parent_hashes,
+            metadata={"execution_time_ms": execution_time_ms},
+        )
     
     def _eval_failed(self, task: TaskInfo, output_path: Path) -> bool:
         """Return True when an evaluation task's evaluation_results.json reports failure.
@@ -1202,11 +1188,6 @@ Examples:
              "dataset is automatically fetched from backend/MinIO (env: LANDSEER_DATA_PATH)",
     )
     storage_group.add_argument(
-        "--no-minio",
-        action="store_true",
-        help="Disable MinIO remote storage (use local-only cache)",
-    )
-    storage_group.add_argument(
         "--minio-endpoint",
         type=str,
         default=os.environ.get("MINIO_ENDPOINT", "localhost:9000"),
@@ -1267,16 +1248,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     
     # Determine runtime
     runtime = None if args.runtime == "auto" else args.runtime
-    
-    # Configure MinIO via environment. --no-minio always wins; otherwise honor
-    # LANDSEER_USE_MINIO (the CLI used to force this back to true whenever
-    # --minio-endpoint was present, which made the env var a no-op).
-    env_minio = os.environ.get("LANDSEER_USE_MINIO", "true").strip().lower()
-    if args.no_minio or env_minio in {"0", "false", "no", "off"}:
-        os.environ["LANDSEER_USE_MINIO"] = "false"
-    else:
-        os.environ["LANDSEER_USE_MINIO"] = "true"
-        os.environ["MINIO_ENDPOINT"] = args.minio_endpoint
+
+    os.environ["MINIO_ENDPOINT"] = args.minio_endpoint
     
     # Create and start worker
     worker = Worker(

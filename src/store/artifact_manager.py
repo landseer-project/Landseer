@@ -379,13 +379,34 @@ class ArtifactManager:
             metadata=metadata
         )
         
-        # Upload to MinIO if enabled
+        # Upload to MinIO if enabled (required for production cache path)
         if upload_to_remote and self.use_minio:
-            if self.upload_to_minio(cache_key):
-                info.storage_type = "both"
-                info.minio_key = self.minio.get_artifact_key(cache_key)
+            if not self.minio or not self.minio.is_available:
+                raise RuntimeError(
+                    f"MinIO upload required for cache key {cache_key[:12]} but MinIO is unavailable"
+                )
+            if not self.upload_to_minio(cache_key):
+                raise RuntimeError(
+                    f"Failed to upload artifact {cache_key[:12]} to MinIO/GCS"
+                )
+            info.minio_key = self.minio.get_artifact_key(cache_key)
+            # Durable copy is remote; free local disk immediately.
+            self.delete_local(cache_key)
+            info.storage_type = "minio"
+            info.local_path = None
         
         return info
+
+    def delete_local(self, cache_key: str) -> bool:
+        """Remove a cache entry from local disk (MinIO/GCS copy is kept)."""
+        local_path = self.get_local_path(cache_key)
+        if not local_path.exists():
+            self._artifacts.pop(cache_key, None)
+            return False
+        shutil.rmtree(local_path, ignore_errors=True)
+        self._artifacts.pop(cache_key, None)
+        logger.debug(f"Dropped local cache after remote upload: {cache_key[:12]}")
+        return True
     
     def artifact_exists(self, cache_key: str) -> bool:
         """

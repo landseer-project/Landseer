@@ -356,10 +356,15 @@ class DockerRunner:
                         mount_mode = maybe_mode
                 docker_cmd.extend(["-v", f"{host_path}:{mount_target}:{mount_mode}"])
         
-        # Add environment variables
+        # Add environment variables.
+        # JUDGE_API_KEY is forwarded by name so Docker copies it from this
+        # process. The value never appears on the command line or in the log.
         if env:
             for key, value in env.items():
-                docker_cmd.extend(["-e", f"{key}={value}"])
+                if key == "JUDGE_API_KEY":
+                    docker_cmd.extend(["-e", key])
+                else:
+                    docker_cmd.extend(["-e", f"{key}={value}"])
         
         # Add common environment variables
         docker_cmd.extend([
@@ -1195,6 +1200,10 @@ class TaskRunner:
             # Build environment
             task_env = env or {}
             task_env.update(task.config)  # Add task config to environment
+            if task.task_type == "evaluation":
+                judge_api_key = os.environ.get("JUDGE_API_KEY", "").strip()
+                if judge_api_key:
+                    task_env["JUDGE_API_KEY"] = judge_api_key
 
             local_extra_mounts = dict(extra_mounts or {})
 

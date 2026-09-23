@@ -29,12 +29,10 @@ class CacheConfig:
     """
     Two-level cache configuration.
     
-    Can be configured via environment variables:
-    - LANDSEER_CACHE_DIR: Local cache directory
-    - LANDSEER_CACHE_MAX_SIZE_GB: Maximum local cache size in GB
-    - LANDSEER_USE_MINIO: Whether to use MinIO (default: true)
+    Env:
+    - LANDSEER_CACHE_DIR: Local staging directory (cleared after MinIO upload)
+    - LANDSEER_CACHE_MAX_SIZE_GB: Max local size before LRU eviction
     """
-    # Local cache settings
     local_cache_dir: Path = field(
         default_factory=lambda: Path(os.getenv(
             "LANDSEER_CACHE_DIR",
@@ -47,19 +45,8 @@ class CacheConfig:
             "50"
         ))
     )
-    
-    # MinIO settings
-    use_minio: bool = field(
-        default_factory=lambda: os.getenv(
-            "LANDSEER_USE_MINIO",
-            "true"
-        ).lower() == "true"
-    )
     minio_config: Optional[MinioConfig] = None
-    
-    # Cache behavior
-    auto_upload: bool = True  # Automatically upload to MinIO after storing
-    eviction_threshold: float = 0.9  # Start eviction when cache reaches this % full
+    eviction_threshold: float = 0.9
 
 
 class TwoLevelCache:
@@ -79,16 +66,11 @@ class TwoLevelCache:
         """
         self.config = config or CacheConfig()
         
-        # Initialize MinIO store
-        minio_store = None
-        if self.config.use_minio:
-            minio_store = MinioStore(self.config.minio_config)
-        
-        # Initialize artifact manager
+        minio_store = MinioStore(self.config.minio_config)
         self.manager = ArtifactManager(
             local_cache_dir=self.config.local_cache_dir,
             minio_store=minio_store,
-            use_minio=self.config.use_minio,
+            use_minio=True,
         )
         
         # Track access times for LRU eviction
@@ -96,8 +78,7 @@ class TwoLevelCache:
         
         logger.info(
             f"Two-level cache initialized. "
-            f"Local: {self.config.local_cache_dir}, "
-            f"MinIO: {'enabled' if self.config.use_minio else 'disabled'}"
+            f"Local: {self.config.local_cache_dir}, MinIO: enabled"
         )
     
     # =========================================================================
@@ -166,11 +147,13 @@ class TwoLevelCache:
             tool_name=tool_name,
             parent_hashes=parent_hashes,
             metadata=metadata,
-            upload_to_remote=self.config.auto_upload
         )
         
-        # Track access time
-        self._access_times[cache_key] = time.time()
+        # Track access time only while a local copy remains
+        if info.local_path is not None:
+            self._access_times[cache_key] = time.time()
+        else:
+            self._access_times.pop(cache_key, None)
         
         return info
     
@@ -269,7 +252,7 @@ class TwoLevelCache:
             )
             
             # Ensure it's uploaded to MinIO before evicting
-            if self.config.use_minio and not self.manager.minio_exists(cache_key):
+            if not self.manager.minio_exists(cache_key):
                 self.manager.upload_to_minio(cache_key)
             
             # Remove local copy
@@ -360,7 +343,6 @@ class TwoLevelCache:
             "config": {
                 "max_local_size_gb": self.config.max_local_size_gb,
                 "eviction_threshold": self.config.eviction_threshold,
-                "auto_upload": self.config.auto_upload
             }
         }
     
