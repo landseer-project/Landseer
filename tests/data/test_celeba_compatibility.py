@@ -6,6 +6,12 @@ import numpy as np
 import pytest
 
 import src.data.manager as manager_module
+# same reason as tests/test_artifact_cache_basic.py - the module this needs is gone
+pytest.importorskip(
+    "src.data.loaders.celeba",
+    reason="orphaned test: dataset loaders were removed in 84f5297 and moved into Docker npy transformer images",
+)
+
 from src.data.loaders.celeba import CelebaLoader
 from src.data.manager import DatasetManager
 from src.data.types import DatasetInfo

@@ -26,6 +26,13 @@ def load_evaluator_module(evaluator_name: str):
     
     if not eval_path.exists():
         raise FileNotFoundError(f"Evaluator not found: {eval_path}")
+
+    # The eval scripts do `from model_loader import ...`. That works inside the
+    # docker image because common/ gets copied next to evaluate.py, but when we
+    # run the tests locally nothing puts it on the path, so we add it ourselves.
+    for extra in (containers_dir / "common", eval_path.parent):
+        if str(extra) not in sys.path:
+            sys.path.insert(0, str(extra))
     
     spec = importlib.util.spec_from_file_location(
         f"eval_{evaluator_name}", 

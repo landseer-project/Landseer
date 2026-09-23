@@ -1,0 +1,28 @@
+# CPU-only variant of clean/Dockerfile.
+#
+# The default Dockerfile uses pytorch/pytorch:*-cuda11.8-* which is linux/amd64
+# only, so on arm64 hosts it needs --platform emulation even though the
+# evaluator itself already falls back to CPU. This build is multi-arch and runs
+# natively. Same evaluate.py and model_loader.py -- no code differences.
+#
+# Build with context directory containers/evals:
+#   docker build -t landseer/eval_clean:cpu -f clean/Dockerfile.cpu .
+FROM python:3.11-slim
+
+LABEL org.opencontainers.image.title="Clean Evaluator (CPU)"
+LABEL org.opencontainers.image.description="Evaluates clean top-1 train and test accuracy, CPU only"
+LABEL org.landseer.type="evaluator"
+LABEL org.landseer.category="evals"
+LABEL org.landseer.metrics="clean_accuracy,clean_train_accuracy,poisoned_train_accuracy,poisoned_test_accuracy,mia_auc"
+LABEL org.landseer.required_artifacts=""
+LABEL org.landseer.defense_types=""
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir numpy scikit-learn \
+ && pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
+COPY common/model_loader.py ./model_loader.py
+COPY clean/evaluate.py ./evaluate.py
+
+ENTRYPOINT ["python", "evaluate.py"]

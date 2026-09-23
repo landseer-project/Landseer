@@ -8,6 +8,15 @@ SRC_PATH = PROJECT_ROOT / 'src'
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
+import pytest
+
+# skip instead of erroring, otherwise this one file stops the whole suite
+# from being collected. left the test itself alone in case the module comes back.
+pytest.importorskip(
+    "landseer_pipeline.pipeline.artifact_cache",
+    reason="orphaned test: the landseer_pipeline package was removed by the dev/restructure rewrite",
+)
+
 from landseer_pipeline.pipeline.artifact_cache import ArtifactCache
 
 class DummyDocker:

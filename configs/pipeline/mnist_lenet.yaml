@@ -1,0 +1,37 @@
+# MNIST + LeNet-5, all baseline (noop) tools, meant to run on CPU.
+#
+# This is the smallest pipeline that actually goes through Landseer: the
+# backend reads this file, generates the workflow, and a worker runs each
+# stage as a container. Every stage is a noop so the only real work is
+# training LeNet-5 once, which keeps it fast enough to run on a laptop.
+#
+# All four stages have to be listed, and each tool id has to exist in
+# configs/tools.yaml.
+dataset:
+  name: mnist
+  variant: clean
+
+model:
+  script: configs/model/config_model_lenet.py
+  framework: pytorch
+
+pipeline:
+  pre_training:
+    tools:
+      - pre_noop_cpu
+
+  during_training:
+    tools:
+      # listing the defense and the baseline together is the point: landseer
+      # makes one workflow per combination, so we get a defended run and a
+      # control run and can compare their metrics side by side.
+      - in_dp_lenet
+      - in_noop_lenet
+
+  post_training:
+    tools:
+      - post_noop_cpu
+
+  deployment:
+    tools:
+      - deploy_noop_cpu

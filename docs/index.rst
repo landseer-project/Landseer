@@ -29,6 +29,7 @@ the backend/worker/pipeline pieces fit together, and how to contribute safely.
 
    how-to/run-a-pipeline
    how-to/configure-tools-and-evaluators
+   CPU_MNIST_LENET
    how-to/database-setup
    how-to/reset-and-recover
 

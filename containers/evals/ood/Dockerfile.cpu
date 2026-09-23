@@ -1,0 +1,29 @@
+# CPU-only variant of ood/Dockerfile.
+#
+# Same evaluate.py and model_loader.py as the default build. The only change is
+# the base image: the default is pytorch/pytorch:*-cuda11.8-* which is
+# linux/amd64 only, so on an arm64 machine it needs emulation even though the
+# evaluator already falls back to CPU by itself. This build is multi-arch.
+#
+# torch goes in its own layer before the per-evaluator deps so all the cpu
+# evaluator images share it and it only gets downloaded once.
+#
+# Build with context directory containers/evals:
+#   docker build -t landseer/eval_ood:cpu -f containers/evals/ood/Dockerfile.cpu containers/evals
+FROM python:3.11-slim
+
+LABEL org.opencontainers.image.title="Ood Evaluator (CPU)"
+LABEL org.landseer.type="evaluator"
+LABEL org.landseer.category="evals"
+
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir numpy scikit-learn torchvision
+
+COPY common/model_loader.py ./model_loader.py
+COPY ood/evaluate.py ./evaluate.py
+
+ENTRYPOINT ["python", "evaluate.py"]

@@ -2,13 +2,13 @@ cache/
 /data/
 results/
 logs/
-tools/
+/tools/
 .venv/
 venv/
 /data/
 results/
 logs/
-tools/
+/tools/
 
 .venv/
 venv/
@@ -55,3 +55,10 @@ helper_scripts/*gcs-bucket-key.json
 
 src/.bakcommands.txt
 landseer.db
+
+# local pipeline run outputs (workspaces, sqlite, downloaded datasets)
+cpu_landseer_run/
+cpu_run_mnist_lenet/
+dp_run*/
+verify_run/
+ws/

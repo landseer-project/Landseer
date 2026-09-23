@@ -1,5 +1,9 @@
 """Tests for pipeline tool stage validation (YAML + image labels, no id-prefix inference)."""
 
+# the tests below annotate tmp_path as Path, so this import has to exist or
+# pytest blows up while collecting and none of the tests in the repo run
+from pathlib import Path
+
 import pytest
 
 from src.pipeline.config_loader import PipelineConfig, StageConfig, DatasetConfig, ModelConfig

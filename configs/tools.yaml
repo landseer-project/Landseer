@@ -266,3 +266,61 @@ tools:
       runtime: null
 
     
+
+  # ---- CPU-only MNIST/LeNet entries ----
+  # The ghcr *_noop images are private so we can't pull them. These point at
+  # images built locally by helper_scripts/run_mnist_lenet_cpu.sh (or by hand,
+  # see the Dockerfiles under containers/tools/). defense_stage is set on each
+  # one, which is what stage_validation checks, so it never tries to fetch
+  # image labels from a registry.
+  pre_noop_cpu:
+    name: pre_noop_cpu
+    defense_stage: pre_training
+    is_baseline: true
+    container:
+      image: landseer/noop_cpu:cpu
+      command: ""
+      runtime: null
+
+  in_noop_lenet:
+    name: in_noop_lenet
+    defense_stage: during_training
+    is_baseline: true
+    container:
+      image: landseer/in_noop_lenet:cpu
+      # this gets appended after the image name, so it lands as arguments to the
+      # image's ENTRYPOINT (python /app/main.py). same idea as in_dp_celeba
+      # passing --epochs 30. the EPOCHS env var does NOT work here, the worker
+      # only forwards a fixed set of env vars to containers.
+      command: "--epochs 5"
+      runtime: null
+
+  post_noop_cpu:
+    name: post_noop_cpu
+    defense_stage: post_training
+    is_baseline: true
+    container:
+      image: landseer/noop_cpu:cpu
+      command: ""
+      runtime: null
+
+  deploy_noop_cpu:
+    name: deploy_noop_cpu
+    defense_stage: deployment
+    is_baseline: true
+    container:
+      image: landseer/noop_cpu:cpu
+      command: ""
+      runtime: null
+
+  in_dp_lenet:
+    name: in_dp_lenet
+    defense_stage: during_training
+    is_baseline: false
+    container:
+      image: landseer/in_dp_lenet:cpu
+      # epsilon is the privacy budget: lower = more private = less accurate.
+      # 8.0 is the common "moderate" setting. epochs are matched to the
+      # baseline arm so the comparison isn't confounded by training length.
+      command: "--epochs 5 --epsilon 8.0"
+      runtime: null

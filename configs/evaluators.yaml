@@ -15,7 +15,9 @@ evaluators:
   clean:
     name: clean
     container:
-      image: ghcr.io/landseer-project/evals/clean:v2
+      # local cpu build, see containers/evals/clean/Dockerfile.cpu. the ghcr
+      # image is a cuda build and the registry is private.
+      image: landseer/eval_clean:cpu
       command: ""
     required_artifacts: []
     metrics:
@@ -45,7 +47,7 @@ evaluators:
   adversarial:
     name: adversarial
     container:
-      image: ghcr.io/landseer-project/evals/adversarial:v2
+      image: landseer/eval_adversarial:cpu
       command: ""
     required_artifacts: []
     metrics:
@@ -72,7 +74,7 @@ evaluators:
   fingerprinting:
     name: fingerprinting
     container:
-      image: ghcr.io/landseer-project/evals/fingerprinting:v2
+      image: landseer/eval_fingerprinting:cpu
       command: ""
     required_artifacts: []
     metrics:
@@ -84,7 +86,7 @@ evaluators:
   ood:
     name: ood
     container:
-      image: ghcr.io/landseer-project/evals/ood:v2
+      image: landseer/eval_ood:cpu
       command: ""
     required_artifacts: []
     metrics:
@@ -111,9 +113,13 @@ evaluators:
   fingerprinting_llm:
     name: fingerprinting_llm
     container:
-      image: ghcr.io/landseer-project/evals/cka:v1
+      image: landseer/eval_cka:cpu
       command: ""
-    required_artifacts: []
+    # this one is for llm pipelines, it reads gpt2 activations from /input/gpt2.
+    # declaring it here means the worker skips it on image pipelines like mnist
+    # instead of running it and failing.
+    required_artifacts:
+      - gpt2
     metrics:
       - cka_sim
     defense_types:
@@ -122,7 +128,7 @@ evaluators:
   explanations:
     name: explanations
     container:
-      image: ghcr.io/landseer-project/evals/explanations:v1
+      image: landseer/eval_explanations:cpu
       command: ""
     required_artifacts: []
     metrics:
@@ -133,7 +139,7 @@ evaluators:
   privacy:
     name: privacy
     container:
-      image: ghcr.io/landseer-project/evals/privacy:v1
+      image: landseer/eval_privacy:cpu
       command: ""
     required_artifacts: []
     metrics:
@@ -141,3 +147,13 @@ evaluators:
     defense_types:
       - differential_privacy
 
+  reef_cka:
+    name: reef_cka
+    container:
+      image: landseer/eval_cka:cpu
+      command: ""
+    required_artifacts:
+      - gpt2
+    metrics:
+      - cka_sim
+    defense_types: []
