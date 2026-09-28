@@ -22,8 +22,11 @@ from src.pipeline.pipeline import DefenseEvaluationPipeline
 
 
 @pytest.fixture(autouse=True)
-def reset_scheduler_state():
+def reset_scheduler_state(monkeypatch):
     """Reset scheduler state before each test."""
+    # Avoid host env keys blocking mutating endpoints under test.
+    monkeypatch.delenv("LANDSEER_PIPELINE_KEYS", raising=False)
+
     from src.backend.api import _scheduler_state
     _scheduler_state.scheduler = None
     _scheduler_state.pipeline = None

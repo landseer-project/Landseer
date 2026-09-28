@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.common import get_logger
 from src.pipeline.tasks import TaskStatus
-from src.backend.initialization import get_backend_context
+from src.backend.initialization import get_backend_context, set_backend_context
 from src.backend.scheduler import Scheduler
 from src.backend.api.models import (
     PipelineConfigResponse,
@@ -206,9 +206,19 @@ async def start_pipeline_run(
                                 dir_suffix = Path(ds_info.output_dir).name
                                 dataset_key = f"datasets/{cfg.dataset.name}/{dir_suffix}"
                                 try:
-                                    t_upload_start = time.time()
-                                    ctx.store.upload_directory(ds_info.output_dir, dataset_key)
-                                    ctx.dataset_info["minio_key"] = dataset_key
+                                    marker = f"{dataset_key}/data.npy"
+                                    if ctx.store.exists(marker):
+                                        ctx.dataset_info["minio_key"] = dataset_key
+                                        logger.info(
+                                            f"Dataset already in MinIO ({marker}), skipping upload"
+                                        )
+                                    else:
+                                        t_upload_start = time.time()
+                                        ctx.store.upload_directory(ds_info.output_dir, dataset_key)
+                                        ctx.dataset_info["minio_key"] = dataset_key
+                                        logger.info(
+                                            f"Dataset uploaded to MinIO in {time.time() - t_upload_start:.1f}s: {dataset_key}"
+                                        )
 
                                     model_script = cfg.model.get("script") if cfg and cfg.model else None
                                     if model_script:
@@ -222,10 +232,12 @@ async def start_pipeline_run(
                                             model_path = (cfg_base / model_path).resolve()
                                         if model_path.exists() and model_path.is_file():
                                             model_script_key = f"{dataset_key}/config_model.py"
-                                            if ctx.store.upload_file(model_path, model_script_key):
+                                            if ctx.store.exists(model_script_key) or ctx.store.upload_file(
+                                                model_path, model_script_key
+                                            ):
                                                 ctx.dataset_info["model_script_minio_key"] = model_script_key
                                                 logger.info(
-                                                    f"Model script uploaded to MinIO: {model_script_key}"
+                                                    f"Model script available in MinIO: {model_script_key}"
                                                 )
                                             else:
                                                 logger.warning(

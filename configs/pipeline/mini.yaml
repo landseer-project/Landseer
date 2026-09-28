@@ -15,7 +15,6 @@ pipeline:
       - in_noop
   post_training:
     tools:
-      - post_fineprune
       - post_noop
   deployment:
     tools:

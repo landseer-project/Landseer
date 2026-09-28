@@ -1,61 +1,43 @@
+# Local env (never commit). Copy: cp .env.example .env.db
+.env*
+!.env.example
+
+# Python / caches
+__pycache__/
+*.pyc
+.venv/
+venv/
+.venv.bak/
+*.lock
+
+# Runtime / data
 cache/
 /data/
 results/
 logs/
+old_results/
 tools/
-.venv/
-venv/
-/data/
-results/
-logs/
-tools/
-
-.venv/
-venv/
-__pycache__/
-*.pyc
 *.csv
-*.lock
-.env*
 *.log
-*.csv
 deviation_*
-# Node.js (local installation)
-.node/
-node_modules/
-dist/
-docs/_build/
-CLAUDE-context.md
-.venv.bak/
-.cursor/
-# Local credentials
-helper_scripts/*gcs-bucket-key.json
-src/.bak
-
-*.pyc
-*.csv
-*.lock
-.env*
-*.log
-*.csv
-
-deviation_*
-
-# Node.js (local installation)
-.node/
-node_modules/
-dist/
-docs/_build/
-CLAUDE-context.md
-.venv.bak/
-.cursor/
-
-# Local credentials
-helper_scripts/*gcs-bucket-key.json
-
-src/.bakcommands.txt
 landseer.db
 commands.txt
+
+# Node
+.node/
+node_modules/
+dist/
+docs/_build/
+
+# Editor / local
+.cursor/
+CLAUDE-context.md
+src/.bak
+
+# Credentials
+helper_scripts/*gcs-bucket-key.json
+
+# Large local eval assets
 containers/evals/privacy/celeba_shadows/
 containers/evals/watermark/watermark_triggers/
 containers/evals/watermark/watermark_triggers_old/
