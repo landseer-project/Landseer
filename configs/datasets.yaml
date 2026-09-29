@@ -50,7 +50,7 @@ datasets:
       - gemma-2-2b-it-prefix-bad.jsonl
       - alpaca_cleaned.jsonl
       - gemma-2-2b-it-bad-eval.jsonl
-      - config.json
+
 
     required_dirs:
       - gemma-2-2b

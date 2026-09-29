@@ -304,4 +304,14 @@ tools:
       command: python3 main.py
       runtime: null
 
+  post_door_llm:
+    name: post_door_llm
+    defense_stage: post_training
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/post_door_llm:v1
+      command: python main.py
+      runtime: null
+
+
     
