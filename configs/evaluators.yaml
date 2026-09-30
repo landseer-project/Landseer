@@ -119,6 +119,18 @@ evaluators:
     defense_types:
       - reef
 
+  asr_llm:
+    name: asr_llm
+    container:
+      image: ghcr.io/landseer-project/evals/asr_llm:v1
+      command: ""
+    required_artifacts: []
+    metrics:
+      - llm_asr
+    defense_types:
+      - door
+
+
   explanations:
     name: explanations
     container:
