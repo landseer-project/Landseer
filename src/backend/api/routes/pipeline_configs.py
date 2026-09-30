@@ -220,7 +220,9 @@ async def start_pipeline_run(
                                             f"Dataset uploaded to MinIO in {time.time() - t_upload_start:.1f}s: {dataset_key}"
                                         )
 
-                                    model_script = cfg.model.get("script") if cfg and cfg.model else None
+                                    model_script = (
+                                        getattr(cfg.model, "script", None) if cfg and cfg.model else None
+                                    )
                                     if model_script:
                                         model_path = Path(model_script)
                                         if not model_path.is_absolute():

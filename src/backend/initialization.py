@@ -189,7 +189,9 @@ def initialize_backend(
                         dataset_info["minio_key"] = dataset_key
                         logger.info(f"Dataset uploaded to MinIO: {dataset_key}")
 
-                        model_script = config.model.get("script") if config and config.model else None
+                        model_script = (
+                            getattr(config.model, "script", None) if config and config.model else None
+                        )
                         if model_script:
                             model_path = Path(model_script)
                             if not model_path.is_absolute():
