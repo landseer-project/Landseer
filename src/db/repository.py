@@ -15,13 +15,17 @@ from .models import (
     TaskModel,
     WorkerModel,
     WorkflowModel,
-    PipelineModel,
-    PipelineConfigModel,
-    PipelineRunModel,
+    ExperimentModel,
+    ExperimentRunModel,
+    ExperimentRunStatus,
     ArtifactModel,
     TaskStatus,
     WorkerStatus,
-    PipelineRunStatus,
+    TaskType,
+    ToolModel,
+    ToolType,
+    ToolStage,
+    ToolDefenseType,
 )
 
 logger = get_logger(__name__)
@@ -47,10 +51,10 @@ class TaskRepository:
         return self.session.query(TaskModel).filter(TaskModel.id == task_id).first()
     
     def get_all(self, pipeline_id: Optional[str] = None) -> List[TaskModel]:
-        """Get all tasks, optionally filtered by pipeline."""
+        """Get all tasks, optionally filtered by experiment run (legacy: pipeline_id)."""
         query = self.session.query(TaskModel)
         if pipeline_id:
-            query = query.filter(TaskModel.pipeline_id == pipeline_id)
+            query = query.filter(TaskModel.experiment_run_id == pipeline_id)
         return query.all()
     
     def get_by_status(
@@ -61,7 +65,7 @@ class TaskRepository:
         """Get tasks by status."""
         query = self.session.query(TaskModel).filter(TaskModel.status == status)
         if pipeline_id:
-            query = query.filter(TaskModel.pipeline_id == pipeline_id)
+            query = query.filter(TaskModel.experiment_run_id == pipeline_id)
         return query.order_by(TaskModel.priority.asc()).all()
     
     def get_ready_tasks(self, pipeline_id: Optional[str] = None) -> List[TaskModel]:
@@ -76,7 +80,7 @@ class TaskRepository:
             TaskModel.status == TaskStatus.PENDING
         )
         if pipeline_id:
-            query = query.filter(TaskModel.pipeline_id == pipeline_id)
+            query = query.filter(TaskModel.experiment_run_id == pipeline_id)
         
         tasks = query.order_by(TaskModel.priority.asc()).all()
         
@@ -99,9 +103,12 @@ class TaskRepository:
         ).all()
     
     def get_by_cache_key(self, cache_key: str) -> Optional[TaskModel]:
-        """Get task by cache key."""
+        """Get task by cache key (task_hash / artifact id)."""
         return self.session.query(TaskModel).filter(
-            TaskModel.cache_key == cache_key
+            or_(
+                TaskModel.task_hash == cache_key,
+                TaskModel.artifact_id == cache_key,
+            )
         ).first()
     
     def update_status(
@@ -157,13 +164,17 @@ class TaskRepository:
         cache_key: str,
         artifact_path: Optional[str] = None
     ) -> Optional[TaskModel]:
-        """Set cache key for a task."""
+        """Set cache key (task_hash) and optional artifact id for a task."""
         task = self.get_by_id(task_id)
         if not task:
             return None
         
-        task.cache_key = cache_key
-        task.artifact_path = artifact_path
+        task.task_hash = cache_key
+        if artifact_path is not None:
+            # Callers historically passed a path; prefer treating as artifact id/key.
+            task.artifact_id = artifact_path
+        else:
+            task.artifact_id = cache_key
         task.updated_at = datetime.utcnow()
         
         self.session.flush()
@@ -177,7 +188,7 @@ class TaskRepository:
         ).group_by(TaskModel.status)
         
         if pipeline_id:
-            query = query.filter(TaskModel.pipeline_id == pipeline_id)
+            query = query.filter(TaskModel.experiment_run_id == pipeline_id)
         
         results = query.all()
         
@@ -312,10 +323,12 @@ class WorkerRepository:
             worker.tasks_failed += 1
         
         # Track workflow for locality
-        if workflow_id and workflow_id not in worker.handled_workflow_ids:
-            handled = list(worker.handled_workflow_ids)
-            handled.append(workflow_id)
-            worker.handled_workflow_ids = handled
+        if workflow_id:
+            from .models import WorkflowModel
+
+            wf = self.session.get(WorkflowModel, workflow_id)
+            if wf is not None and wf not in worker.handled_workflows:
+                worker.handled_workflows.append(wf)
         
         self.session.flush()
         return worker
@@ -416,59 +429,46 @@ class WorkflowRepository:
         name: str,
         pipeline_id: Optional[str] = None
     ) -> Optional[WorkflowModel]:
-        """Get workflow by name."""
-        query = self.session.query(WorkflowModel).filter(WorkflowModel.name == name)
+        """Get workflow by id-as-name (name column removed); filters by experiment run."""
+        query = self.session.query(WorkflowModel).filter(WorkflowModel.id == name)
         if pipeline_id:
-            query = query.filter(WorkflowModel.pipeline_id == pipeline_id)
+            query = query.filter(WorkflowModel.experiment_run_id == pipeline_id)
         return query.first()
     
     def get_all(self, pipeline_id: Optional[str] = None) -> List[WorkflowModel]:
-        """Get all workflows, optionally filtered by pipeline."""
+        """Get all workflows, optionally filtered by experiment run (legacy: pipeline_id)."""
         query = self.session.query(WorkflowModel)
         if pipeline_id:
-            query = query.filter(WorkflowModel.pipeline_id == pipeline_id)
+            query = query.filter(WorkflowModel.experiment_run_id == pipeline_id)
         return query.all()
     
     def update_status(self, workflow_id: str) -> Optional[WorkflowModel]:
         """Update workflow status based on task completion."""
+        from .models import WorkflowStatus
+
         workflow = self.get_by_id(workflow_id)
         if not workflow:
             return None
         
-        # Count task statuses
-        completed = 0
-        failed = 0
-        running = 0
-        pending = 0
+        tasks = list(workflow.tasks or [])
         
-        for task in workflow.tasks:
-            if task.status == TaskStatus.COMPLETED:
-                completed += 1
-            elif task.status == TaskStatus.FAILED:
-                failed += 1
-            elif task.status == TaskStatus.RUNNING:
-                running += 1
-            else:
-                pending += 1
+        completed = sum(1 for t in tasks if t.status == TaskStatus.COMPLETED)
+        failed = sum(1 for t in tasks if t.status == TaskStatus.FAILED)
+        running = sum(1 for t in tasks if t.status == TaskStatus.RUNNING)
         
-        workflow.completed_tasks = completed
-        workflow.failed_tasks = failed
-        
-        # Determine workflow status
-        total = len(workflow.tasks)
+        total = len(tasks)
         if failed > 0:
-            workflow.status = "failed"
-        elif completed == total:
-            workflow.status = "completed"
+            workflow.status = WorkflowStatus.FAILED
+        elif total > 0 and completed == total:
+            workflow.status = WorkflowStatus.COMPLETED
             workflow.completed_at = datetime.utcnow()
         elif running > 0 or completed > 0:
-            workflow.status = "running"
+            workflow.status = WorkflowStatus.RUNNING
             if not workflow.started_at:
                 workflow.started_at = datetime.utcnow()
         else:
-            workflow.status = "pending"
+            workflow.status = WorkflowStatus.PENDING
         
-        workflow.updated_at = datetime.utcnow()
         self.session.flush()
         return workflow
     
@@ -495,89 +495,196 @@ class WorkflowRepository:
         return workflows
 
 
-class PipelineRepository:
-    """Repository for Pipeline operations."""
-    
+class ExperimentRepository:
+    """Repository for Experiment operations."""
+
     def __init__(self, session: Session):
-        """Initialize with database session."""
         self.session = session
-    
-    def create(self, pipeline_data: Dict[str, Any]) -> PipelineModel:
-        """Create a new pipeline."""
-        pipeline = PipelineModel(**pipeline_data)
-        self.session.add(pipeline)
+
+    def create(self, experiment_data: Dict[str, Any]) -> ExperimentModel:
+        data = dict(experiment_data)
+        if "name" in data and "experiment_name" not in data:
+            data["experiment_name"] = data.pop("name")
+        experiment = ExperimentModel(**data)
+        self.session.add(experiment)
         self.session.flush()
-        logger.debug(f"Created pipeline: {pipeline.id}")
-        return pipeline
-    
-    def get_by_id(self, pipeline_id: str) -> Optional[PipelineModel]:
-        """Get pipeline by ID."""
-        return self.session.query(PipelineModel).filter(
-            PipelineModel.id == pipeline_id
+        logger.debug(f"Created experiment: {experiment.id}")
+        return experiment
+
+    def get_by_id(self, experiment_id: str) -> Optional[ExperimentModel]:
+        return self.session.query(ExperimentModel).filter(
+            ExperimentModel.id == experiment_id
         ).first()
-    
-    def get_by_name(self, name: str) -> Optional[PipelineModel]:
-        """Get pipeline by name."""
-        return self.session.query(PipelineModel).filter(
-            PipelineModel.name == name
+
+    def get_by_path(self, config_path: str) -> Optional[ExperimentModel]:
+        return self.session.query(ExperimentModel).filter(
+            ExperimentModel.config_path == config_path
         ).first()
-    
-    def get_all(self) -> List[PipelineModel]:
-        """Get all pipelines."""
-        return self.session.query(PipelineModel).all()
-    
-    def get_active(self) -> List[PipelineModel]:
-        """Get pipelines that are currently running."""
-        return self.session.query(PipelineModel).filter(
-            PipelineModel.status == "running"
+
+    def get_all(self) -> List[ExperimentModel]:
+        return self.session.query(ExperimentModel).order_by(
+            ExperimentModel.experiment_name
         ).all()
-    
-    def update_status(self, pipeline_id: str) -> Optional[PipelineModel]:
-        """Update pipeline status based on workflow completion."""
-        pipeline = self.get_by_id(pipeline_id)
-        if not pipeline:
+
+    def update(
+        self, experiment_id: str, updates: Dict[str, Any]
+    ) -> Optional[ExperimentModel]:
+        experiment = self.get_by_id(experiment_id)
+        if not experiment:
             return None
-        
-        # Check workflow statuses
-        completed = 0
-        failed = 0
-        running = 0
-        
-        for workflow in pipeline.workflows:
-            if workflow.status == "completed":
-                completed += 1
-            elif workflow.status == "failed":
-                failed += 1
-            elif workflow.status == "running":
-                running += 1
-        
-        total = len(pipeline.workflows)
-        if failed > 0:
-            pipeline.status = "failed"
-        elif completed == total:
-            pipeline.status = "completed"
-            pipeline.completed_at = datetime.utcnow()
-        elif running > 0 or completed > 0:
-            pipeline.status = "running"
-            if not pipeline.started_at:
-                pipeline.started_at = datetime.utcnow()
-        else:
-            pipeline.status = "pending"
-        
-        pipeline.updated_at = datetime.utcnow()
+        for key, value in updates.items():
+            if key == "name":
+                key = "experiment_name"
+            if hasattr(experiment, key):
+                setattr(experiment, key, value)
+        experiment.updated_at = datetime.utcnow()
         self.session.flush()
-        return pipeline
-    
-    def delete(self, pipeline_id: str) -> bool:
-        """Delete a pipeline and all its workflows/tasks."""
-        pipeline = self.get_by_id(pipeline_id)
-        if not pipeline:
+        return experiment
+
+    def delete(self, experiment_id: str) -> bool:
+        experiment = self.get_by_id(experiment_id)
+        if not experiment:
             return False
-        
-        self.session.delete(pipeline)
+        self.session.delete(experiment)
         self.session.flush()
-        logger.debug(f"Deleted pipeline: {pipeline_id}")
+        logger.debug(f"Deleted experiment: {experiment_id}")
         return True
+
+
+class ExperimentRunRepository:
+    """Repository for ExperimentRun operations."""
+
+    def __init__(self, session: Session):
+        self.session = session
+
+    def create(self, run_data: Dict[str, Any]) -> ExperimentRunModel:
+        run = ExperimentRunModel(**run_data)
+        self.session.add(run)
+        self.session.flush()
+        logger.debug(f"Created experiment run: {run.id}")
+        return run
+
+    def get_by_id(self, run_id: str) -> Optional[ExperimentRunModel]:
+        return self.session.query(ExperimentRunModel).filter(
+            ExperimentRunModel.id == run_id
+        ).first()
+
+    def get_by_experiment_id(self, experiment_id: str) -> List[ExperimentRunModel]:
+        return (
+            self.session.query(ExperimentRunModel)
+            .filter(ExperimentRunModel.experiment_id == experiment_id)
+            .order_by(ExperimentRunModel.run_number.desc())
+            .all()
+        )
+
+    def get_active_runs_for_experiment(
+        self, experiment_id: str
+    ) -> List[ExperimentRunModel]:
+        return (
+            self.session.query(ExperimentRunModel)
+            .filter(
+                ExperimentRunModel.experiment_id == experiment_id,
+                ExperimentRunModel.status.in_(
+                    [
+                        ExperimentRunStatus.PENDING,
+                        ExperimentRunStatus.RUNNING,
+                        ExperimentRunStatus.STOPPING,
+                    ]
+                ),
+            )
+            .all()
+        )
+
+    def get_next_run_number(self, experiment_id: str) -> int:
+        result = (
+            self.session.query(func.max(ExperimentRunModel.run_number))
+            .filter(ExperimentRunModel.experiment_id == experiment_id)
+            .scalar()
+        )
+        return (result or 0) + 1
+
+    def update_status(
+        self,
+        run_id: str,
+        status: ExperimentRunStatus,
+        error_message: Optional[str] = None,
+    ) -> Optional[ExperimentRunModel]:
+        run = self.get_by_id(run_id)
+        if not run:
+            return None
+
+        run.status = status
+        if error_message:
+            run.error_message = error_message
+
+        if status == ExperimentRunStatus.RUNNING and not run.started_at:
+            run.started_at = datetime.utcnow()
+        elif status in (
+            ExperimentRunStatus.COMPLETED,
+            ExperimentRunStatus.FAILED,
+            ExperimentRunStatus.CANCELLED,
+        ):
+            if not run.completed_at:
+                run.completed_at = datetime.utcnow()
+
+        self.session.flush()
+        return run
+
+    def get_all(
+        self, experiment_id: Optional[str] = None
+    ) -> List[ExperimentRunModel]:
+        query = self.session.query(ExperimentRunModel)
+        if experiment_id:
+            query = query.filter(ExperimentRunModel.experiment_id == experiment_id)
+        return query.order_by(ExperimentRunModel.created_at.desc()).all()
+
+    def delete(self, run_id: str) -> bool:
+        run = self.get_by_id(run_id)
+        if not run:
+            return False
+        self.session.delete(run)
+        self.session.flush()
+        logger.debug(f"Deleted experiment run: {run_id}")
+        return True
+
+    def update_status_from_workflows(
+        self, run_id: str
+    ) -> Optional[ExperimentRunModel]:
+        """Derive run status from its workflows."""
+        run = self.get_by_id(run_id)
+        if not run:
+            return None
+
+        completed = failed = running = 0
+        for workflow in run.workflows:
+            status_val = (
+                workflow.status.value
+                if hasattr(workflow.status, "value")
+                else str(workflow.status)
+            )
+            if status_val == "completed":
+                completed += 1
+            elif status_val == "failed":
+                failed += 1
+            elif status_val == "running":
+                running += 1
+
+        total = len(run.workflows)
+        if failed > 0:
+            run.status = ExperimentRunStatus.FAILED
+        elif total > 0 and completed == total:
+            run.status = ExperimentRunStatus.COMPLETED
+            if not run.completed_at:
+                run.completed_at = datetime.utcnow()
+        elif running > 0 or completed > 0:
+            run.status = ExperimentRunStatus.RUNNING
+            if not run.started_at:
+                run.started_at = datetime.utcnow()
+        else:
+            run.status = ExperimentRunStatus.PENDING
+
+        self.session.flush()
+        return run
 
 
 class ArtifactRepository:
@@ -588,8 +695,22 @@ class ArtifactRepository:
         self.session = session
     
     def create(self, artifact_data: Dict[str, Any]) -> ArtifactModel:
-        """Create a new artifact record."""
+        """Create a new artifact record.
+
+        Accepts optional ``parent_artifact_ids`` (list of cache keys) and wires
+        the ``parents`` relationship.
+        """
+        parent_ids = list(artifact_data.pop("parent_artifact_ids", None) or [])
         artifact = ArtifactModel(**artifact_data)
+        if parent_ids:
+            parents = (
+                self.session.query(ArtifactModel)
+                .filter(ArtifactModel.id.in_(parent_ids))
+                .all()
+            )
+            by_id = {p.id: p for p in parents}
+            # Preserve caller order
+            artifact.parents = [by_id[pid] for pid in parent_ids if pid in by_id]
         self.session.add(artifact)
         self.session.flush()
         logger.debug(f"Created artifact: {artifact.id}")
@@ -636,9 +757,9 @@ class ArtifactRepository:
         return result or 0
     
     def get_by_run_id(self, run_id: str) -> List[ArtifactModel]:
-        """Get all artifacts created by a specific run."""
+        """Get all artifacts for an experiment run (alias: experiment_run_id)."""
         return self.session.query(ArtifactModel).filter(
-            ArtifactModel.created_by_run_id == run_id
+            ArtifactModel.experiment_run_id == run_id
         ).all()
     
     def delete_by_run_id(self, run_id: str) -> int:
@@ -650,152 +771,3 @@ class ArtifactRepository:
         self.session.flush()
         logger.info(f"Deleted {count} artifacts for run {run_id}")
         return count
-
-
-class PipelineConfigRepository:
-    """Repository for PipelineConfig operations."""
-    
-    def __init__(self, session: Session):
-        """Initialize with database session."""
-        self.session = session
-    
-    def create(self, config_data: Dict[str, Any]) -> PipelineConfigModel:
-        """Create a new pipeline config."""
-        config = PipelineConfigModel(**config_data)
-        self.session.add(config)
-        self.session.flush()
-        logger.debug(f"Created pipeline config: {config.id}")
-        return config
-    
-    def get_by_id(self, config_id: str) -> Optional[PipelineConfigModel]:
-        """Get config by ID."""
-        return self.session.query(PipelineConfigModel).filter(
-            PipelineConfigModel.id == config_id
-        ).first()
-    
-    def get_by_path(self, config_path: str) -> Optional[PipelineConfigModel]:
-        """Get config by file path."""
-        return self.session.query(PipelineConfigModel).filter(
-            PipelineConfigModel.config_path == config_path
-        ).first()
-    
-    def get_all(self) -> List[PipelineConfigModel]:
-        """Get all pipeline configs."""
-        return self.session.query(PipelineConfigModel).order_by(
-            PipelineConfigModel.name
-        ).all()
-    
-    def update(self, config_id: str, updates: Dict[str, Any]) -> Optional[PipelineConfigModel]:
-        """Update a pipeline config."""
-        config = self.get_by_id(config_id)
-        if not config:
-            return None
-        
-        for key, value in updates.items():
-            if hasattr(config, key):
-                setattr(config, key, value)
-        
-        config.updated_at = datetime.utcnow()
-        self.session.flush()
-        return config
-    
-    def delete(self, config_id: str) -> bool:
-        """Delete a pipeline config and all its runs."""
-        config = self.get_by_id(config_id)
-        if not config:
-            return False
-        
-        self.session.delete(config)
-        self.session.flush()
-        logger.debug(f"Deleted pipeline config: {config_id}")
-        return True
-
-
-class PipelineRunRepository:
-    """Repository for PipelineRun operations."""
-    
-    def __init__(self, session: Session):
-        """Initialize with database session."""
-        self.session = session
-    
-    def create(self, run_data: Dict[str, Any]) -> PipelineRunModel:
-        """Create a new pipeline run."""
-        run = PipelineRunModel(**run_data)
-        self.session.add(run)
-        self.session.flush()
-        logger.debug(f"Created pipeline run: {run.id}")
-        return run
-    
-    def get_by_id(self, run_id: str) -> Optional[PipelineRunModel]:
-        """Get run by ID."""
-        return self.session.query(PipelineRunModel).filter(
-            PipelineRunModel.id == run_id
-        ).first()
-    
-    def get_by_config_id(self, config_id: str) -> List[PipelineRunModel]:
-        """Get all runs for a config, ordered by run_number DESC."""
-        return self.session.query(PipelineRunModel).filter(
-            PipelineRunModel.pipeline_config_id == config_id
-        ).order_by(PipelineRunModel.run_number.desc()).all()
-    
-    def get_active_runs_for_config(self, config_id: str) -> List[PipelineRunModel]:
-        """Get active (pending/running/stopping) runs for a config."""
-        return self.session.query(PipelineRunModel).filter(
-            PipelineRunModel.pipeline_config_id == config_id,
-            PipelineRunModel.status.in_([
-                PipelineRunStatus.PENDING,
-                PipelineRunStatus.RUNNING,
-                PipelineRunStatus.STOPPING
-            ])
-        ).all()
-    
-    def get_next_run_number(self, config_id: str) -> int:
-        """Get the next run number for a config."""
-        result = self.session.query(
-            func.max(PipelineRunModel.run_number)
-        ).filter(
-            PipelineRunModel.pipeline_config_id == config_id
-        ).scalar()
-        return (result or 0) + 1
-    
-    def update_status(
-        self,
-        run_id: str,
-        status: PipelineRunStatus,
-        error_message: Optional[str] = None
-    ) -> Optional[PipelineRunModel]:
-        """Update run status."""
-        run = self.get_by_id(run_id)
-        if not run:
-            return None
-        
-        run.status = status
-        if error_message:
-            run.error_message = error_message
-        
-        if status == PipelineRunStatus.RUNNING and not run.started_at:
-            run.started_at = datetime.utcnow()
-        elif status in (PipelineRunStatus.COMPLETED, PipelineRunStatus.FAILED, PipelineRunStatus.CANCELLED):
-            if not run.completed_at:
-                run.completed_at = datetime.utcnow()
-        
-        self.session.flush()
-        return run
-    
-    def get_all(self, config_id: Optional[str] = None) -> List[PipelineRunModel]:
-        """Get all runs, optionally filtered by config."""
-        query = self.session.query(PipelineRunModel)
-        if config_id:
-            query = query.filter(PipelineRunModel.pipeline_config_id == config_id)
-        return query.order_by(PipelineRunModel.created_at.desc()).all()
-    
-    def delete(self, run_id: str) -> bool:
-        """Delete a pipeline run."""
-        run = self.get_by_id(run_id)
-        if not run:
-            return False
-        
-        self.session.delete(run)
-        self.session.flush()
-        logger.debug(f"Deleted pipeline run: {run_id}")
-        return True

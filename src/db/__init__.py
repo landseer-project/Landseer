@@ -1,13 +1,8 @@
 """
 Database module for Landseer.
 
-This module provides SQLAlchemy-based database persistence for:
-- Tasks (status, priority, dependencies, assigned_worker, attempts, logs)
-- Workers (registration, heartbeat, capabilities)
-- Workflows (tracking)
-- Pipelines (execution state)
-
-The database is designed to persist state so the system can recover from crashes/restarts.
+Provides SQLAlchemy persistence for experiments, runs, workflows, tasks,
+workers, artifacts, and evaluation results.
 """
 
 from .connection import (
@@ -23,52 +18,52 @@ from .models import (
     TaskModel,
     WorkerModel,
     WorkflowModel,
-    PipelineModel,
-    PipelineConfigModel,
-    PipelineRunModel,
+    ExperimentModel,
+    ExperimentRunModel,
     ArtifactModel,
     EvaluationResultModel,
+    ToolModel,
     TaskStatus as DBTaskStatus,
     WorkerStatus,
-    PipelineRunStatus,
+    ExperimentRunStatus,
+    TaskType,
 )
 from .repository import (
     TaskRepository,
     WorkerRepository,
     WorkflowRepository,
-    PipelineRepository,
-    PipelineConfigRepository,
-    PipelineRunRepository,
+    ExperimentRepository,
+    ExperimentRunRepository,
     ArtifactRepository,
 )
 
 __all__ = [
     # Connection
-    'DatabaseConfig',
-    'Database',
-    'get_database',
-    'init_database',
-    'get_session',
-    'session_scope',
+    "DatabaseConfig",
+    "Database",
+    "get_database",
+    "init_database",
+    "get_session",
+    "session_scope",
     # Models
-    'Base',
-    'TaskModel',
-    'WorkerModel',
-    'WorkflowModel',
-    'PipelineModel',
-    'PipelineConfigModel',
-    'PipelineRunModel',
-    'ArtifactModel',
-    'EvaluationResultModel',
-    'DBTaskStatus',
-    'WorkerStatus',
-    'PipelineRunStatus',
+    "Base",
+    "TaskModel",
+    "WorkerModel",
+    "WorkflowModel",
+    "ExperimentModel",
+    "ExperimentRunModel",
+    "ArtifactModel",
+    "EvaluationResultModel",
+    "ToolModel",
+    "DBTaskStatus",
+    "WorkerStatus",
+    "ExperimentRunStatus",
+    "TaskType",
     # Repositories
-    'TaskRepository',
-    'WorkerRepository',
-    'WorkflowRepository',
-    'PipelineRepository',
-    'PipelineConfigRepository',
-    'PipelineRunRepository',
-    'ArtifactRepository',
+    "TaskRepository",
+    "WorkerRepository",
+    "WorkflowRepository",
+    "ExperimentRepository",
+    "ExperimentRunRepository",
+    "ArtifactRepository",
 ]

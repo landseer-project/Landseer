@@ -1,8 +1,18 @@
 """
 SQLAlchemy models for Landseer database.
 
-These models persist task state, worker assignments, and pipeline execution
-so the system can recover from crashes and track historical data.
+Normalized experiment-centric schema:
+
+  Dataset → DatasetVariant
+  Model
+  Tool
+  Experiment ──< experiment_tools / experiment_attacks >── Tool
+  ExperimentRun → Workflow ──< workflow_tasks >── Task
+                → Task → Tool
+  Task ──< task_dependencies >── Task
+  Artifact ──< artifact_parents >── Artifact
+  EvaluationResult → Workflow, Task (tool via task)
+  Worker ──< worker_handled_workflows >── Workflow
 """
 
 from datetime import datetime
@@ -14,7 +24,6 @@ from sqlalchemy import (
     Column,
     DateTime,
     Enum as SQLEnum,
-    Float,
     ForeignKey,
     Integer,
     JSON,
@@ -28,224 +37,123 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 class Base(DeclarativeBase):
     """Base class for all database models."""
+
     pass
 
 
-class TaskStatus(str, Enum):
-    """Status of a task during execution."""
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
+# ---------------------------------------------------------------------------
+# Association tables
+# ---------------------------------------------------------------------------
 
+experiment_tools = Table(
+    "experiment_tools",
+    Base.metadata,
+    Column("experiment_id", String(64), ForeignKey("experiments.id"), primary_key=True),
+    Column("tool_id", String(64), ForeignKey("tools.id"), primary_key=True),
+)
+
+experiment_attacks = Table(
+    "experiment_attacks",
+    Base.metadata,
+    Column("experiment_id", String(64), ForeignKey("experiments.id"), primary_key=True),
+    Column("tool_id", String(64), ForeignKey("tools.id"), primary_key=True),
+)
+
+workflow_tasks = Table(
+    "workflow_tasks",
+    Base.metadata,
+    Column("workflow_id", String(64), ForeignKey("workflows.id"), primary_key=True),
+    Column("task_id", String(64), ForeignKey("tasks.id"), primary_key=True),
+    Column("position", Integer, nullable=False, default=0),
+)
+
+task_dependencies = Table(
+    "task_dependencies",
+    Base.metadata,
+    Column("task_id", String(64), ForeignKey("tasks.id"), primary_key=True),
+    Column("dependency_id", String(64), ForeignKey("tasks.id"), primary_key=True),
+)
+
+artifact_parents = Table(
+    "artifact_parents",
+    Base.metadata,
+    Column("artifact_id", String(64), ForeignKey("artifacts.id"), primary_key=True),
+    Column("parent_artifact_id", String(64), ForeignKey("artifacts.id"), primary_key=True),
+    Column("position", Integer, nullable=False, default=0),
+)
+
+worker_handled_workflows = Table(
+    "worker_handled_workflows",
+    Base.metadata,
+    Column("worker_id", String(64), ForeignKey("workers.id"), primary_key=True),
+    Column("workflow_id", String(64), ForeignKey("workflows.id"), primary_key=True),
+)
+
+
+# ---------------------------------------------------------------------------
+# Workers
+# ---------------------------------------------------------------------------
 
 class WorkerStatus(str, Enum):
-    """Status of a worker."""
     IDLE = "idle"
     BUSY = "busy"
     OFFLINE = "offline"
 
 
-# Association table for task dependencies
-task_dependencies = Table(
-    'task_dependencies',
-    Base.metadata,
-    Column('task_id', String(64), ForeignKey('tasks.id'), primary_key=True),
-    Column('dependency_id', String(64), ForeignKey('tasks.id'), primary_key=True),
-)
-
-# Association table for task-workflow relationships
-task_workflows = Table(
-    'task_workflows',
-    Base.metadata,
-    Column('task_id', String(64), ForeignKey('tasks.id'), primary_key=True),
-    Column('workflow_id', String(64), ForeignKey('workflows.id'), primary_key=True),
-)
-
-
-class TaskModel(Base):
-    """
-    Database model for Tasks.
-    
-    Stores task metadata, status, priority, dependencies, and execution history.
-    This enables recovery from crashes and provides audit trail.
-    """
-    __tablename__ = 'tasks'
-    
-    # Primary key - matches task.id from pipeline
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    
-    # Tool information
-    tool_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    tool_image: Mapped[str] = mapped_column(String(256), nullable=False)
-    tool_command: Mapped[str] = mapped_column(String(512), nullable=True)
-    tool_is_baseline: Mapped[bool] = mapped_column(Boolean, default=False)
-    
-    # Task configuration (JSON)
-    config: Mapped[dict] = mapped_column(JSON, default=dict)
-    
-    # Scheduling
-    priority: Mapped[int] = mapped_column(Integer, default=0, index=True)
-    status: Mapped[TaskStatus] = mapped_column(
-        SQLEnum(TaskStatus),
-        default=TaskStatus.PENDING,
-        index=True
-    )
-    task_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    
-    # Task hash for deduplication
-    task_hash: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
-    
-    # Execution tracking
-    counter: Mapped[int] = mapped_column(Integer, default=0)  # Number of workflows using this task
-    attempts: Mapped[int] = mapped_column(Integer, default=0)  # Number of execution attempts
-    
-    # Worker assignment
-    assigned_worker_id: Mapped[Optional[str]] = mapped_column(
-        String(64),
-        ForeignKey('workers.id'),
-        nullable=True,
-        index=True
-    )
-    
-    # Pipeline relationship
-    pipeline_id: Mapped[str] = mapped_column(
-        String(64),
-        ForeignKey('pipelines.id'),
-        nullable=False,
-        index=True
-    )
-    
-    # Run relationship (for tracking which run created this task)
-    run_id: Mapped[Optional[str]] = mapped_column(
-        String(64),
-        ForeignKey('pipeline_runs.id'),
-        nullable=True,
-        index=True
-    )
-    
-    # Artifact caching
-    cache_key: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
-    artifact_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
-    
-    # Execution results
-    execution_time_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    result_metadata: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    logs: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    
-    # Timestamps
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow
-    )
-    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    
-    # Relationships
-    assigned_worker: Mapped[Optional["WorkerModel"]] = relationship(
-        "WorkerModel",
-        back_populates="assigned_tasks"
-    )
-    pipeline: Mapped["PipelineModel"] = relationship(
-        "PipelineModel",
-        back_populates="tasks"
-    )
-    workflows: Mapped[List["WorkflowModel"]] = relationship(
-        "WorkflowModel",
-        secondary=task_workflows,
-        back_populates="tasks"
-    )
-    
-    # Self-referential many-to-many for dependencies
-    dependencies: Mapped[List["TaskModel"]] = relationship(
-        "TaskModel",
-        secondary=task_dependencies,
-        primaryjoin=id == task_dependencies.c.task_id,
-        secondaryjoin=id == task_dependencies.c.dependency_id,
-        backref="dependents"
-    )
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary representation."""
-        return {
-            "id": self.id,
-            "tool_name": self.tool_name,
-            "tool_image": self.tool_image,
-            "tool_command": self.tool_command,
-            "tool_is_baseline": self.tool_is_baseline,
-            "config": self.config,
-            "priority": self.priority,
-            "status": self.status.value if self.status else None,
-            "task_type": self.task_type,
-            "task_hash": self.task_hash,
-            "counter": self.counter,
-            "attempts": self.attempts,
-            "assigned_worker_id": self.assigned_worker_id,
-            "pipeline_id": self.pipeline_id,
-            "cache_key": self.cache_key,
-            "artifact_path": self.artifact_path,
-            "execution_time_ms": self.execution_time_ms,
-            "error_message": self.error_message,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-            "started_at": self.started_at.isoformat() if self.started_at else None,
-            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
-            "dependency_ids": [dep.id for dep in self.dependencies],
-            "workflow_ids": [w.id for w in self.workflows],
-        }
+class RuntimeType(str, Enum):
+    DOCKER = "docker"
+    KUBERNETES = "kubernetes"
+    APPTAINER = "apptainer"
+    OTHER = "other"
 
 
 class WorkerModel(Base):
-    """
-    Database model for Workers.
-    
-    Tracks worker registration, heartbeat, capabilities, and task assignments.
-    Enables locality-based scheduling and failure detection.
-    """
-    __tablename__ = 'workers'
-    
-    # Primary key
+    __tablename__ = "workers"
+
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    
-    # Worker info
     hostname: Mapped[str] = mapped_column(String(256), nullable=False)
     status: Mapped[WorkerStatus] = mapped_column(
         SQLEnum(WorkerStatus),
         default=WorkerStatus.IDLE,
-        index=True
+        index=True,
     )
-    
-    # Capabilities (JSON: GPU info, memory, runtime, etc.)
+    has_gpu: Mapped[bool] = mapped_column(Boolean, default=False)
+    supported_runtimes: Mapped[List[str]] = mapped_column(JSON, default=list)
     capabilities: Mapped[dict] = mapped_column(JSON, default=dict)
-    
-    # Current task assignment
-    current_task_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    
-    # Statistics
+
+    # use_alter: tasks also FK to workers (assigned_worker_id)
+    current_task_id: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        ForeignKey("tasks.id", use_alter=True, name="fk_workers_current_task"),
+        nullable=True,
+    )
+
     tasks_completed: Mapped[int] = mapped_column(Integer, default=0)
     tasks_failed: Mapped[int] = mapped_column(Integer, default=0)
     total_execution_time_ms: Mapped[int] = mapped_column(Integer, default=0)
-    
-    # Timestamps
     registered_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_heartbeat: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    
-    # Relationships
+
     assigned_tasks: Mapped[List["TaskModel"]] = relationship(
         "TaskModel",
         back_populates="assigned_worker",
-        foreign_keys=[TaskModel.assigned_worker_id]
+        foreign_keys="[TaskModel.assigned_worker_id]",
     )
-    
-    # Locality tracking - workflows this worker has handled (for priority boost)
-    handled_workflow_ids: Mapped[List[str]] = mapped_column(JSON, default=list)
-    
+    current_task: Mapped[Optional["TaskModel"]] = relationship(
+        "TaskModel",
+        foreign_keys=[current_task_id],
+        post_update=True,
+    )
+    handled_workflows: Mapped[List["WorkflowModel"]] = relationship(
+        "WorkflowModel",
+        secondary=worker_handled_workflows,
+    )
+
+    @property
+    def handled_workflow_ids(self) -> List[str]:
+        return [w.id for w in self.handled_workflows]
+
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary representation."""
         return {
             "id": self.id,
             "hostname": self.hostname,
@@ -259,136 +167,195 @@ class WorkerModel(Base):
             "last_heartbeat": self.last_heartbeat.isoformat() if self.last_heartbeat else None,
             "handled_workflow_ids": self.handled_workflow_ids,
         }
-    
+
     def update_heartbeat(self) -> None:
-        """Update the last heartbeat timestamp."""
         self.last_heartbeat = datetime.utcnow()
-    
+
     def is_stale(self, timeout_seconds: int = 120) -> bool:
-        """Check if worker is stale (no heartbeat within timeout)."""
         if not self.last_heartbeat:
             return True
         elapsed = (datetime.utcnow() - self.last_heartbeat).total_seconds()
         return elapsed > timeout_seconds
 
 
-class WorkflowModel(Base):
-    """
-    Database model for Workflows.
-    
-    A workflow is a sequence of tasks executed in order.
-    Multiple workflows can share tasks.
-    """
-    __tablename__ = 'workflows'
-    
-    # Primary key
+# ---------------------------------------------------------------------------
+# Tools / Datasets / Models
+# ---------------------------------------------------------------------------
+
+class ToolDefenseType(str, Enum):
+    ADVERSARIAL = "adversarial"
+    FAIRNESS = "fairness"
+    OTHER = "other"
+    NONE = "none"
+
+
+class ToolStage(str, Enum):
+    PRE_TRAINING = "pre_training"
+    DURING_TRAINING = "during_training"
+    POST_TRAINING = "post_training"
+    DEPLOYMENT = "deployment"
+    OTHER = "other"
+
+
+class ToolType(str, Enum):
+    DEFENSE = "defense"
+    BASELINE = "baseline"
+    EVAL = "eval"
+    ATTACK = "attack"
+
+
+class ToolModel(Base):
+    __tablename__ = "tools"
+
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    
-    # Workflow info
-    name: Mapped[str] = mapped_column(String(256), nullable=False)
-    
-    # Pipeline relationship
-    pipeline_id: Mapped[str] = mapped_column(
-        String(64),
-        ForeignKey('pipelines.id'),
+    tool_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    tool_type: Mapped[ToolType] = mapped_column(SQLEnum(ToolType), nullable=False)
+    tool_defense_type: Mapped[ToolDefenseType] = mapped_column(
+        SQLEnum(ToolDefenseType),
         nullable=False,
-        index=True
+        default=ToolDefenseType.NONE,
     )
-    
-    # Run relationship (for tracking which run created this workflow)
-    run_id: Mapped[Optional[str]] = mapped_column(
+    tool_stage: Mapped[ToolStage] = mapped_column(SQLEnum(ToolStage), nullable=False)
+    tool_image: Mapped[str] = mapped_column(String(512), nullable=False)
+    tool_parameters: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)
+
+    @property
+    def tool_is_baseline(self) -> bool:
+        return self.tool_type == ToolType.BASELINE
+
+
+class DatasetType(str, Enum):
+    IMAGE = "image"
+    TEXT = "text"
+    AUDIO = "audio"
+    VIDEO = "video"
+    OTHER = "other"
+
+
+class DatasetModel(Base):
+    __tablename__ = "datasets"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    dataset_type: Mapped[DatasetType] = mapped_column(SQLEnum(DatasetType), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    variants: Mapped[List["DatasetVariantModel"]] = relationship(
+        "DatasetVariantModel",
+        back_populates="dataset",
+    )
+
+
+class DatasetVariantType(str, Enum):
+    CLEAN = "clean"
+    POISONED = "poisoned"
+    OTHER = "other"
+
+
+class DatasetVariantModel(Base):
+    __tablename__ = "dataset_variants"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    dataset_id: Mapped[str] = mapped_column(String(64), ForeignKey("datasets.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    dataset_variant_type: Mapped[DatasetVariantType] = mapped_column(
+        SQLEnum(DatasetVariantType),
+        nullable=False,
+    )
+    dataset_path: Mapped[str] = mapped_column(String(512), nullable=False)
+
+    dataset: Mapped["DatasetModel"] = relationship("DatasetModel", back_populates="variants")
+    experiments: Mapped[List["ExperimentModel"]] = relationship(
+        "ExperimentModel",
+        back_populates="dataset_variant",
+    )
+
+
+class ModelType(str, Enum):
+    PYTORCH = "pytorch"
+    TENSORFLOW = "tensorflow"
+    KERAS = "keras"
+    OTHER = "other"
+
+
+class ModelModel(Base):
+    __tablename__ = "models"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    model_type: Mapped[ModelType] = mapped_column(SQLEnum(ModelType), nullable=False)
+    model_path: Mapped[str] = mapped_column(String(512), nullable=False)
+
+    experiments: Mapped[List["ExperimentModel"]] = relationship(
+        "ExperimentModel",
+        back_populates="model",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Experiment hierarchy
+# ---------------------------------------------------------------------------
+
+class ExperimentModel(Base):
+    __tablename__ = "experiments"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    experiment_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Optional until catalog rows exist; YAML-driven registration may set paths first.
+    model_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("models.id"), nullable=True
+    )
+    dataset_variant_id: Mapped[Optional[str]] = mapped_column(
         String(64),
-        ForeignKey('pipeline_runs.id'),
+        ForeignKey("dataset_variants.id"),
         nullable=True,
-        index=True
     )
-    
-    # Status (derived from tasks but cached for performance)
-    status: Mapped[str] = mapped_column(String(32), default="pending")
-    completed_tasks: Mapped[int] = mapped_column(Integer, default=0)
-    failed_tasks: Mapped[int] = mapped_column(Integer, default=0)
-    
-    # Timestamps
+
+    config_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    attack_config_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    config_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
-        onupdate=datetime.utcnow
+        onupdate=datetime.utcnow,
     )
-    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    
-    # Relationships
-    pipeline: Mapped["PipelineModel"] = relationship(
-        "PipelineModel",
-        back_populates="workflows"
+
+    model: Mapped[Optional["ModelModel"]] = relationship(
+        "ModelModel", back_populates="experiments"
     )
-    tasks: Mapped[List["TaskModel"]] = relationship(
-        "TaskModel",
-        secondary=task_workflows,
-        back_populates="workflows"
+    dataset_variant: Mapped[Optional["DatasetVariantModel"]] = relationship(
+        "DatasetVariantModel",
+        back_populates="experiments",
     )
-    # Evaluation results for this workflow (one per evaluator)
-    evaluation_results: Mapped[List["EvaluationResultModel"]] = relationship(
-        "EvaluationResultModel",
-        back_populates="workflow",
-        cascade="all, delete-orphan"
+    tools: Mapped[List["ToolModel"]] = relationship(
+        "ToolModel",
+        secondary=experiment_tools,
     )
-    
-    def to_dict(self, include_evaluations: bool = False) -> Dict[str, Any]:
-        """
-        Convert to dictionary representation.
-        
-        Args:
-            include_evaluations: If True, include evaluation results
-        """
-        result = {
-            "id": self.id,
-            "name": self.name,
-            "pipeline_id": self.pipeline_id,
-            "run_id": self.run_id,
-            "status": self.status,
-            "completed_tasks": self.completed_tasks,
-            "failed_tasks": self.failed_tasks,
-            "task_count": len(self.tasks) if self.tasks else 0,
-            "task_ids": [t.id for t in self.tasks] if self.tasks else [],
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-            "started_at": self.started_at.isoformat() if self.started_at else None,
-            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
-        }
-        
-        if include_evaluations and self.evaluation_results:
-            result["evaluations"] = {
-                er.evaluator_name: er.metrics 
-                for er in self.evaluation_results
-            }
-            result["evaluation_count"] = len(self.evaluation_results)
-        
-        return result
-    
-    def get_evaluation(self, evaluator_name: str) -> Optional["EvaluationResultModel"]:
-        """Get evaluation result for a specific evaluator."""
-        if not self.evaluation_results:
-            return None
-        for er in self.evaluation_results:
-            if er.evaluator_name == evaluator_name:
-                return er
-        return None
-    
-    def get_all_metrics(self) -> Dict[str, Dict[str, Any]]:
-        """Get all evaluation metrics grouped by evaluator."""
-        if not self.evaluation_results:
-            return {}
-        return {
-            er.evaluator_name: er.metrics 
-            for er in self.evaluation_results 
-            if er.success and not er.skipped
-        }
+    attacks: Mapped[List["ToolModel"]] = relationship(
+        "ToolModel",
+        secondary=experiment_attacks,
+    )
+    runs: Mapped[List["ExperimentRunModel"]] = relationship(
+        "ExperimentRunModel",
+        back_populates="experiment",
+        cascade="all, delete-orphan",
+    )
+
+    # Convenience for callers that used config.name
+    @property
+    def name(self) -> str:
+        return self.experiment_name
+
+    @name.setter
+    def name(self, value: str) -> None:
+        self.experiment_name = value
 
 
-class PipelineRunStatus(str, Enum):
-    """Status of a pipeline run."""
+class ExperimentRunStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -397,370 +364,428 @@ class PipelineRunStatus(str, Enum):
     STOPPING = "stopping"
 
 
-class PipelineConfigModel(Base):
-    """
-    Database model for Pipeline Configurations.
-    
-    Represents a pipeline configuration (YAML file) that can be run multiple times.
-    Each config can have multiple PipelineRun instances.
-    """
-    __tablename__ = 'pipeline_configs'
-    
-    # Primary key - e.g., "config_trades"
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    
-    # Config info
-    name: Mapped[str] = mapped_column(String(256), nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    
-    # File paths
-    config_path: Mapped[str] = mapped_column(String(512), nullable=False)
-    attack_config_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
-    
-    # Config hash for change detection
-    config_hash: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
-    
-    # Timestamps
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow
-    )
-    
-    # Relationships
-    runs: Mapped[List["PipelineRunModel"]] = relationship(
-        "PipelineRunModel",
-        back_populates="config",
-        cascade="all, delete-orphan"
-    )
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary representation."""
-        return {
-            "id": self.id,
-            "name": self.name,
-            "description": self.description,
-            "config_path": self.config_path,
-            "attack_config_path": self.attack_config_path,
-            "config_hash": self.config_hash,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-        }
+class ExperimentRunModel(Base):
+    __tablename__ = "experiment_runs"
 
-
-class PipelineRunModel(Base):
-    """
-    Database model for Pipeline Runs.
-    
-    Represents a single execution instance of a pipeline configuration.
-    Multiple runs of the same config can exist, each with its own status and results.
-    """
-    __tablename__ = 'pipeline_runs'
-    
-    # Primary key - e.g., "run_20250203_143022_abc123"
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    
-    # Reference to pipeline config
-    pipeline_config_id: Mapped[str] = mapped_column(
+    experiment_id: Mapped[str] = mapped_column(
         String(64),
-        ForeignKey('pipeline_configs.id'),
+        ForeignKey("experiments.id"),
         nullable=False,
-        index=True
+        index=True,
     )
-    
-    # Run number (sequential for this config)
     run_number: Mapped[int] = mapped_column(Integer, nullable=False)
-    
-    # Run settings
+    status: Mapped[ExperimentRunStatus] = mapped_column(
+        SQLEnum(ExperimentRunStatus),
+        default=ExperimentRunStatus.PENDING,
+        index=True,
+    )
     use_cache: Mapped[bool] = mapped_column(Boolean, default=True)
-
-    # Tool configuration snapshot — persisted at run start so it cannot change mid-run.
-    # Keys are stage names; values are ordered tool name lists.
-    # e.g. {"pre_training": ["pre_noop"], "during_training": ["in_trades", "in_noop"], ...}
     tools_config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    
-    # Status
-    status: Mapped[PipelineRunStatus] = mapped_column(
-        SQLEnum(PipelineRunStatus),
-        default=PipelineRunStatus.PENDING,
-        index=True
-    )
-    
-    # Error info
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    
-    # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    
-    # Relationships
-    config: Mapped["PipelineConfigModel"] = relationship(
-        "PipelineConfigModel",
-        back_populates="runs"
-    )
-    pipeline: Mapped[Optional["PipelineModel"]] = relationship(
-        "PipelineModel",
-        back_populates="run",
-        uselist=False
-    )
-    
-    # Unique constraint: one run number per config
-    __table_args__ = (
-        UniqueConstraint('pipeline_config_id', 'run_number', name='unique_config_run'),
-    )
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary representation."""
-        return {
-            "id": self.id,
-            "pipeline_config_id": self.pipeline_config_id,
-            "run_number": self.run_number,
-            "use_cache": self.use_cache,
-            "tools_config": self.tools_config,
-            "status": self.status.value if self.status else None,
-            "error_message": self.error_message,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "started_at": self.started_at.isoformat() if self.started_at else None,
-            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
-        }
 
-
-class PipelineModel(Base):
-    """
-    Database model for Pipelines.
-    
-    A pipeline is a collection of workflows used to evaluate ML defenses.
-    Now linked to a PipelineRun to support multiple runs of the same config.
-    """
-    __tablename__ = 'pipelines'
-    
-    # Primary key - now matches run_id
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    
-    # Pipeline info
-    name: Mapped[str] = mapped_column(String(256), nullable=False)
-    
-    # Reference to pipeline run
-    run_id: Mapped[Optional[str]] = mapped_column(
-        String(64),
-        ForeignKey('pipeline_runs.id'),
-        nullable=True,
-        unique=True,
-        index=True
-    )
-    
-    # Configuration (JSON) - kept for backwards compatibility
-    config: Mapped[dict] = mapped_column(JSON, default=dict)
-    dataset_config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    model_config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    
-    # Status
-    status: Mapped[str] = mapped_column(String(32), default="pending")
-    
-    # Timestamps
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow
-    )
-    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    
-    # Relationships
-    run: Mapped[Optional["PipelineRunModel"]] = relationship(
-        "PipelineRunModel",
-        back_populates="pipeline",
-        uselist=False
+    experiment: Mapped["ExperimentModel"] = relationship(
+        "ExperimentModel",
+        back_populates="runs",
     )
     workflows: Mapped[List["WorkflowModel"]] = relationship(
         "WorkflowModel",
-        back_populates="pipeline",
-        cascade="all, delete-orphan"
+        back_populates="experiment_run",
+        cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        UniqueConstraint("experiment_id", "run_number", name="unique_experiment_run"),
+    )
+
+
+class WorkflowStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class WorkflowModel(Base):
+    __tablename__ = "workflows"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    experiment_run_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("experiment_runs.id"),
+        nullable=False,
+        index=True,
+    )
+    status: Mapped[WorkflowStatus] = mapped_column(
+        SQLEnum(WorkflowStatus),
+        default=WorkflowStatus.PENDING,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    experiment_run: Mapped["ExperimentRunModel"] = relationship(
+        "ExperimentRunModel",
+        back_populates="workflows",
     )
     tasks: Mapped[List["TaskModel"]] = relationship(
         "TaskModel",
-        back_populates="pipeline",
-        cascade="all, delete-orphan"
+        secondary=workflow_tasks,
+        order_by=workflow_tasks.c.position,
     )
-    
+    evaluation_results: Mapped[List["EvaluationResultModel"]] = relationship(
+        "EvaluationResultModel",
+        back_populates="workflow",
+        cascade="all, delete-orphan",
+    )
+    artifacts: Mapped[List["ArtifactModel"]] = relationship(
+        "ArtifactModel",
+        back_populates="workflow",
+    )
+
+    def set_ordered_tasks(self, session, ordered_tasks: List["TaskModel"]) -> None:
+        """Replace membership and write ``position`` 0..n-1."""
+        session.execute(
+            workflow_tasks.delete().where(workflow_tasks.c.workflow_id == self.id)
+        )
+        for i, task in enumerate(ordered_tasks):
+            session.execute(
+                workflow_tasks.insert().values(
+                    workflow_id=self.id,
+                    task_id=task.id,
+                    position=i,
+                )
+            )
+        session.expire(self, ["tasks"])
+
+
+# ---------------------------------------------------------------------------
+# Tasks
+# ---------------------------------------------------------------------------
+
+class TaskStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class TaskType(str, Enum):
+    """DB task kind. Pipeline stage lives on ToolModel.tool_stage."""
+
+    TOOL = "tool"
+    EVALUATION = "evaluation"
+    OTHER = "other"
+
+
+class TaskModel(Base):
+    """Executable unit; tool metadata lives on ToolModel via tool_id."""
+
+    __tablename__ = "tasks"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    task_type: Mapped[TaskType] = mapped_column(SQLEnum(TaskType), nullable=False)
+    tool_id: Mapped[str] = mapped_column(String(64), ForeignKey("tools.id"), nullable=False)
+    config: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    priority: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    status: Mapped[TaskStatus] = mapped_column(
+        SQLEnum(TaskStatus),
+        default=TaskStatus.PENDING,
+        index=True,
+    )
+    task_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+
+    counter: Mapped[int] = mapped_column(Integer, default=0)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+
+    assigned_worker_id: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        ForeignKey("workers.id"),
+        nullable=True,
+        index=True,
+    )
+    experiment_run_id: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        ForeignKey("experiment_runs.id"),
+        nullable=True,
+        index=True,
+    )
+
+    use_cache: Mapped[bool] = mapped_column(Boolean, default=False)
+    artifact_id: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        ForeignKey("artifacts.id", use_alter=True, name="fk_tasks_artifact"),
+        nullable=True,
+        index=True,
+    )
+
+    execution_time_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    result_metadata: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    logs: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    assigned_worker: Mapped[Optional["WorkerModel"]] = relationship(
+        "WorkerModel",
+        back_populates="assigned_tasks",
+        foreign_keys=[assigned_worker_id],
+    )
+    tool: Mapped["ToolModel"] = relationship("ToolModel")
+    experiment_run: Mapped[Optional["ExperimentRunModel"]] = relationship("ExperimentRunModel")
+    artifact: Mapped[Optional["ArtifactModel"]] = relationship(
+        "ArtifactModel",
+        foreign_keys=[artifact_id],
+        post_update=True,
+    )
+    dependencies: Mapped[List["TaskModel"]] = relationship(
+        "TaskModel",
+        secondary=task_dependencies,
+        primaryjoin=id == task_dependencies.c.task_id,
+        secondaryjoin=id == task_dependencies.c.dependency_id,
+        backref="dependents",
+    )
+
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary representation."""
         return {
             "id": self.id,
-            "name": self.name,
-            "run_id": self.run_id,
+            "task_type": self.task_type.value if self.task_type else None,
+            "tool_id": self.tool_id,
             "config": self.config,
-            "dataset_config": self.dataset_config,
-            "model_config": self.model_config,
-            "status": self.status,
-            "workflow_count": len(self.workflows) if self.workflows else 0,
-            "task_count": len(self.tasks) if self.tasks else 0,
+            "priority": self.priority,
+            "status": self.status.value if self.status else None,
+            "task_hash": self.task_hash,
+            "counter": self.counter,
+            "attempts": self.attempts,
+            "assigned_worker_id": self.assigned_worker_id,
+            "experiment_run_id": self.experiment_run_id,
+            "use_cache": self.use_cache,
+            "artifact_id": self.artifact_id,
+            "execution_time_ms": self.execution_time_ms,
+            "error_message": self.error_message,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "dependency_ids": [dep.id for dep in self.dependencies],
         }
+
+
+# ---------------------------------------------------------------------------
+# Artifacts
+# ---------------------------------------------------------------------------
+
+class StorageType(str, Enum):
+    MINIO = "minio"
+    LOCAL = "local"
+    BOTH = "both"
+
+
+class ArtifactType(str, Enum):
+    DATASET = "dataset"
+    MODEL = "model"
+    TOOL_OUTPUT = "tool_output"
+    EVALUATION = "evaluation"
+    OTHER = "other"
 
 
 class ArtifactModel(Base):
     """
-    Database model for Artifacts.
-    
-    Tracks artifacts stored in the AI store (MinIO) for caching and retrieval.
+    Content-addressed artifact in MinIO/local cache.
+
+    ``id`` is the cache key. Parent lineage is ``parents`` (ordered).
     """
-    __tablename__ = 'artifacts'
-    
-    # Primary key - the cache key/hash
+
+    __tablename__ = "artifacts"
+
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    
-    # Associated task
-    task_id: Mapped[str] = mapped_column(String(64), ForeignKey('tasks.id'), index=True)
-    
-    # Storage location
-    storage_type: Mapped[str] = mapped_column(String(32), default="minio")  # minio, local
+
+    artifact_type: Mapped[ArtifactType] = mapped_column(
+        SQLEnum(ArtifactType),
+        default=ArtifactType.TOOL_OUTPUT,
+        nullable=False,
+        index=True,
+    )
+
+    task_id: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        ForeignKey("tasks.id", use_alter=True, name="fk_artifacts_task"),
+        nullable=True,
+        index=True,
+    )
+    experiment_run_id: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        ForeignKey("experiment_runs.id"),
+        nullable=True,
+        index=True,
+    )
+    workflow_id: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        ForeignKey("workflows.id"),
+        nullable=True,
+        index=True,
+    )
+
+    storage_type: Mapped[StorageType] = mapped_column(
+        SQLEnum(StorageType),
+        default=StorageType.MINIO,
+        nullable=False,
+    )
     bucket: Mapped[str] = mapped_column(String(128), default="landseer-artifacts")
     object_key: Mapped[str] = mapped_column(String(512), nullable=False)
-    
-    # Metadata
+    local_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+
     size_bytes: Mapped[int] = mapped_column(Integer, default=0)
     content_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     checksum: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    
-    # Provenance (JSON: parent hashes, tool info)
+
+    # Free-form extras (worker_id, config hash, etc.) — not relational identity
     provenance: Mapped[dict] = mapped_column(JSON, default=dict)
-    
-    # Run relationship (for tracking which run created this cache entry)
-    created_by_run_id: Mapped[Optional[str]] = mapped_column(
-        String(64),
-        ForeignKey('pipeline_runs.id'),
-        nullable=True,
-        index=True
-    )
-    
-    # Timestamps
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_accessed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    
+
+    task: Mapped[Optional["TaskModel"]] = relationship(
+        "TaskModel",
+        foreign_keys=[task_id],
+        post_update=True,
+    )
+    workflow: Mapped[Optional["WorkflowModel"]] = relationship(
+        "WorkflowModel",
+        back_populates="artifacts",
+    )
+    experiment_run: Mapped[Optional["ExperimentRunModel"]] = relationship(
+        "ExperimentRunModel",
+    )
+    parents: Mapped[List["ArtifactModel"]] = relationship(
+        "ArtifactModel",
+        secondary=artifact_parents,
+        primaryjoin=id == artifact_parents.c.artifact_id,
+        secondaryjoin=id == artifact_parents.c.parent_artifact_id,
+        order_by=artifact_parents.c.position,
+        backref="children",
+    )
+
+    @property
+    def parent_artifact_ids(self) -> List[str]:
+        return [p.id for p in self.parents]
+
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary representation."""
         return {
             "id": self.id,
+            "artifact_type": self.artifact_type.value if self.artifact_type else None,
             "task_id": self.task_id,
-            "storage_type": self.storage_type,
+            "experiment_run_id": self.experiment_run_id,
+            "workflow_id": self.workflow_id,
+            "storage_type": self.storage_type.value if self.storage_type else None,
             "bucket": self.bucket,
             "object_key": self.object_key,
+            "local_path": self.local_path,
             "size_bytes": self.size_bytes,
             "content_type": self.content_type,
             "checksum": self.checksum,
+            "parent_artifact_ids": self.parent_artifact_ids,
             "provenance": self.provenance,
-            "created_by_run_id": self.created_by_run_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
-            "last_accessed_at": self.last_accessed_at.isoformat() if self.last_accessed_at else None,
+            "last_accessed_at": (
+                self.last_accessed_at.isoformat() if self.last_accessed_at else None
+            ),
         }
 
 
+# ---------------------------------------------------------------------------
+# Evaluation results
+# ---------------------------------------------------------------------------
+
 class EvaluationResultModel(Base):
     """
-    Database model for Evaluation Results.
-    
-    Stores evaluation metrics for each WORKFLOW from each evaluator.
-    
-    IMPORTANT: Evaluations are per-workflow, NOT per-task.
-    - Each workflow gets evaluated by multiple evaluators (adversarial, fairness, etc.)
-    - Each evaluator produces one result per workflow
-    - The unique constraint (workflow_id, evaluator_name) enforces this
-    
-    The evaluation_task_id field references which EvaluationTask produced this result,
-    but the result belongs to the workflow, not the task.
+    Per-workflow metrics from one evaluation task.
+
+    Run scope is ``workflow.experiment_run_id`` (not duplicated here).
+    Tool identity is ``evaluation_task.tool``.
     """
-    __tablename__ = 'evaluation_results'
-    
-    # Primary key
+
+    __tablename__ = "evaluation_results"
+
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    
-    # --- PRIMARY RELATIONSHIP: Workflow ---
-    # Evaluation is per-workflow. This is the main relationship.
+
     workflow_id: Mapped[str] = mapped_column(
         String(64),
-        ForeignKey('workflows.id'),
+        ForeignKey("workflows.id"),
         nullable=False,
-        index=True
+        index=True,
     )
-    
-    # Pipeline for denormalization (faster queries)
-    pipeline_id: Mapped[str] = mapped_column(
+    evaluation_task_id: Mapped[str] = mapped_column(
         String(64),
-        ForeignKey('pipelines.id'),
+        ForeignKey("tasks.id"),
         nullable=False,
-        index=True
+        index=True,
     )
-    
-    # Run relationship (for tracking which run created this evaluation)
-    run_id: Mapped[Optional[str]] = mapped_column(
-        String(64),
-        ForeignKey('pipeline_runs.id'),
-        nullable=True,
-        index=True
-    )
-    
-    # --- OPTIONAL: Which task produced this result ---
-    # This references the EvaluationTask that ran the evaluator.
-    # It's optional because results can be imported without task reference.
-    evaluation_task_id: Mapped[Optional[str]] = mapped_column(
-        String(64),
-        ForeignKey('tasks.id'),
-        nullable=True,
-        index=True
-    )
-    
-    # Evaluator info
-    evaluator_name: Mapped[str] = mapped_column(String(64), nullable=False)
-    evaluator_image: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
-    
-    # Metrics as JSON
+
     metrics: Mapped[dict] = mapped_column(JSON, default=dict)
-    
-    # Status
     success: Mapped[bool] = mapped_column(Boolean, default=True)
     skipped: Mapped[bool] = mapped_column(Boolean, default=False)
     skip_reason: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    
-    # Parameters used for evaluation
     parameters: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    
-    # Timestamps
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
-        onupdate=datetime.utcnow
+        onupdate=datetime.utcnow,
     )
-    
-    # Relationships
+
     workflow: Mapped["WorkflowModel"] = relationship(
         "WorkflowModel",
-        back_populates="evaluation_results"
+        back_populates="evaluation_results",
     )
-    
-    # Unique constraint: one result per workflow per evaluator
-    # This enforces that evaluations are per-workflow, not per-task
+    evaluation_task: Mapped["TaskModel"] = relationship(
+        "TaskModel",
+        foreign_keys=[evaluation_task_id],
+    )
+
     __table_args__ = (
-        UniqueConstraint('workflow_id', 'evaluator_name', name='unique_workflow_evaluator'),
+        UniqueConstraint(
+            "workflow_id",
+            "evaluation_task_id",
+            name="unique_workflow_evaluation_task",
+        ),
     )
-    
+
+    @property
+    def experiment_run_id(self) -> Optional[str]:
+        return self.workflow.experiment_run_id if self.workflow else None
+
+    @property
+    def evaluator_name(self) -> Optional[str]:
+        task = self.evaluation_task
+        if task is None or task.tool is None:
+            return None
+        return task.tool.tool_name
+
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary representation."""
         return {
             "id": self.id,
             "workflow_id": self.workflow_id,
-            "pipeline_id": self.pipeline_id,
+            "experiment_run_id": self.experiment_run_id,
             "evaluation_task_id": self.evaluation_task_id,
             "evaluator_name": self.evaluator_name,
-            "evaluator_image": self.evaluator_image,
             "metrics": self.metrics,
             "success": self.success,
             "skipped": self.skipped,
@@ -770,48 +795,25 @@ class EvaluationResultModel(Base):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
-    
+
     @classmethod
     def from_evaluation_result(
         cls,
         result_id: str,
         workflow_id: str,
-        pipeline_id: str,
-        evaluator_name: str,
+        evaluation_task_id: str,
         result_data: Dict[str, Any],
-        evaluation_task_id: Optional[str] = None,
-        evaluator_image: Optional[str] = None
     ) -> "EvaluationResultModel":
-        """
-        Create from evaluation result JSON.
-        
-        Evaluations are per-workflow, not per-task. Each workflow is evaluated
-        by multiple evaluators, and each evaluator produces metrics for that
-        workflow's defense effectiveness.
-        
-        Args:
-            result_id: Unique ID for this result
-            workflow_id: Workflow that was evaluated (the defense workflow)
-            pipeline_id: Pipeline the workflow belongs to
-            evaluator_name: Name of the evaluator (e.g., 'adversarial', 'fairness')
-            result_data: Parsed evaluation_results.json from container
-            evaluation_task_id: Optional ID of the EvaluationTask that ran this
-            evaluator_image: Optional container image used
-            
-        Returns:
-            EvaluationResultModel instance
-        """
+        """Build a row from evaluator ``evaluation_results.json`` payload."""
         return cls(
             id=result_id,
             workflow_id=workflow_id,
-            pipeline_id=pipeline_id,
             evaluation_task_id=evaluation_task_id,
-            evaluator_name=evaluator_name,
-            evaluator_image=evaluator_image,
             metrics=result_data.get("metrics", {}),
             success=result_data.get("success", True),
             skipped=result_data.get("skipped", False),
             skip_reason=result_data.get("skip_reason"),
             error=result_data.get("error"),
-            parameters=result_data.get("parameters")
+            parameters=result_data.get("parameters"),
         )
+
