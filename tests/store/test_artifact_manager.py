@@ -7,12 +7,13 @@ from src.store.artifact_manager import ArtifactManager
 class DummyMinioStore:
     def __init__(self):
         self.is_available = True
+        self.uploaded = []
 
     def artifact_exists(self, cache_key: str) -> bool:
         return False
 
-    def get_artifact_key(self, cache_key: str) -> str:
-        return f"artifacts/{cache_key}"
+    def get_artifact_key(self, cache_key: str, filename: str = "") -> str:
+        return f"artifacts/{cache_key}/{filename}"
 
     def upload_directory(self, source_dir: Path, prefix: str) -> int:
         return 1
@@ -21,6 +22,11 @@ class DummyMinioStore:
         return 1
 
     def upload_file(self, src: Path, dest_key: str, content_type: str = "application/octet-stream") -> bool:
+        self.uploaded.append(dest_key)
+        return True
+
+    def upload_bytes(self, data: bytes, dest_key: str, content_type: str = "application/octet-stream") -> bool:
+        self.uploaded.append(dest_key)
         return True
 
     def get_size(self, prefix: str) -> int:
@@ -51,9 +57,10 @@ def test_store_artifact_drops_local_after_upload(tmp_path):
     (src / "model.pt").write_bytes(b"weights")
     cache_root = tmp_path / "cache"
 
+    store = DummyMinioStore()
     manager = ArtifactManager(
         local_cache_dir=cache_root,
-        minio_store=DummyMinioStore(),
+        minio_store=store,
         use_minio=True,
     )
     info = manager.store_artifact(
@@ -66,3 +73,5 @@ def test_store_artifact_drops_local_after_upload(tmp_path):
     assert info.storage_type == "minio"
     assert info.local_path is None
     assert not (cache_root / "abc123").exists()
+    # Completion marker goes up last, after the manifest.
+    assert store.uploaded[-1] == "artifacts/abc123/.landseer_complete.json"

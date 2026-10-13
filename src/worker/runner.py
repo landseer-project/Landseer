@@ -748,6 +748,10 @@ class TaskRunner:
         # Prune stale local cache entries.
         if self.artifact_cache_dir and self.artifact_cache_dir.exists():
             for p in self.artifact_cache_dir.iterdir():
+                # Locks, staging dirs (.locks, .tmp-*) and the shared dataset
+                # cache are not cache entries; never prune them here.
+                if p.name.startswith(".") or p.name == "datasets":
+                    continue
                 try:
                     st = p.stat()
                     if st.st_mtime >= cache_cutoff:
@@ -1322,53 +1326,3 @@ class TaskRunner:
             
             self._write_task_log(task_dir, task, result, docker_command=None)
             return result
-    
-    def run_task_with_cache(
-        self,
-        task: TaskInfo,
-        cache_db: "ArtifactCacheDB",
-        input_path: Optional[Path] = None,
-        env: Optional[Dict[str, str]] = None,
-        parent_hashes: Optional[List[str]] = None
-    ) -> ExecutionResult:
-        """
-        Execute a task with artifact caching.
-        
-        Checks cache before execution and stores results after successful execution.
-        
-        Args:
-            task: Task to execute
-            cache_db: Artifact cache database
-            input_path: Path to input data
-            env: Additional environment variables
-            parent_hashes: Parent artifact hashes for cache key computation
-            
-        Returns:
-            ExecutionResult with execution details
-        """
-        # Compute cache key
-        cache_key = cache_db.compute_task_hash(task, parent_hashes or [])
-        
-        # Check cache
-        cached_path = cache_db.get_cached_artifact(cache_key)
-        if cached_path and cached_path.exists():
-            logger.info(f"Cache hit for task {task.id}: {cache_key[:12]}")
-            return ExecutionResult(
-                success=True,
-                exit_code=0,
-                execution_time_ms=0,
-                output_path=cached_path,
-                artifacts={"cache_hit": True, "cache_key": cache_key}
-            )
-        
-        # Cache miss - execute task
-        logger.info(f"Cache miss for task {task.id}: {cache_key[:12]}")
-        result = self.run_task(task, input_path, env)
-        
-        # Store in cache if successful
-        if result.success and result.output_path:
-            cache_db.store_artifact(cache_key, result.output_path, task)
-            result.artifacts["cache_key"] = cache_key
-            result.artifacts["cache_hit"] = False
-        
-        return result

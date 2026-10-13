@@ -2,14 +2,47 @@
 from __future__ import annotations
 from src.backend.api.models import DatasetInfoResponse
 
+from pathlib import Path
+from typing import Dict, Optional, Tuple
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from starlette.concurrency import run_in_threadpool
 
 from src.common import get_logger
+from src.common.content_hash import DATASET_FILES, dataset_content_hash
 from src.backend.initialization import get_backend_context
 from src.backend.api.state import SchedulerState, get_scheduler_state
 
 logger = get_logger(__name__)
 router = APIRouter()
+
+# (dataset dir, file size/mtime signature) -> content hash
+_content_hash_cache: Dict[Tuple[str, tuple], Optional[str]] = {}
+
+
+def _cached_dataset_hash(data_dir: Optional[str]) -> Optional[str]:
+    """Content hash of the backend's dataset dir, recomputed only when files change."""
+    if not data_dir:
+        return None
+    root = Path(data_dir)
+    try:
+        sig = tuple(
+            (name, st.st_size, st.st_mtime_ns)
+            for name in DATASET_FILES
+            if (root / name).is_file()
+            for st in [(root / name).stat()]
+        )
+    except OSError:
+        return None
+    key = (str(root), sig)
+    if key not in _content_hash_cache:
+        try:
+            _content_hash_cache[key] = dataset_content_hash(root)
+        except OSError as e:
+            logger.warning(f"Could not hash dataset at {root}: {e}")
+            return None
+    return _content_hash_cache[key]
+
 
 @router.get("/dataset", response_model=DatasetInfoResponse, tags=["Dataset"])
 async def get_dataset_info(state: SchedulerState = Depends(get_scheduler_state)):
@@ -61,6 +94,8 @@ async def get_dataset_info(state: SchedulerState = Depends(get_scheduler_state))
     if context.pipeline and context.pipeline.model:
         model_script = context.pipeline.model.get("script")
     
+    content_sha256 = await run_in_threadpool(_cached_dataset_hash, ds_info.get("output_dir"))
+
     return DatasetInfoResponse(
         available=True,
         name=ds_info.get("name"),
@@ -74,6 +109,7 @@ async def get_dataset_info(state: SchedulerState = Depends(get_scheduler_state))
         poisoning=ds_info.get("poisoning"),
         model_script=model_script,
         model_script_minio_key=ds_info.get("model_script_minio_key"),
+        content_sha256=content_sha256,
     )
 
 @router.get("/dataset/download-url", tags=["Dataset"])

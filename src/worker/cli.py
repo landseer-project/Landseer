@@ -22,6 +22,7 @@ import click
 import yaml
 
 from ..common import get_logger, init_sentry
+from ..common.content_hash import dataset_content_hash
 from .client import LandseerClient, TaskInfo
 from .runner import TaskRunner, ExecutionResult, ContainerRuntime
 
@@ -119,7 +120,17 @@ class Worker:
         # task in this task's upstream lineage (grandparents, parents, etc.)
         # in pipeline order — later entries override on filename collision.
         self._task_outputs: Dict[str, tuple] = {}  # task_id -> (cache_key, Path|None, List[Path])
-        
+        # task_id -> content hash of the dataset that task's output was produced
+        # on (None when unknown, e.g. results reported by older workers). Kept
+        # next to _task_outputs so local deps get the same lineage check as
+        # remote ones.
+        self._task_dataset_sha: Dict[str, Optional[str]] = {}
+        # Memo for dataset_content_hash: (resolved dir, file stat signature) -> hash
+        self._dataset_sha_memo: Dict[tuple, Optional[str]] = {}
+        # Set when the manual data path does not match the backend's dataset
+        # for the active run; every task of that run then fails with it.
+        self._dataset_mismatch: Optional[str] = None
+
         # Components (initialized on start)
         self._client: Optional[LandseerClient] = None
         self._runner: Optional[TaskRunner] = None
@@ -530,8 +541,74 @@ class Worker:
                     # Track remote deps locally so future tasks don't need refetch.
                     dep_cache_key = dep_task.cache_key or ""
                     self._task_outputs[dep_id] = (dep_cache_key, dep_output, list(dep_ancestry))
+                    self._task_dataset_sha[dep_id] = dep_task.dataset_sha256
 
         return ancestry, task_info
+
+    def _parent_dataset_error(
+        self,
+        dep_id: str,
+        parent_sha: Optional[str],
+        current_sha: Optional[str],
+        data_dir: Optional[Path],
+    ) -> Optional[str]:
+        """
+        Error message if a parent's output was produced on a different dataset
+        than the one this worker has, else None. Unknown hashes only warn.
+        """
+        if parent_sha and current_sha:
+            if parent_sha != current_sha:
+                return (
+                    f"parent {dep_id} was produced on dataset {parent_sha[:12]} but this "
+                    f"worker has {current_sha[:12]} "
+                    f"(LANDSEER_DATA_PATH={self.data_path or 'unset'}, dataset dir={data_dir})"
+                )
+            return None
+        if not parent_sha:
+            logger.warning(
+                f"Dataset of parent {dep_id} is unknown (result predates dataset tracking); "
+                "cannot verify lineage"
+            )
+        else:
+            logger.warning(
+                f"Parent {dep_id} was produced on dataset {parent_sha[:12]} but this worker "
+                "has no dataset hash; cannot verify lineage"
+            )
+        return None
+
+    def _manual_dataset_mismatch(self) -> Optional[str]:
+        """
+        In manual LANDSEER_DATA_PATH / --data-path mode, compare the local
+        dataset against the one the backend serves. Returns an error message
+        on mismatch, None when they match or cannot be compared.
+        """
+        if not (self.data_path and self.data_path.exists()):
+            return None
+        backend_sha = (self._dataset_info or {}).get("content_sha256")
+        if not backend_sha:
+            logger.warning(
+                "Backend did not report a dataset content hash; cannot verify "
+                f"manual data path {self.data_path}"
+            )
+            return None
+        local_sha = self._dataset_sha256(self.data_path)
+        if not local_sha:
+            logger.warning(f"Manual data path {self.data_path} has no dataset files to hash")
+            return None
+        if local_sha == backend_sha:
+            logger.info(f"Manual data path matches backend dataset ({local_sha[:12]})")
+            return None
+        msg = (
+            f"Dataset at LANDSEER_DATA_PATH={self.data_path} has content hash {local_sha[:12]} "
+            f"but the backend serves {backend_sha[:12]} "
+            f"({self._dataset_info.get('name')}/{self._dataset_info.get('variant')}). "
+            "Point the worker at the backend's dataset, or set "
+            "LANDSEER_ALLOW_DATASET_MISMATCH=1 to run anyway."
+        )
+        if os.environ.get("LANDSEER_ALLOW_DATASET_MISMATCH") == "1":
+            logger.warning(msg + " Continuing because LANDSEER_ALLOW_DATASET_MISMATCH=1.")
+            return None
+        return msg
 
     @staticmethod
     def _append_unique_paths(paths: List[Path], additions: List[Path]) -> None:
@@ -543,58 +620,57 @@ class Worker:
                 paths.append(p)
                 seen.add(key)
     
-    def _dataset_fingerprint(self, data_dir: Optional[Path]) -> Dict[str, Any]:
-        """Build a lightweight dataset identity fingerprint for cache keys."""
+    def _dataset_sha256(self, data_dir: Optional[Path]) -> Optional[str]:
+        """Content hash of the dataset dir, memoized on the files' size/mtime."""
         if not data_dir:
-            return {"available": False}
+            return None
         try:
             resolved = data_dir.resolve()
-        except Exception:
-            resolved = data_dir
-        fp: Dict[str, Any] = {
+            sig = []
+            for name in ("data.npy", "labels.npy", "test_data.npy", "test_labels.npy"):
+                p = resolved / name
+                if p.exists():
+                    st = p.stat()
+                    sig.append((name, st.st_size, st.st_mtime_ns))
+        except OSError:
+            return None
+        memo_key = (str(resolved), tuple(sig))
+        if memo_key not in self._dataset_sha_memo:
+            try:
+                self._dataset_sha_memo[memo_key] = dataset_content_hash(resolved)
+            except OSError as e:
+                logger.warning(f"Could not hash dataset at {resolved}: {e}")
+                return None
+        return self._dataset_sha_memo[memo_key]
+
+    def _dataset_fingerprint(self, data_dir: Optional[Path]) -> Dict[str, Any]:
+        """Dataset identity for cache keys: content only, identical on any host."""
+        sha = self._dataset_sha256(data_dir)
+        if not sha:
+            return {"available": False}
+        return {
             "available": True,
-            "path": str(resolved),
+            "content_sha256": sha,
             "name": self._dataset_info.get("name"),
             "variant": self._dataset_info.get("variant"),
-            "minio_key": self._dataset_info.get("minio_key"),
         }
-        tracked: Dict[str, Any] = {}
-        for name in ("data.npy", "labels.npy", "test_data.npy", "test_labels.npy"):
-            p = data_dir / name
-            if p.exists():
-                st = p.stat()
-                tracked[name] = {
-                    "size": st.st_size,
-                    "mtime_ns": st.st_mtime_ns,
-                }
-        fp["tracked_files"] = tracked
-        return fp
 
     @staticmethod
     def _model_fingerprint(model_script_path: Optional[Path]) -> Dict[str, Any]:
-        """Build model-script identity fingerprint for cache keys."""
+        """Model-script identity for cache keys: content only, identical on any host."""
         if not model_script_path:
             return {"available": False}
-        fp: Dict[str, Any] = {
-            "available": False,
-            "path": str(model_script_path),
-        }
         try:
-            if model_script_path.exists():
-                st = model_script_path.stat()
-                fp.update({
-                    "available": True,
-                    "size": st.st_size,
-                    "mtime_ns": st.st_mtime_ns,
-                })
-                hasher = hashlib.sha256()
-                with model_script_path.open("rb") as f:
-                    for chunk in iter(lambda: f.read(8192), b""):
-                        hasher.update(chunk)
-                fp["sha256"] = hasher.hexdigest()
-        except Exception as e:
-            fp["error"] = str(e)
-        return fp
+            if not model_script_path.exists():
+                return {"available": False}
+            hasher = hashlib.sha256()
+            with model_script_path.open("rb") as f:
+                for chunk in iter(lambda: f.read(8192), b""):
+                    hasher.update(chunk)
+            return {"available": True, "sha256": hasher.hexdigest()}
+        except OSError as e:
+            logger.warning(f"Could not hash model script {model_script_path}: {e}")
+            return {"available": False}
 
     def _build_cache_context(self, data_dir: Optional[Path]) -> Dict[str, Any]:
         """Build shared cache context so cache keys include model/dataset identity."""
@@ -631,15 +707,38 @@ class Worker:
                 # per-task output lineage cache to avoid mixing dependency outputs
                 # from prior runs (e.g. CIFAR ancestry leaking into CelebA runs).
                 self._task_outputs.clear()
+                self._task_dataset_sha.clear()
                 self._active_run_id = task.run_id
+                self._dataset_mismatch = self._manual_dataset_mismatch()
+
+            if self._dataset_mismatch:
+                logger.error(f"Refusing to run {task.id}: {self._dataset_mismatch}")
+                return ExecutionResult(
+                    success=False,
+                    exit_code=-1,
+                    execution_time_ms=0,
+                    error_message=self._dataset_mismatch,
+                )
+
+            data_dir = self.data_path if (self.data_path and self.data_path.exists()) else self._dataset_path
+            if data_dir is None:
+                # Headless backend may expose dataset only after a run is started.
+                # Retry dataset fetch at task execution time instead of only worker startup.
+                refreshed = self._fetch_dataset()
+                if refreshed:
+                    self._dataset_path = refreshed
+                    data_dir = refreshed
+            dataset_sha = self._dataset_sha256(data_dir)
 
             # Build parent_hashes (for cache key) and ancestor_dirs (ordered
             # output dirs from all upstream stages, earliest first) in one pass.
+            # Refuse to build on a parent produced from a different dataset.
             parent_hashes: List[str] = []
             ancestor_dirs: List[Path] = []
             for dep_id in task.dependency_ids:
                 if dep_id in self._task_outputs:
                     dep_key, dep_out, dep_anc = self._task_outputs[dep_id]
+                    dep_sha = self._task_dataset_sha.get(dep_id)
                     if dep_key:
                         parent_hashes.append(dep_key)
                     self._append_unique_paths(ancestor_dirs, dep_anc)
@@ -648,6 +747,7 @@ class Worker:
                 else:
                     logger.warning(f"Dep {dep_id} not yet in _task_outputs; resolving remotely")
                     dep_anc, dep_task = self._collect_remote_ancestry(dep_id)
+                    dep_sha = dep_task.dataset_sha256 if dep_task else None
                     self._append_unique_paths(ancestor_dirs, dep_anc)
                     if dep_task:
                         if dep_task.cache_key:
@@ -660,6 +760,7 @@ class Worker:
                                 dep_output,
                                 list(dep_anc),
                             )
+                            self._task_dataset_sha[dep_id] = dep_sha
                         else:
                             logger.warning(f"Could not resolve output path for dependency {dep_id}")
                     else:
@@ -667,14 +768,17 @@ class Worker:
                         if ws_out.exists():
                             self._append_unique_paths(ancestor_dirs, [ws_out])
 
-            data_dir = self.data_path if (self.data_path and self.data_path.exists()) else self._dataset_path
-            if data_dir is None:
-                # Headless backend may expose dataset only after a run is started.
-                # Retry dataset fetch at task execution time instead of only worker startup.
-                refreshed = self._fetch_dataset()
-                if refreshed:
-                    self._dataset_path = refreshed
-                    data_dir = refreshed
+                lineage_error = self._parent_dataset_error(dep_id, dep_sha, dataset_sha, data_dir)
+                if lineage_error:
+                    logger.error(f"Refusing to run {task.id}: {lineage_error}")
+                    return ExecutionResult(
+                        success=False,
+                        exit_code=-1,
+                        execution_time_ms=0,
+                        error_message=lineage_error,
+                        artifacts={"dataset_sha256": dataset_sha},
+                    )
+
             cache_context = self._build_cache_context(data_dir)
             cache_key = self._compute_cache_key(task, parent_hashes, cache_context)
             run_use_cache = bool(task.config.get("_run_use_cache", True))
@@ -698,12 +802,17 @@ class Worker:
                     if self._two_level_cache is not None:
                         self._two_level_cache.manager.delete_local(cache_key)
                     self._task_outputs[task.id] = (cache_key, workspace_out, list(ancestor_dirs))
+                    self._task_dataset_sha[task.id] = dataset_sha
                     return ExecutionResult(
                         success=True,
                         exit_code=0,
                         execution_time_ms=0,
                         output_path=workspace_out,
-                        artifacts={"cache_hit": True, "cache_key": cache_key}
+                        artifacts={
+                            "cache_hit": True,
+                            "cache_key": cache_key,
+                            "dataset_sha256": dataset_sha,
+                        }
                     )
 
             result = self._runner.run_task(
@@ -716,6 +825,8 @@ class Worker:
 
             # Record always so downstream tasks can extend the ancestry chain.
             self._task_outputs[task.id] = (cache_key, result.output_path, list(ancestor_dirs))
+            self._task_dataset_sha[task.id] = dataset_sha
+            result.artifacts["dataset_sha256"] = dataset_sha
 
             # Store in cache if successful.
             # For evaluation tasks, only cache when the evaluation itself
@@ -1045,6 +1156,11 @@ class Worker:
         
         # Fetch dataset from backend
         self._dataset_path = self._fetch_dataset()
+        mismatch = self._manual_dataset_mismatch()
+        if mismatch:
+            logger.error(mismatch)
+            self._cleanup()
+            return 1
         if self._dataset_path:
             logger.info(f"Dataset available at: {self._dataset_path}")
             # Early visibility for manual data path mode: warn before tasks fail.

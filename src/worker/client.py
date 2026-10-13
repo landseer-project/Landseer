@@ -42,6 +42,8 @@ class TaskInfo:
     cache_key: Optional[str] = None
     output_path: Optional[str] = None
     log_path: Optional[str] = None
+    # Content hash of the dataset this task's output was produced on
+    dataset_sha256: Optional[str] = None
 
     @classmethod
     def from_api_response(cls, data: Dict[str, Any]) -> "TaskInfo":
@@ -67,7 +69,8 @@ class TaskInfo:
             run_id=data.get("run_id"),
             cache_key=data.get("cache_key"),
             output_path=data.get("output_path"),
-            log_path=data.get("log_path")
+            log_path=data.get("log_path"),
+            dataset_sha256=data.get("dataset_sha256"),
         )
 
 

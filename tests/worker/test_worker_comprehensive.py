@@ -24,7 +24,6 @@ from typing import Dict, Optional
 from src.worker.cli import Worker
 from src.worker.client import LandseerClient, TaskInfo, WorkerInfo
 from src.worker.runner import TaskRunner, ExecutionResult, ContainerRuntime
-from src.worker.db import ArtifactCacheDB
 
 
 # ============================================================================
@@ -980,7 +979,9 @@ class TestWorkLoop:
         )
         worker._runner.run_task.return_value = result
         
-        mock_client.claim_task.return_value = mock_task
+        # One task, then nothing: the loop must see "complete" and exit.
+        # (A constant return_value made _work_loop claim forever.)
+        mock_client.claim_task.side_effect = [mock_task, None]
         mock_client.get_progress.return_value = {"is_complete": True}
         
         # Run for one iteration
@@ -1001,7 +1002,12 @@ class TestWorkLoop:
         worker._running = True
         
         mock_client.claim_task.return_value = None
-        mock_client.get_progress.return_value = {"is_complete": False}
+        # Not complete on the first idle poll, complete on the second, so the
+        # loop exits (a constant False made _work_loop spin forever).
+        mock_client.get_progress.side_effect = [
+            {"is_complete": False},
+            {"is_complete": True},
+        ]
         
         with patch('time.sleep'):  # Don't actually sleep
             # Should not raise exception
@@ -1049,7 +1055,10 @@ class TestWorkLoop:
         worker._client = mock_client
         worker._running = True
         
-        mock_client.claim_task.side_effect = Exception("Network error")
+        # Fail once, then report no work and completion so the loop exits
+        # (a constant exception made _work_loop spin forever).
+        mock_client.claim_task.side_effect = [Exception("Network error"), None]
+        mock_client.get_progress.return_value = {"is_complete": True}
         
         with patch('time.sleep'):  # Don't actually sleep
             # Should not raise exception, should continue
@@ -1137,8 +1146,14 @@ class TestCacheManagement:
 
         assert context["dataset"]["name"] == "cifar10"
         assert context["dataset"]["variant"] == "clean"
-        assert "data.npy" in context["dataset"]["tracked_files"]
-        assert context["model"]["available"] is True
+        assert context["dataset"]["available"] is True
+        assert len(context["dataset"]["content_sha256"]) == 64
+        # Host-specific details must not leak into the cache key.
+        assert set(context["dataset"]) == {"available", "content_sha256", "name", "variant"}
+        assert context["model"] == {
+            "available": True,
+            "sha256": context["model"]["sha256"],
+        }
         assert context["model"]["sha256"]
     
     def test_check_cache_uses_two_level_cache(self, temp_workspace, mock_task):
@@ -1436,7 +1451,7 @@ class TestEdgeCases:
         worker._init_components()
         
         # Should create cache directory if needed
-        # (Actual behavior depends on CacheManager implementation)
+        # (Actual behavior depends on TwoLevelCache implementation)
         pass
     
     def test_worker_with_concurrent_tasks(self, temp_workspace, mock_task):

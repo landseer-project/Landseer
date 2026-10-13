@@ -31,6 +31,7 @@ def task_to_response(task, state: Optional["SchedulerState"] = None) -> TaskResp
     cache_key = None
     output_path = None
     log_path = None
+    dataset_sha256 = None
     worker_id = None
     error_message = None
     execution_time_ms = None
@@ -42,8 +43,18 @@ def task_to_response(task, state: Optional["SchedulerState"] = None) -> TaskResp
         execution_time_ms = metadata.get("execution_time_ms")
         result = metadata.get("result", {})
         if isinstance(result, dict):
-            cache_hit = result.get("cache_hit")
-            cache_key = result.get("cache_key")
+            # Workers nest cache info under result["artifacts"]; accept both.
+            artifacts = result.get("artifacts")
+            if not isinstance(artifacts, dict):
+                artifacts = {}
+
+            def _pick(key):
+                value = result.get(key)
+                return value if value is not None else artifacts.get(key)
+
+            cache_hit = _pick("cache_hit")
+            cache_key = _pick("cache_key")
+            dataset_sha256 = _pick("dataset_sha256")
             output_path = result.get("output_path")
             log_path = result.get("log_path")
     
@@ -75,6 +86,7 @@ def task_to_response(task, state: Optional["SchedulerState"] = None) -> TaskResp
         cache_key=cache_key,
         output_path=output_path,
         log_path=log_path,
+        dataset_sha256=dataset_sha256,
         worker_id=worker_id,
         error_message=error_message,
         execution_time_ms=execution_time_ms

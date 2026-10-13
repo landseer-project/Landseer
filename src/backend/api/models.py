@@ -44,6 +44,7 @@ class TaskResponse(BaseModel):
     cache_key: Optional[str] = Field(default=None, description="Cache key if cache was used")
     output_path: Optional[str] = Field(default=None, description="Resolved output directory path for task artifacts")
     log_path: Optional[str] = Field(default=None, description="Worker log file path for this task")
+    dataset_sha256: Optional[str] = Field(default=None, description="Content hash of the dataset this task's output was produced on")
     worker_id: Optional[str] = Field(default=None, description="ID of worker that executed this task")
     error_message: Optional[str] = Field(default=None, description="Error message if task failed")
     execution_time_ms: Optional[int] = Field(default=None, description="Execution time in milliseconds")
@@ -240,6 +241,7 @@ class DatasetInfoResponse(BaseModel):
     poisoning: Optional[Dict[str, Any]] = Field(default=None, description="Poisoning configuration if applied")
     model_script: Optional[str] = Field(default=None, description="Path to model config script")
     model_script_minio_key: Optional[str] = Field(default=None, description="MinIO object key for model config script")
+    content_sha256: Optional[str] = Field(default=None, description="Content hash of the dataset files (data/labels/test_data/test_labels .npy)")
 
 
 class EvaluatorInfo(BaseModel):

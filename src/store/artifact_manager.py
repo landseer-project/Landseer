@@ -9,15 +9,28 @@ Provides high-level interface for:
 
 import hashlib
 import json
+import os
 import shutil
+import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX
+    fcntl = None
 
 from ..common import get_logger
 from ..common.fsutil import copytree_with_optional_hardlinks
-from .minio_store import MinioStore, MinioConfig
+from .minio_store import (
+    ARTIFACT_COMPLETE_MARKER,
+    ARTIFACT_MANIFEST,
+    MinioStore,
+    MinioConfig,
+)
 
 logger = get_logger(__name__)
 
@@ -150,6 +163,48 @@ class ArtifactManager:
             return self.get_local_path(cache_key) / "output"
         return None
     
+    @contextmanager
+    def _entry_lock(self, cache_key: str) -> Iterator[None]:
+        """Serialize writers of one cache entry on this host (flock)."""
+        if fcntl is None:
+            yield
+            return
+        lock_dir = self.local_cache_dir / ".locks"
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        with open(lock_dir / f"{cache_key}.lock", "a+") as fh:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+    def _staging_dir(self, cache_key: str) -> Path:
+        """Private temp dir next to the final entry (same filesystem, so rename is atomic)."""
+        return self.local_cache_dir / f".tmp-{cache_key}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+
+    def _publish_local(self, staging: Path, cache_key: str) -> Path:
+        """Move a fully written staging dir into place as the final entry."""
+        final = self.get_local_path(cache_key)
+        if final.exists() and (final / ".success").exists():
+            # A complete copy is already published; keep it.
+            shutil.rmtree(staging, ignore_errors=True)
+            return final
+        if final.exists():
+            shutil.rmtree(final, ignore_errors=True)
+        os.replace(staging, final)
+        return final
+
+    @staticmethod
+    def _list_files(root: Path) -> Dict[str, int]:
+        """Map of posix relative path -> size for every regular file under root."""
+        if not root.is_dir():
+            return {}
+        return {
+            p.relative_to(root).as_posix(): p.stat().st_size
+            for p in root.rglob("*")
+            if p.is_file()
+        }
+
     def store_local(
         self,
         cache_key: str,
@@ -161,7 +216,10 @@ class ArtifactManager:
     ) -> ArtifactInfo:
         """
         Store artifact in local cache.
-        
+
+        Files are written to a private staging dir and renamed into place, so
+        readers never see a half-written entry.
+
         Args:
             cache_key: Cache key for the artifact
             source_dir: Directory containing output files
@@ -169,42 +227,42 @@ class ArtifactManager:
             tool_name: Tool name
             parent_hashes: Parent artifact hashes
             metadata: Additional metadata
-            
+
         Returns:
             ArtifactInfo object
         """
-        cache_dir = self.get_local_path(cache_key)
-        output_dir = cache_dir / "output"
-        
-        # Create directory
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Store files. Use hardlinks only when the hardlink macro is enabled.
-        if source_dir.exists():
-            if output_dir.exists():
-                shutil.rmtree(output_dir)
-            copytree_with_optional_hardlinks(source_dir, output_dir)
-        else:
-            output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Calculate size
-        size = sum(f.stat().st_size for f in output_dir.rglob("*") if f.is_file())
-        
-        # Write manifest
-        manifest = {
-            "cache_key": cache_key,
-            "task_id": task_id,
-            "tool_name": tool_name,
-            "parent_hashes": parent_hashes or [],
-            "created_at": datetime.utcnow().isoformat(),
-            "size_bytes": size,
-            "metadata": metadata or {}
-        }
-        (cache_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
-        
-        # Mark as complete
-        (cache_dir / ".success").touch()
-        
+        with self._entry_lock(cache_key):
+            staging = self._staging_dir(cache_key)
+            try:
+                staging_output = staging / "output"
+                staging.mkdir(parents=True)
+                # Store files. Use hardlinks only when the hardlink macro is enabled.
+                if source_dir.exists():
+                    copytree_with_optional_hardlinks(source_dir, staging_output)
+                else:
+                    staging_output.mkdir(parents=True, exist_ok=True)
+
+                files = self._list_files(staging_output)
+                size = sum(files.values())
+
+                manifest = {
+                    "cache_key": cache_key,
+                    "task_id": task_id,
+                    "tool_name": tool_name,
+                    "parent_hashes": parent_hashes or [],
+                    "created_at": datetime.utcnow().isoformat(),
+                    "size_bytes": size,
+                    "files": files,
+                    "metadata": metadata or {}
+                }
+                (staging / ARTIFACT_MANIFEST).write_text(json.dumps(manifest, indent=2))
+                (staging / ".success").touch()
+                final = self._publish_local(staging, cache_key)
+            except BaseException:
+                shutil.rmtree(staging, ignore_errors=True)
+                raise
+        output_dir = final / "output"
+
         # Create info
         info = ArtifactInfo(
             cache_key=cache_key,
@@ -216,11 +274,11 @@ class ArtifactManager:
             parent_hashes=parent_hashes or [],
             metadata=metadata or {}
         )
-        
+
         self._artifacts[cache_key] = info
         logger.debug(f"Stored artifact locally: {cache_key[:12]}")
         return info
-    
+
     # =========================================================================
     # MinIO Operations
     # =========================================================================
@@ -258,30 +316,49 @@ class ArtifactManager:
             logger.error(f"Source directory not found: {source_dir}")
             return False
         
-        # Upload directory
+        # Upload all files, then the manifest, then the completion marker
+        # LAST: artifact_exists() only reports a hit once the marker is there,
+        # so a crash mid-upload leaves a miss rather than a truncated hit.
         prefix = self.minio.get_artifact_key(cache_key)
+        files = self._list_files(source_dir)
         count = self.minio.upload_directory(source_dir, prefix)
-        
-        # Upload manifest if exists
-        manifest_path = source_dir.parent / "manifest.json"
-        if manifest_path.exists():
-            self.minio.upload_file(
-                manifest_path,
-                f"{prefix}manifest.json",
-                content_type="application/json"
+        if count != len(files):
+            logger.error(
+                f"Uploaded {count}/{len(files)} files for {cache_key[:12]}; "
+                "not marking artifact complete"
             )
-        
-        if count > 0:
-            # Update artifact info
-            if cache_key in self._artifacts:
-                self._artifacts[cache_key].storage_type = "both"
-                self._artifacts[cache_key].minio_key = prefix
-            
-            logger.info(f"Uploaded artifact to MinIO: {cache_key[:12]} ({count} files)")
-            return True
-        
-        return False
-    
+            return False
+
+        manifest_path = source_dir.parent / ARTIFACT_MANIFEST
+        if manifest_path.exists():
+            if not self.minio.upload_file(
+                manifest_path,
+                f"{prefix}{ARTIFACT_MANIFEST}",
+                content_type="application/json"
+            ):
+                logger.error(f"Failed to upload manifest for {cache_key[:12]}")
+                return False
+
+        marker = {
+            "cache_key": cache_key,
+            "files": files,
+            "completed_at": datetime.utcnow().isoformat(),
+        }
+        if not self.minio.upload_bytes(
+            json.dumps(marker, sort_keys=True).encode(),
+            f"{prefix}{ARTIFACT_COMPLETE_MARKER}",
+            content_type="application/json",
+        ):
+            logger.error(f"Failed to upload completion marker for {cache_key[:12]}")
+            return False
+
+        if cache_key in self._artifacts:
+            self._artifacts[cache_key].storage_type = "both"
+            self._artifacts[cache_key].minio_key = prefix
+
+        logger.info(f"Uploaded artifact to MinIO: {cache_key[:12]} ({count} files)")
+        return True
+
     def download_from_minio(self, cache_key: str) -> Optional[Path]:
         """
         Download artifact from MinIO to local cache.
@@ -298,22 +375,76 @@ class ArtifactManager:
         if not self.minio_exists(cache_key):
             return None
         
-        # Download to local cache
-        cache_dir = self.get_local_path(cache_key)
-        output_dir = cache_dir / "output"
-        
         prefix = self.minio.get_artifact_key(cache_key)
-        count = self.minio.download_directory(prefix, output_dir)
-        
-        if count > 0:
-            # Mark as complete
-            (cache_dir / ".success").touch()
-            
-            logger.info(f"Downloaded artifact from MinIO: {cache_key[:12]} ({count} files)")
-            return output_dir
-        
-        return None
-    
+        expected = self._expected_files(prefix)
+
+        with self._entry_lock(cache_key):
+            if self.local_exists(cache_key):
+                return self.get_local_path(cache_key) / "output"
+
+            staging = self._staging_dir(cache_key)
+            staging_output = staging / "output"
+            try:
+                staging_output.mkdir(parents=True)
+                count = 0
+                for obj in self.minio.list_objects(prefix, recursive=True):
+                    if obj.is_dir:
+                        continue
+                    rel = obj.object_name[len(prefix):].lstrip("/")
+                    if not rel or rel == ARTIFACT_COMPLETE_MARKER:
+                        continue
+                    if rel == ARTIFACT_MANIFEST:
+                        dest = staging / ARTIFACT_MANIFEST
+                    else:
+                        dest = staging_output / rel
+                    if not self.minio.download_file(obj.object_name, dest):
+                        raise RuntimeError(f"failed to download {obj.object_name}")
+                    count += 1
+                    # A tool output named manifest.json shares its object key
+                    # with the cache manifest; keep a copy in output as well.
+                    if rel == ARTIFACT_MANIFEST and expected and ARTIFACT_MANIFEST in expected:
+                        shutil.copy2(dest, staging_output / ARTIFACT_MANIFEST)
+
+                actual = self._list_files(staging_output)
+                if expected is not None:
+                    if actual != expected:
+                        missing = sorted(set(expected) - set(actual))
+                        wrong = sorted(
+                            k for k in expected if k in actual and actual[k] != expected[k]
+                        )
+                        raise RuntimeError(
+                            "downloaded files do not match completion marker "
+                            f"(missing={missing[:5]}, size_mismatch={wrong[:5]})"
+                        )
+                elif not actual:
+                    raise RuntimeError("legacy artifact has no output files")
+
+                (staging / ".success").touch()
+                final = self._publish_local(staging, cache_key)
+            except Exception as e:
+                shutil.rmtree(staging, ignore_errors=True)
+                logger.warning(f"Download of artifact {cache_key[:12]} from MinIO failed: {e}")
+                return None
+
+        logger.info(f"Downloaded artifact from MinIO: {cache_key[:12]} ({count} files)")
+        return final / "output"
+
+    def _expected_files(self, prefix: str) -> Optional[Dict[str, int]]:
+        """File list from the completion marker, or None for legacy entries."""
+        marker_key = f"{prefix}{ARTIFACT_COMPLETE_MARKER}"
+        if not self.minio.exists(marker_key):
+            return None
+        raw = self.minio.download_bytes(marker_key)
+        if raw is None:
+            return None
+        try:
+            files = json.loads(raw).get("files")
+        except (ValueError, AttributeError):
+            return None
+        if not isinstance(files, dict):
+            return None
+        return {str(k): int(v) for k, v in files.items()}
+
     # =========================================================================
     # High-Level Operations
     # =========================================================================
