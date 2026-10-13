@@ -16,7 +16,7 @@ This document describes how to test Landseer so pipeline regressions (missing ar
 - Keep domain layout under `tests/` (`tests/worker`, `tests/evaluators`, `tests/backend`, …); see `tests/README.md` for commands.
 
 ## Pre-deploy checklist (minimum)let's run the pi
-- `poetry run pytest tests/worker tests/evaluators` passes (evaluator tests require **NumPy** and **PyTorch** in the environment used for pytest).
+- `uv run pytest tests/worker tests/evaluators` passes (evaluator tests require **NumPy** and **PyTorch** in the environment used for pytest).
 - No skipped tests that encode required safety properties for your change.
 - If Docker build paths change (e.g. evaluator `COPY`), build once:  
   `docker build -f containers/evals/clean/Dockerfile containers/evals`.

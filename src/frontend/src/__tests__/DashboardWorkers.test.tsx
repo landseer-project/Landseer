@@ -7,6 +7,8 @@ import { Dashboard } from '../pages/Dashboard';
 vi.mock('../lib/api', () => ({
   getPipelineDetail: vi.fn(),
   getProgress: vi.fn(),
+  getExperimentRuns: vi.fn().mockResolvedValue({ runs: [], total: 0 }),
+  getPipelineConfigs: vi.fn().mockResolvedValue({ configs: [], total: 0 }),
   getWorkers: vi.fn(),
   getAllTasks: vi.fn(),
   getRunningTasks: vi.fn(),

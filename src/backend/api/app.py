@@ -38,8 +38,7 @@ async def _stale_worker_reclaim_loop(
     Background coroutine: wake every `check_interval` seconds and reclaim tasks
     from workers that have stopped heartbeating for longer than `stale_timeout`.
 
-    Default: check every 60 s, declare a worker stale after 90 s of silence
-    (= 3 missed heartbeats at the default 30 s heartbeat interval).
+    Default: check every 60s, declare a worker stale after 90s of silence
     """
     logger.info(
         f"Stale-worker reclaim loop started "
@@ -84,22 +83,22 @@ async def lifespan(app: FastAPI):
     # These are runs that were interrupted by a previous backend crash or Ctrl+C and
     # will never complete; leaving them as RUNNING would show a stale badge in the UI.
     try:
-        from src.db.models import PipelineRunModel, PipelineRunStatus
+        from src.db.models import ExperimentRunModel, ExperimentRunStatus
         from src.db import session_scope
         from datetime import datetime
 
         with session_scope() as session:
             stale_statuses = [
-                PipelineRunStatus.RUNNING,
-                PipelineRunStatus.STOPPING,
-                PipelineRunStatus.PENDING,
+                ExperimentRunStatus.RUNNING,
+                ExperimentRunStatus.STOPPING,
+                ExperimentRunStatus.PENDING,
             ]
-            stale_runs = session.query(PipelineRunModel).filter(
-                PipelineRunModel.status.in_(stale_statuses)
+            stale_runs = session.query(ExperimentRunModel).filter(
+                ExperimentRunModel.status.in_(stale_statuses)
             ).all()
             if stale_runs:
                 for run in stale_runs:
-                    run.status = PipelineRunStatus.CANCELLED
+                    run.status = ExperimentRunStatus.CANCELLED
                     run.error_message = "Backend restarted — run was interrupted"
                     if not run.completed_at:
                         run.completed_at = datetime.utcnow()

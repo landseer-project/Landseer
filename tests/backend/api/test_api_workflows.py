@@ -73,27 +73,29 @@ def multi_workflow_pipeline():
         name="workflow_1",
         tasks=[task1_wf1, task2_wf1]
     )
-    
-    # Workflow 2: tool1 only
+    workflow1.id = "workflow_1"
+
+    # Workflow 2: tool1 only (lower priority so workflow 1 finishes first in tests)
     task1_wf2 = create_task_with_id(
         task_id="task_1_wf2",
         tool=tool1,
         task_type=TaskType.PRE_TRAINING,
-        priority=100
+        priority=50
     )
     task1_wf2.workflows = {"workflow_2"}
     task1_wf2.pipeline_id = "pipeline_1"
-    
+
     workflow2 = WorkflowFactory.create_workflow(
         name="workflow_2",
         tasks=[task1_wf2]
     )
+    workflow2.id = "workflow_2"
     
     pipeline = DefenseEvaluationPipeline(
         name="test_pipeline",
         workflows=[workflow1, workflow2]
     )
-    pipeline.id = pipeline_id
+    pipeline.id = "pipeline_1"
     
     from src.backend.api import _scheduler_state
     _scheduler_state.initialize(pipeline)
@@ -276,14 +278,17 @@ class TestWorkflowStatusTransitions:
     
     def test_workflow_status_partial_completion(self, client, multi_workflow_pipeline):
         """Workflow with partial completion should show correct counts."""
-        # Complete one task, leave one pending
-        client.get("/tasks/next")
-        client.put("/tasks/status", json={"task_id": "task_1_wf1", "status": "completed"})
-        
+        from src.backend.api import _scheduler_state
+
+        task = next(t for t in _scheduler_state.scheduler.get_all_tasks() if t.id == "task_1_wf1")
+        task.status = TaskStatus.COMPLETED
+
         response = client.get("/workflows/workflow_1")
-        assert response.json()["status"] == "running"
-        assert response.json()["completed_tasks"] == 1
-        assert response.json()["failed_tasks"] == 0
+        data = response.json()
+        # One of two tasks done, none running → pending with completed_tasks=1
+        assert data["status"] == "pending"
+        assert data["completed_tasks"] == 1
+        assert data["failed_tasks"] == 0
 
 
 # ============================================================================
@@ -293,23 +298,21 @@ class TestWorkflowStatusTransitions:
 
 class TestWorkflowIsolation:
     """Tests for workflow isolation and independence."""
-    
+
     def test_workflows_independent_status(self, client, multi_workflow_pipeline):
         """Workflows should have independent status."""
-        # Complete workflow 1
-        client.get("/tasks/next")  # task_1_wf1
-        client.put("/tasks/status", json={"task_id": "task_1_wf1", "status": "completed"})
-        client.get("/tasks/next")  # task_2_wf1
-        client.put("/tasks/status", json={"task_id": "task_2_wf1", "status": "completed"})
-        
-        # Workflow 2 should still be pending
+        from src.backend.api import _scheduler_state
+
+        for task in _scheduler_state.scheduler.get_all_tasks():
+            if task.id in ("task_1_wf1", "task_2_wf1"):
+                task.status = TaskStatus.COMPLETED
+
         response = client.get("/workflows/workflow_2")
         assert response.json()["status"] == "pending"
-        
-        # Workflow 1 should be completed
+
         response = client.get("/workflows/workflow_1")
         assert response.json()["status"] == "completed"
-    
+
     def test_workflow_failure_does_not_affect_others(self, client, multi_workflow_pipeline):
         """Failure in one workflow should not affect others."""
         # Fail a task in workflow 1

@@ -1,38 +1,39 @@
 # Run a Pipeline
 
-## 1. Start backend with config
+## 1. Start backend (headless)
 
 ```bash
-poetry run landseer-backend --config configs/pipeline/trades.yaml
+uv run landseer-backend
 ```
 
-## 2. Start one or more workers
+Optional: preload a config with `--config configs/pipeline/trades.yaml`.
+
+## 2. Start workers
 
 ```bash
-poetry run landseer-worker --backend-url http://localhost:8000 --gpu 0
+uv run landseer-worker --gpu 0
 ```
 
-Run additional workers on other GPUs or hosts for parallel throughput.
-
-## 3. Trigger run
+## 3. Submit a run
 
 ```bash
-curl -X POST http://localhost:8000/api/pipeline-configs/trades/runs \
-  -H "Content-Type: application/json" \
-  -d '{"use_cache": true}'
+uv run landseer run start configs/pipeline/trades.yaml
 ```
 
-## 4. Observe and inspect
+## 4. Watch it
 
 ```bash
-curl http://localhost:8000/progress
-curl http://localhost:8000/api/pipeline-runs
-curl http://localhost:8000/tasks?status=failed
+uv run landseer run list
+uv run landseer progress --run-id <run_id>
+uv run landseer task list <run_id>
+uv run landseer task list <run_id> --status failed
+uv run landseer worker list
 ```
 
-## 5. Stop or restart a run
+## 5. Stop a run
 
 ```bash
-curl -X POST http://localhost:8000/api/pipeline-runs/<run_id>/stop
-curl -X POST http://localhost:8000/api/pipeline-runs/<run_id>/restart
+uv run landseer run stop <run_id>
 ```
+
+Command sheet: [CLI reference](../reference/cli.md)

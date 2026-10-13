@@ -12,7 +12,7 @@ Observed conflicts:
 - `configs/pipeline/teaching.yaml`
 - `configs/pipeline/trades.yaml`
 - `pyproject.toml`
-- `poetry.lock`
+- `uv.lock`
 - file-location conflicts for:
   - `src/landseer_pipeline/evaluator/badnets.py`
   - `src/landseer_pipeline/evaluator/faithfullness_eval.py`
@@ -65,18 +65,18 @@ Important: keep `dev/restructure` script entrypoints:
 - `landseer-frontend`
 - `landseer-worker`
 
-### 3) `poetry.lock` (many conflict blocks)
+### 3) `uv.lock` (many conflict blocks)
 
 Do not hand-merge lockfile.
 
 After `pyproject.toml` is resolved:
 1. delete conflicted lockfile
-2. regenerate lockfile with Poetry
+2. regenerate lockfile with uv
 
 Example:
 ```bash
-rm -f poetry.lock
-poetry lock
+rm -f uv.lock poetry.lock
+uv lock
 ```
 
 ### 4) `.gitignore`
@@ -117,9 +117,8 @@ git status
 Run at minimum:
 
 ```bash
-poetry check
-poetry install
-pytest -q tests/pipeline tests/worker tests/store
+uv sync --all-groups --frozen
+uv run pytest -q tests/pipeline tests/worker tests/store
 ```
 
 And specifically verify pipeline config loading for touched files:

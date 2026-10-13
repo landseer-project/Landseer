@@ -11,11 +11,11 @@ This folder validates scheduler behavior end-to-end:
 ## Run only scheduler tests
 
 ```bash
-poetry run pytest tests/backend/scheduler -q
+uv run pytest tests/backend/scheduler -q
 ```
 
 ## Run one behavior quickly
 
 ```bash
-poetry run pytest tests/backend/scheduler/test_scheduler_comprehensive.py::test_is_complete_true_when_all_terminal_even_with_failures -q
+uv run pytest tests/backend/scheduler/test_scheduler_comprehensive.py::test_is_complete_true_when_all_terminal_even_with_failures -q
 ```

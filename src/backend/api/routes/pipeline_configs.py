@@ -128,7 +128,7 @@ async def start_pipeline_run(
         This keeps the HTTP request fast for large configs (e.g., trades) while
         preserving run state transitions in DB.
         """
-        from src.db import session_scope, PipelineRunRepository, PipelineRunStatus
+        from src.db import session_scope, ExperimentRunRepository, ExperimentRunStatus
         from src.pipeline.config_loader import create_pipeline_from_config, load_pipeline_config
         from src.data import DatasetManager
 
@@ -137,8 +137,8 @@ async def start_pipeline_run(
             # Pipeline creation for large configs can take minutes; keeping PENDING
             # that whole time makes the UI look stuck even though work is active.
             with session_scope() as session:
-                run_repo = PipelineRunRepository(session)
-                run_repo.update_status(run_id, PipelineRunStatus.RUNNING)
+                run_repo = ExperimentRunRepository(session)
+                run_repo.update_status(run_id, ExperimentRunStatus.RUNNING)
             # Step 2: Create pipeline (CPU-heavy for large combination counts)
             t_create_start = time.time()
             pipeline = create_pipeline_from_config(
@@ -260,13 +260,13 @@ async def start_pipeline_run(
                     logger.warning(f"Dataset context setup failed for run {run_id}: {e}")
                 set_backend_context(ctx)
 
-            # Step 4: Initialize scheduler
-            state.initialize(pipeline, scheduler_type="priority")
+            # Step 4: Merge into shared scheduler (multi-run safe)
+            state.add_run(pipeline, scheduler_type="priority")
 
             # Step 5: Mark RUNNING and sync to DB
             with session_scope() as session:
-                run_repo = PipelineRunRepository(session)
-                run_repo.update_status(run_id, PipelineRunStatus.RUNNING)
+                run_repo = ExperimentRunRepository(session)
+                run_repo.update_status(run_id, ExperimentRunStatus.RUNNING)
 
             if state.db_service and state.db_service.is_available():
                 state.db_service.sync_pipeline_to_db(pipeline)
@@ -277,14 +277,14 @@ async def start_pipeline_run(
             # Persist failure state so UI reflects startup errors.
             try:
                 with session_scope() as session:
-                    run_repo = PipelineRunRepository(session)
-                    run_repo.update_status(run_id, PipelineRunStatus.FAILED, error_message=str(e))
+                    run_repo = ExperimentRunRepository(session)
+                    run_repo.update_status(run_id, ExperimentRunStatus.FAILED, error_message=str(e))
             except Exception as db_e:
                 logger.error(f"Failed to persist FAILED status for run {run_id}: {db_e}", exc_info=True)
 
     try:
         from src.backend.config_discovery import get_config_by_id
-        from src.db import get_session, session_scope, PipelineRunRepository, PipelineRunStatus
+        from src.db import get_session, session_scope, ExperimentRunRepository, ExperimentRunStatus
         from src.pipeline.config_loader import (
             load_pipeline_config,
             load_attack_config,
@@ -343,8 +343,8 @@ async def start_pipeline_run(
 
         # ── Step 1: DB check + create run record (short-lived session) ──────────
         with session_scope() as session:
-            run_repo = PipelineRunRepository(session)
-            active_runs = run_repo.get_active_runs_for_config(config_id)
+            run_repo = ExperimentRunRepository(session)
+            active_runs = run_repo.get_active_runs_for_experiment(config_id)
             if active_runs:
                 raise HTTPException(
                     status_code=409,
@@ -354,11 +354,11 @@ async def start_pipeline_run(
             run_id = f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
             run_obj = run_repo.create({
                 "id": run_id,
-                "pipeline_config_id": config_id,
+                "experiment_id": config_id,
                 "run_number": run_number,
                 "use_cache": request.use_cache,
                 "tools_config": request.tools_override,
-                "status": PipelineRunStatus.PENDING,
+                "status": ExperimentRunStatus.PENDING,
             })
             # Capture fields before session closes
             run_id_val = run_obj.id
@@ -390,14 +390,14 @@ async def start_pipeline_run(
         # The DB row may still be pending for a brief moment until background
         # initialization updates it, but the API contract here is "accepted and active".
         response_status = (
-            PipelineRunStatus.RUNNING.value
-            if run_status == PipelineRunStatus.PENDING.value
+            ExperimentRunStatus.RUNNING.value
+            if run_status == ExperimentRunStatus.PENDING.value
             else run_status
         )
 
         return PipelineRunResponse(
             id=run_id_val,
-            pipeline_config_id=config_id,
+            experiment_id=config_id,
             run_number=run_number_val,
             use_cache=run_use_cache,
             tools_config=run_tools_config,
@@ -417,10 +417,10 @@ async def start_pipeline_run(
 async def get_pipeline_run(run_id: str):
     """Get status of a pipeline run."""
     try:
-        from src.db import get_session, session_scope, PipelineRunRepository
+        from src.db import get_session, session_scope, ExperimentRunRepository
         
         with session_scope() as session:
-            run_repo = PipelineRunRepository(session)
+            run_repo = ExperimentRunRepository(session)
             run = run_repo.get_by_id(run_id)
             
             if not run:
@@ -428,7 +428,7 @@ async def get_pipeline_run(run_id: str):
             
             return PipelineRunResponse(
                 id=run.id,
-                pipeline_config_id=run.pipeline_config_id,
+                experiment_id=run.experiment_id,
                 run_number=run.run_number,
                 use_cache=run.use_cache,
                 tools_config=getattr(run, "tools_config", None),
@@ -455,11 +455,11 @@ async def get_pipeline_run_metrics(run_id: str):
     """
     try:
         from src.db import session_scope
-        from src.db.models import EvaluationResultModel, PipelineRunModel, WorkflowModel
+        from src.db.models import EvaluationResultModel, ExperimentRunModel, WorkflowModel
 
         with session_scope() as session:
-            run = session.query(PipelineRunModel).filter(
-                PipelineRunModel.id == run_id
+            run = session.query(ExperimentRunModel).filter(
+                ExperimentRunModel.id == run_id
             ).first()
             if not run:
                 raise HTTPException(
@@ -468,24 +468,15 @@ async def get_pipeline_run_metrics(run_id: str):
                 )
 
             workflows = session.query(WorkflowModel).filter(
-                WorkflowModel.run_id == run_id
+                WorkflowModel.experiment_run_id == run_id
             ).all()
 
-            # Backward-compatibility fallback: older rows may only have pipeline_id set.
-            if not workflows:
-                workflows = session.query(WorkflowModel).filter(
-                    WorkflowModel.pipeline_id == run_id
-                ).all()
-
-            results = session.query(EvaluationResultModel).filter(
-                EvaluationResultModel.run_id == run_id
-            ).all()
-
-            # Backward-compatibility fallback for legacy rows keyed only by pipeline_id.
-            if not results:
-                results = session.query(EvaluationResultModel).filter(
-                    EvaluationResultModel.pipeline_id == run_id
-                ).all()
+            results = (
+                session.query(EvaluationResultModel)
+                .join(WorkflowModel, EvaluationResultModel.workflow_id == WorkflowModel.id)
+                .filter(WorkflowModel.experiment_run_id == run_id)
+                .all()
+            )
 
             # Return an empty-but-valid payload so UI can distinguish
             # "run exists, no metrics persisted yet" from true not-found.
@@ -597,17 +588,17 @@ async def get_pipeline_run_metrics(run_id: str):
 async def get_pipeline_runs(config_id: str):
     """Get all runs for a pipeline config."""
     try:
-        from src.db import get_session, session_scope, PipelineRunRepository
+        from src.db import get_session, session_scope, ExperimentRunRepository
         
         with session_scope() as session:
-            run_repo = PipelineRunRepository(session)
-            runs = run_repo.get_by_config_id(config_id)
+            run_repo = ExperimentRunRepository(session)
+            runs = run_repo.get_by_experiment_id(config_id)
             
             return PipelineRunListResponse(
                 runs=[
                     PipelineRunResponse(
                         id=run.id,
-                        pipeline_config_id=run.pipeline_config_id,
+                        experiment_id=run.experiment_id,
                         run_number=run.run_number,
                         use_cache=run.use_cache,
                         tools_config=getattr(run, "tools_config", None),
@@ -629,17 +620,17 @@ async def get_pipeline_runs(config_id: str):
 async def list_all_pipeline_runs(config_id: Optional[str] = Query(default=None)):
     """List all pipeline runs across all configs, optionally filtered by config_id."""
     try:
-        from src.db import session_scope, PipelineRunRepository
+        from src.db import session_scope, ExperimentRunRepository
 
         with session_scope() as session:
-            run_repo = PipelineRunRepository(session)
-            runs = run_repo.get_all(config_id=config_id)
+            run_repo = ExperimentRunRepository(session)
+            runs = run_repo.get_all(experiment_id=config_id)
 
             return PipelineRunListResponse(
                 runs=[
                     PipelineRunResponse(
                         id=run.id,
-                        pipeline_config_id=run.pipeline_config_id,
+                        experiment_id=run.experiment_id,
                         run_number=run.run_number,
                         use_cache=run.use_cache,
                         tools_config=getattr(run, "tools_config", None),
@@ -665,47 +656,46 @@ async def stop_pipeline_run(
 ):
     """Stop a running pipeline."""
     try:
-        from src.db import get_session, session_scope, PipelineRunRepository, PipelineRunStatus
+        from src.db import get_session, session_scope, ExperimentRunRepository, ExperimentRunStatus
         from src.pipeline.tasks import TaskStatus
         
         with session_scope() as session:
-            run_repo = PipelineRunRepository(session)
+            run_repo = ExperimentRunRepository(session)
             run = run_repo.get_by_id(run_id)
             
             if not run:
                 raise HTTPException(status_code=404, detail=f"Pipeline run '{run_id}' not found")
             
-            if run.status not in (PipelineRunStatus.PENDING, PipelineRunStatus.RUNNING):
+            if run.status not in (ExperimentRunStatus.PENDING, ExperimentRunStatus.RUNNING):
                 raise HTTPException(
                     status_code=400,
                     detail=f"Cannot stop run with status '{run.status.value}'"
                 )
             
             # Update status to stopping
-            run_repo.update_status(run_id, PipelineRunStatus.STOPPING)
+            run_repo.update_status(run_id, ExperimentRunStatus.STOPPING)
             
-            # Remove pending tasks from scheduler
-            if scheduler and scheduler.pipeline and scheduler.pipeline.id == run_id:
-                # Cancel all pending tasks for this run
-                for task in scheduler._all_tasks:
-                    if task.status == TaskStatus.PENDING and task.run_id == run_id:
+            # Cancel pending tasks for this run only (multi-run safe)
+            if scheduler:
+                for task in scheduler.get_tasks_for_run(run_id):
+                    if task.status == TaskStatus.PENDING:
                         task.status = TaskStatus.CANCELLED
                         if state.db_service:
                             state.db_service.sync_task_status(
-                                task.id,
-                                TaskStatus.CANCELLED,
-                                error_message="Pipeline stopped by user"
+                                task_id=task.id,
+                                status=TaskStatus.CANCELLED,
+                                error_message="Pipeline stopped by user",
                             )
             
             # Update status to cancelled
-            run_repo.update_status(run_id, PipelineRunStatus.CANCELLED)
+            run_repo.update_status(run_id, ExperimentRunStatus.CANCELLED)
             
             # TODO: Trigger cache cleanup (will implement in cache cleanup task)
             
             run = run_repo.get_by_id(run_id)
             return PipelineRunResponse(
                 id=run.id,
-                pipeline_config_id=run.pipeline_config_id,
+                experiment_id=run.experiment_id,
                 run_number=run.run_number,
                 use_cache=run.use_cache,
                 tools_config=getattr(run, "tools_config", None),
@@ -729,30 +719,30 @@ async def restart_pipeline_run(
 ):
     """Restart a stopped/failed pipeline run."""
     try:
-        from src.db import get_session, session_scope, PipelineRunRepository, PipelineRunStatus
+        from src.db import get_session, session_scope, ExperimentRunRepository, ExperimentRunStatus
         from src.backend.config_discovery import get_config_by_id
         from src.pipeline.config_loader import create_pipeline_from_config, load_attack_config
         import uuid
         from datetime import datetime
         
         with session_scope() as session:
-            run_repo = PipelineRunRepository(session)
+            run_repo = ExperimentRunRepository(session)
             old_run = run_repo.get_by_id(run_id)
             
             if not old_run:
                 raise HTTPException(status_code=404, detail=f"Pipeline run '{run_id}' not found")
             
             # Check if old run is still active
-            if old_run.status in (PipelineRunStatus.PENDING, PipelineRunStatus.RUNNING, PipelineRunStatus.STOPPING):
+            if old_run.status in (ExperimentRunStatus.PENDING, ExperimentRunStatus.RUNNING, ExperimentRunStatus.STOPPING):
                 raise HTTPException(
                     status_code=400,
                     detail="Cannot restart an active run. Stop it first."
                 )
             
             # Get config
-            config = get_config_by_id(old_run.pipeline_config_id)
+            config = get_config_by_id(old_run.experiment_id)
             if not config:
-                raise HTTPException(status_code=404, detail=f"Pipeline config '{old_run.pipeline_config_id}' not found")
+                raise HTTPException(status_code=404, detail=f"Pipeline config '{old_run.experiment_id}' not found")
 
             effective_attack_config_path = request.attack_config_path or config.attack_config_path
             try:
@@ -771,10 +761,10 @@ async def restart_pipeline_run(
             
             new_run = run_repo.create({
                 "id": new_run_id,
-                "pipeline_config_id": config.id,
+                "experiment_id": config.id,
                 "run_number": run_number,
                 "use_cache": request.use_cache,
-                "status": PipelineRunStatus.PENDING,
+                "status": ExperimentRunStatus.PENDING,
             })
             
             # Load pipeline from config
@@ -799,11 +789,11 @@ async def restart_pipeline_run(
                     task.pipeline_id = new_run_id
                     task.run_id = new_run_id
             
-            # Initialize scheduler with this pipeline
-            state.initialize(pipeline, scheduler_type="priority")
+            # Merge into shared scheduler (do not replace other active runs)
+            state.add_run(pipeline, scheduler_type="priority")
             
             # Update run status to running
-            run_repo.update_status(new_run_id, PipelineRunStatus.RUNNING)
+            run_repo.update_status(new_run_id, ExperimentRunStatus.RUNNING)
             
             # Sync pipeline to DB
             if state.db_service and state.db_service.is_available():
@@ -811,7 +801,7 @@ async def restart_pipeline_run(
             
             return PipelineRunResponse(
                 id=new_run.id,
-                pipeline_config_id=new_run.pipeline_config_id,
+                experiment_id=new_run.experiment_id,
                 run_number=new_run.run_number,
                 use_cache=new_run.use_cache,
                 tools_config=getattr(new_run, "tools_config", None),
@@ -831,10 +821,10 @@ async def restart_pipeline_run(
 async def delete_pipeline_run_cache(run_id: str):
     """Delete cache entries created by a specific run."""
     try:
-        from src.db import get_session, session_scope, PipelineRunRepository, ArtifactRepository
+        from src.db import get_session, session_scope, ExperimentRunRepository, ArtifactRepository
         
         with session_scope() as session:
-            run_repo = PipelineRunRepository(session)
+            run_repo = ExperimentRunRepository(session)
             run = run_repo.get_by_id(run_id)
             
             if not run:
@@ -864,17 +854,17 @@ async def delete_pipeline_run_workspace(run_id: str):
         from pathlib import Path
         import shutil
         
-        from src.db import get_session, session_scope, PipelineRunRepository
+        from src.db import get_session, session_scope, ExperimentRunRepository
         
         with session_scope() as session:
-            run_repo = PipelineRunRepository(session)
+            run_repo = ExperimentRunRepository(session)
             run = run_repo.get_by_id(run_id)
             
             if not run:
                 raise HTTPException(status_code=404, detail=f"Pipeline run '{run_id}' not found")
             
             # Delete results directory
-            results_dir = Path(f"results/{run.pipeline_config_id}/{run_id}")
+            results_dir = Path(f"results/{run.experiment_id}/{run_id}")
             if results_dir.exists():
                 shutil.rmtree(results_dir)
                 return {

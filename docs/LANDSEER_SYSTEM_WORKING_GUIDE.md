@@ -474,13 +474,14 @@ Workflow restart hooks exist (`workflow_restart.py` + workflow APIs), but run-le
 ## 12) Typical End-to-End Runtime Sequence
 
 1. Start MinIO (optional but recommended for shared cache).
-2. Start backend (`poetry run landseer-backend ...`).
-3. Backend loads config, generates workflows/tasks, uploads dataset (if configured).
-4. Start one or more workers (`poetry run landseer-worker ...`).
-5. Workers register and start claiming ready tasks.
-6. Scheduler advances DAG as task completions arrive.
-7. Progress and details are visible via API/UI endpoints.
-8. Run can be stopped/restarted through run-control endpoints.
+2. Start backend headless (`uv run landseer-backend`).
+3. Start one or more workers (`uv run landseer-worker --gpu N`).
+4. Submit a run (`uv run landseer run start configs/pipeline/<name>.yaml`).
+5. Backend builds tasks; workers claim them from the scheduler.
+6. Watch with `uv run landseer progress --run-id …` / `landseer task list …` / UI.
+7. Stop with `uv run landseer run stop <run_id>` if needed.
+
+Command sheet: `docs/reference/cli.md`.
 
 ---
 

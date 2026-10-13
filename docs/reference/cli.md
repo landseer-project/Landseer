@@ -1,36 +1,40 @@
-# CLI Reference
+# CLI
 
-Entry points are declared in `pyproject.toml`.
+Prefix everything with `uv run`. Backend must be up for `landseer …` commands.
 
-## `landseer-backend`
+## Control plane
 
-Primary options:
+```bash
+landseer run start configs/pipeline/trades.yaml
+landseer run list
+landseer run show <run_id>
+landseer run stop <run_id>
 
-- `--host` (default `0.0.0.0`)
-- `--port` (default `8000`)
-- `--debug`
-- `--config` (pipeline config path, optional for headless)
-- `--tools-config` (default `configs/tools.yaml`)
+landseer task list <run_id>
+landseer task list <run_id> --status running   # pending|running|completed|failed
 
-## `landseer-worker`
+landseer progress
+landseer progress --run-id <run_id>
+landseer status
+landseer health
+landseer worker list
+landseer config list
+```
 
-Primary options:
+Global flags: `--backend-url`, `--pipeline-key`, `--json`
 
-- `--backend-url`
-- `--worker-id`
-- `--gpu`
-- `--timeout`
-- `--runtime`
-- `--workspace`
-- `--cache-dir`
-- `--no-cache`
-- `--data-path`
-- `--no-minio`
-- `--minio-endpoint`
-- `--poll-interval`
-- `--heartbeat-interval`
-- `--debug`, `--log-level`
+## Processes
 
-## `landseer-frontend`
+```bash
+landseer-backend                          # headless
+landseer-backend --config path/to.yaml
+landseer-worker --gpu 0
+landseer-frontend install|dev|build|preview
+```
 
-Frontend wrapper command is also exposed in `pyproject.toml` via `src/frontend/cli.py`.
+## Stack helper
+
+```bash
+bash .cursor/skills/landseer-tmux-run/scripts/landseer-tmux.sh
+bash .cursor/skills/landseer-tmux-run/scripts/landseer-tmux.sh mini
+```

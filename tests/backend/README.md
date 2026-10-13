@@ -9,17 +9,17 @@ Backend tests are split into two explicit suites:
 
 ```bash
 # All backend tests
-poetry run pytest tests/backend
+uv run pytest tests/backend
 
 # API suite only
-poetry run pytest tests/backend/api
+uv run pytest tests/backend/api
 
 # Scheduler suite only
-poetry run pytest tests/backend/scheduler
+uv run pytest tests/backend/scheduler
 
 # Marker equivalent
-poetry run pytest -m "backend and api"
-poetry run pytest -m "backend and scheduler"
+uv run pytest -m "backend and api"
+uv run pytest -m "backend and scheduler"
 ```
 
 ## Suggested CI Order

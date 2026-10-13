@@ -15,6 +15,8 @@ import { Dashboard } from '../pages/Dashboard';
 vi.mock('../lib/api', () => ({
   getPipelineDetail: vi.fn(),
   getProgress: vi.fn(),
+  getExperimentRuns: vi.fn().mockResolvedValue({ runs: [], total: 0 }),
+  getPipelineConfigs: vi.fn().mockResolvedValue({ configs: [], total: 0 }),
   getWorkers: vi.fn(),
   getAllTasks: vi.fn(),
   getRunningTasks: vi.fn(),
@@ -445,5 +447,84 @@ describe('Dashboard - Chart Data', () => {
     // Running: 1
     // Pending: 2
     // Failed: 1
+  });
+});
+
+describe('Dashboard - single run progress', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    const mockData = createConsistentMockData();
+
+    vi.mocked(api.getPipelineDetail).mockResolvedValue(mockData.pipeline);
+    vi.mocked(api.getProgress).mockImplementation(async (runId?: string) => {
+      if (runId === 'run_fair') {
+        return {
+          total: 114,
+          pending: 0,
+          running: 0,
+          completed: 18,
+          failed: 96,
+          progress_percent: 100,
+          is_complete: true,
+        };
+      }
+      return mockData.progress;
+    });
+    vi.mocked(api.getPipelineConfigs).mockResolvedValue({
+      configs: [
+        {
+          id: 'config_in_fair_celeba',
+          name: 'in_fair_celeba',
+          description: null,
+          config_path: 'configs/pipeline/celeba/in_fair_celeba.yaml',
+          attack_config_path: null,
+          config_hash: null,
+          created_at: null,
+          updated_at: null,
+        },
+      ],
+      total: 1,
+    });
+    vi.mocked(api.getExperimentRuns).mockResolvedValue({
+      runs: [
+        {
+          id: 'run_fair',
+          pipeline_config_id: 'config_in_fair_celeba',
+          experiment_id: 'config_in_fair_celeba',
+          run_number: 2,
+          use_cache: true,
+          tools_config: null,
+          status: 'cancelled',
+          error_message: null,
+          created_at: '2026-10-05T16:41:35',
+          started_at: '2026-10-05T16:41:35',
+          completed_at: '2026-10-07T14:15:06',
+        },
+      ],
+      total: 1,
+    });
+    vi.mocked(api.getWorkers).mockResolvedValue(mockData.workers);
+    vi.mocked(api.getAllTasks).mockResolvedValue({ tasks: mockData.tasks, total: 6 });
+    vi.mocked(api.getRunningTasks).mockResolvedValue({ tasks: [], total: 0 });
+    vi.mocked(api.getSchedulerStatus).mockResolvedValue(mockData.scheduler);
+    vi.mocked(api.getReadyTasks).mockResolvedValue(mockData.readyTasks);
+    vi.mocked(api.reclaimStaleTasks).mockResolvedValue({
+      success: true,
+      reclaimed_count: 0,
+      reclaimed_task_ids: [],
+    });
+  });
+
+  it('shows progress for the selected experiment run', async () => {
+    renderDashboard();
+
+    await waitFor(() => {
+      expect(screen.getByText('One run')).toBeInTheDocument();
+      expect(screen.getByText('18 completed of 114 tasks · this run is finished')).toBeInTheDocument();
+    });
+
+    expect(api.getProgress).toHaveBeenCalledWith('run_fair');
+    expect(screen.getByText('Overall progress')).toBeInTheDocument();
+    expect(screen.getByText('50.0% done')).toBeInTheDocument();
   });
 });

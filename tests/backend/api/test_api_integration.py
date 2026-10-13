@@ -460,7 +460,7 @@ class TestPipelineDetail:
         response = client.get("/pipeline")
         assert response.status_code == 200
         data = response.json()
-        assert data["id"] == "pipeline_1"
+        assert data["id"] == dependency_pipeline.id
         assert data["name"] == "dependency_pipeline"
         assert data["workflow_count"] == 1
         assert data["task_count"] == 3

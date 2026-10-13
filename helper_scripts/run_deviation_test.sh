@@ -25,8 +25,8 @@ COMBO_ID="${2:-}"  # Empty means run ALL combinations
 CONFIG="/share/landseer/workspace-ayushi/Landseer/configs/pipeline/dnn_watermarking.yaml"
 ATTACK_CONFIG="configs/attack/fairness.yaml"
 
-# Use poetry run to ensure correct environment
-PYTHON_BIN="poetry run python"
+# Use uv to ensure the project environment
+PYTHON_BIN="uv run python"
 
 # Create output directory for this deviation test
 TIMESTAMP=$(date +%Y%m%d%H%M%S)

@@ -13,7 +13,8 @@ import torch.nn as nn
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from src.worker.runner import TaskRunner, _link_or_copy
+from src.common.fsutil import link_or_copy
+from src.worker.runner import TaskRunner
 from src.worker.client import TaskInfo
 
 
@@ -108,7 +109,11 @@ class TestGrandparentArtifactsReachGrandchild:
 
 class TestHardLinksNoDataDuplication:
     """Files should be hard-linked (same st_ino), not copied, when on the
-    same filesystem."""
+    same filesystem and LANDSEER_HARDLINK_MACRO is enabled."""
+
+    @pytest.fixture(autouse=True)
+    def _enable_hardlink_macro(self, monkeypatch):
+        monkeypatch.setenv("LANDSEER_HARDLINK_MACRO", "1")
 
     def test_hard_link_same_inode(self, workspace):
         runner = TaskRunner(workspace_dir=workspace)
@@ -133,7 +138,7 @@ class TestHardLinksNoDataDuplication:
         src.write_bytes(b"data")
         dst = tmp_path / "dst.bin"
 
-        _link_or_copy(src, dst)
+        link_or_copy(src, dst)
 
         assert dst.exists()
         assert dst.stat().st_ino == src.stat().st_ino

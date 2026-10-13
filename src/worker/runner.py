@@ -40,6 +40,30 @@ def _safe_artifact_relpath(name: str) -> Optional[Path]:
     return rel
 
 
+def _subprocess_env(env: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    """
+    Build an env dict safe for subprocess.run(..., env=...).
+
+    os.environ / Apptainer require str values. Docker's ``-e KEY=VALUE``
+    happens to stringify via f-strings, but bools/lists still pollute the
+    command line. Keep strings as-is; stringify int/float/bool; skip None
+    and structured values (list/dict/etc.).
+    """
+    if not env:
+        return {}
+    out: Dict[str, str] = {}
+    for key, value in env.items():
+        if not isinstance(key, str):
+            continue
+        if isinstance(value, str):
+            out[key] = value
+        elif isinstance(value, (bool, int, float)):
+            # bool is a subclass of int; str(True)=="True" matches prior Docker -e behavior
+            out[key] = str(value)
+        # Skip None, list, dict, and other non-scalar types
+    return out
+
+
 def _copy_artifact_into_input(src: Path, dest: Path) -> None:
     """Copy/link a file or directory artifact into the task input directory."""
     if dest.exists() or dest.is_symlink():
@@ -356,11 +380,11 @@ class DockerRunner:
                         mount_mode = maybe_mode
                 docker_cmd.extend(["-v", f"{host_path}:{mount_target}:{mount_mode}"])
         
-        # Add environment variables.
+        # Add environment variables (string-only; see _subprocess_env).
         # JUDGE_API_KEY is forwarded by name so Docker copies it from this
         # process. The value never appears on the command line or in the log.
         if env:
-            for key, value in env.items():
+            for key, value in _subprocess_env(env).items():
                 if key == "JUDGE_API_KEY":
                     docker_cmd.extend(["-e", key])
                 else:
@@ -613,9 +637,10 @@ class ApptainerRunner:
             logger.warning("GPU support DISABLED - gpu_id is None. Containers will NOT have GPU access!")
         
         try:
-            # Set environment for the subprocess
+            # Set environment for the subprocess. Coerce to str values —
+            # os.environ / subprocess require PathLike strings, not bool/list.
             run_env = os.environ.copy()
-            run_env.update(env_vars)
+            run_env.update(_subprocess_env(env_vars))
             
             result = subprocess.run(
                 apptainer_cmd,
@@ -1197,9 +1222,12 @@ class TaskRunner:
                         start_time=start_time,
                     )
 
-            # Build environment
-            task_env = env or {}
-            task_env.update(task.config)  # Add task config to environment
+            # Build environment for the container.
+            # Task config is already written to input/config.json — do not dump
+            # task.config into the process env. Non-string values (e.g.
+            # _run_use_cache: bool, metrics/required_artifacts: list) raise
+            # TypeError under Apptainer's subprocess.run(..., env=...).
+            task_env = _subprocess_env(env)
             if task.task_type == "evaluation":
                 judge_api_key = os.environ.get("JUDGE_API_KEY", "").strip()
                 if judge_api_key:

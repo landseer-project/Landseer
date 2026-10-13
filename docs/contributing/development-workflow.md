@@ -22,5 +22,5 @@ If you change user-visible behavior, update one or more of:
 ```bash
 make docs
 make docs-linkcheck
-poetry run pytest tests/backend -q
+uv run pytest tests/backend -q
 ```

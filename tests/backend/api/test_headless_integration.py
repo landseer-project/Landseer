@@ -20,7 +20,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.backend.api import app, _scheduler_state
-from src.db import PipelineRunStatus
+from src.db import ExperimentRunStatus
 from src.pipeline.tasks import (
     Task,
     TaskType,
@@ -93,20 +93,20 @@ class _RunStorage:
         class _Repo:
             def __init__(self):
                 pass
-            def get_active_runs_for_config(self, config_id):
+            def get_active_runs_for_experiment(self, config_id):
                 return [r for r in storage.runs
-                        if r.pipeline_config_id == config_id
-                        and r.status in (PipelineRunStatus.PENDING, PipelineRunStatus.RUNNING)]
+                        if r.experiment_id == config_id
+                        and r.status in (ExperimentRunStatus.PENDING, ExperimentRunStatus.RUNNING)]
             def get_next_run_number(self, config_id):
-                config_runs = [r for r in storage.runs if r.pipeline_config_id == config_id]
+                config_runs = [r for r in storage.runs if r.experiment_id == config_id]
                 return len(config_runs) + 1
             def create(self, run_data):
                 run = SimpleNamespace(
                     id=run_data["id"],
-                    pipeline_config_id=run_data["pipeline_config_id"],
+                    experiment_id=run_data["experiment_id"],
                     run_number=run_data["run_number"],
                     use_cache=run_data["use_cache"],
-                    status=PipelineRunStatus.PENDING,
+                    status=ExperimentRunStatus.PENDING,
                     error_message=None,
                     created_at=SimpleNamespace(isoformat=lambda: "2026-04-09T10:00:00"),
                     started_at=None,
@@ -118,13 +118,13 @@ class _RunStorage:
                 for r in storage.runs:
                     if r.id == run_id:
                         r.status = status
-                        if status == PipelineRunStatus.RUNNING:
+                        if status == ExperimentRunStatus.RUNNING:
                             r.started_at = SimpleNamespace(isoformat=lambda: "2026-04-09T10:00:01")
                         return r
                 return None
-            def get_all(self, config_id=None):
-                if config_id:
-                    return [r for r in storage.runs if r.pipeline_config_id == config_id]
+            def get_all(self, experiment_id=None):
+                if experiment_id:
+                    return [r for r in storage.runs if r.experiment_id == experiment_id]
                 return storage.runs
         return _Repo()
 
@@ -169,7 +169,7 @@ class TestFullHeadlessLifecycle:
         # ── 4. Start a run ───────────────────────────────────────
         with patch("src.backend.config_discovery.get_config_by_id", return_value=fake_config), \
              patch("src.db.session_scope", _FakeSessionScope), \
-             patch("src.db.PipelineRunRepository", storage.make_repo), \
+             patch("src.db.ExperimentRunRepository", storage.make_repo), \
              patch("src.pipeline.config_loader.create_pipeline_from_config",
                    return_value=_build_pipeline()):
             run_resp = client.post(
@@ -179,7 +179,7 @@ class TestFullHeadlessLifecycle:
 
         assert run_resp.status_code == 200
         run_data = run_resp.json()
-        assert run_data["pipeline_config_id"] == "config_mini"
+        assert run_data["experiment_id"] == "config_mini"
         assert run_data["status"] == "running"
         assert run_data["run_number"] == 1
 
@@ -204,7 +204,7 @@ class TestFullHeadlessLifecycle:
 
         # ── 9. Run appears in pipeline-runs list ─────────────────
         with patch("src.db.session_scope", _FakeSessionScope), \
-             patch("src.db.PipelineRunRepository", storage.make_repo):
+             patch("src.db.ExperimentRunRepository", storage.make_repo):
             runs = client.get("/api/pipeline-runs").json()
 
         assert runs["total"] == 1
@@ -221,7 +221,7 @@ class TestFullHeadlessLifecycle:
         # Start first run
         with patch("src.backend.config_discovery.get_config_by_id", return_value=cfg), \
              patch("src.db.session_scope", _FakeSessionScope), \
-             patch("src.db.PipelineRunRepository", storage.make_repo), \
+             patch("src.db.ExperimentRunRepository", storage.make_repo), \
              patch("src.pipeline.config_loader.create_pipeline_from_config",
                    return_value=_build_pipeline()):
             resp1 = client.post("/api/pipeline-configs/config_mini/runs", json={"use_cache": True})
@@ -230,7 +230,7 @@ class TestFullHeadlessLifecycle:
         # Try to start second run (first is still active)
         with patch("src.backend.config_discovery.get_config_by_id", return_value=cfg), \
              patch("src.db.session_scope", _FakeSessionScope), \
-             patch("src.db.PipelineRunRepository", storage.make_repo):
+             patch("src.db.ExperimentRunRepository", storage.make_repo):
             resp2 = client.post("/api/pipeline-configs/config_mini/runs", json={"use_cache": True})
         assert resp2.status_code == 409
         assert "active run" in resp2.json()["detail"].lower()
@@ -261,7 +261,7 @@ class TestFullHeadlessLifecycle:
         )
         with patch("src.backend.config_discovery.get_config_by_id", return_value=cfg), \
              patch("src.db.session_scope", _FakeSessionScope), \
-             patch("src.db.PipelineRunRepository", storage.make_repo), \
+             patch("src.db.ExperimentRunRepository", storage.make_repo), \
              patch("src.pipeline.config_loader.create_pipeline_from_config",
                    return_value=_build_pipeline()):
             client.post("/api/pipeline-configs/config_mini/runs", json={"use_cache": True})

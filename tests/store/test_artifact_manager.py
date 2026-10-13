@@ -43,3 +43,26 @@ def test_artifact_manager_can_disable_minio_storage(tmp_path):
 
     assert manager.minio is None
     assert manager.use_minio is False
+
+
+def test_store_artifact_drops_local_after_upload(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "model.pt").write_bytes(b"weights")
+    cache_root = tmp_path / "cache"
+
+    manager = ArtifactManager(
+        local_cache_dir=cache_root,
+        minio_store=DummyMinioStore(),
+        use_minio=True,
+    )
+    info = manager.store_artifact(
+        cache_key="abc123",
+        source_dir=src,
+        task_id="task_1",
+        tool_name="tool",
+    )
+
+    assert info.storage_type == "minio"
+    assert info.local_path is None
+    assert not (cache_root / "abc123").exists()

@@ -42,24 +42,16 @@ cd /share/landseer/workspace-ayushi/Landseer
 
 ## Install Dependencies Per Worktree
 
-Use your preferred installer in each worktree after activating its env.
+From each worktree (uv manages `.venv` there):
 
 ```bash
 # Main
-source /share/landseer/workspace-ayushi/.shared/envs/landseer-main/bin/activate
 cd /share/landseer/workspace-ayushi/landseer-main
-poetry install
+uv sync --all-groups
 
 # Dev
-source /share/landseer/workspace-ayushi/.shared/envs/landseer-dev-restructure/bin/activate
 cd /share/landseer/workspace-ayushi/Landseer
-poetry install
-```
-
-If Poetry is unavailable/broken on your machine, use:
-
-```bash
-pip install -e .
+uv sync --all-groups
 ```
 
 ## Shared Data Configuration (Avoid Duplicate Heavy Data)

@@ -24,6 +24,7 @@ from src.worker.runner import (
     TaskRunner,
     ContainerRuntime,
     ExecutionResult,
+    _subprocess_env,
 )
 from src.worker.client import TaskInfo
 
@@ -889,3 +890,81 @@ class TestTimeoutAndResourceLimits:
             )
             
             assert mock_popen.call_args is not None
+
+
+# ============================================================================
+# Test: Subprocess env sanitization (Apptainer PathLike fix)
+# ============================================================================
+
+
+class TestSubprocessEnvSanitization:
+    """Non-string env values must not reach subprocess.run(..., env=...)."""
+
+    def test_subprocess_env_keeps_strings_stringifies_scalars_skips_structured(self):
+        out = _subprocess_env(
+            {
+                "OK": "yes",
+                "FLAG": True,
+                "N": 3,
+                "SKIP_LIST": ["a", "b"],
+                "SKIP_DICT": {"k": "v"},
+                "SKIP_NONE": None,
+            }
+        )
+        assert out == {"OK": "yes", "FLAG": "True", "N": "3"}
+
+    def test_apptainer_accepts_mixed_env_without_pathlike_error(self, temp_workspace):
+        """Regression: bool/list in env used to raise TypeError under Apptainer."""
+        runner = ApptainerRunner(workspace_dir=temp_workspace, gpu_id=None)
+
+        input_dir = temp_workspace / "input"
+        output_dir = temp_workspace / "output"
+        input_dir.mkdir(parents=True)
+        output_dir.mkdir(parents=True)
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            exit_code, _logs, _cmd = runner.run(
+                image="test/image:latest",
+                command="python main.py",
+                input_dir=input_dir,
+                output_dir=output_dir,
+                env={
+                    "OK": "yes",
+                    "_run_use_cache": True,
+                    "metrics": ["a", "b"],
+                },
+            )
+
+            assert exit_code == 0
+            run_env = mock_run.call_args.kwargs["env"]
+            assert run_env["OK"] == "yes"
+            assert run_env["_run_use_cache"] == "True"
+            assert "metrics" not in run_env
+            assert all(isinstance(v, str) for v in run_env.values())
+
+    def test_docker_skips_non_string_env_values(self, docker_runner, temp_workspace):
+        input_dir = temp_workspace / "input"
+        output_dir = temp_workspace / "output"
+        input_dir.mkdir(parents=True)
+        output_dir.mkdir(parents=True)
+
+        with patch("subprocess.run") as mock_run, patch("subprocess.Popen") as mock_popen:
+            _mock_successful_popen(mock_popen)
+            docker_runner.run(
+                image="test/image:latest",
+                command="python main.py",
+                input_dir=input_dir,
+                output_dir=output_dir,
+                env={
+                    "OK": "yes",
+                    "_run_use_cache": True,
+                    "metrics": ["a", "b"],
+                },
+            )
+
+            call_args = mock_popen.call_args[0][0]
+            env_vars = [call_args[i + 1] for i, arg in enumerate(call_args) if arg == "-e"]
+            assert any(v == "OK=yes" for v in env_vars)
+            assert any(v == "_run_use_cache=True" for v in env_vars)
+            assert not any(v.startswith("metrics=") for v in env_vars)

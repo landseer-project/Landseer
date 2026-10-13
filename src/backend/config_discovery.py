@@ -2,7 +2,7 @@
 Pipeline config discovery utilities.
 
 This module scans config files from the workspace and synchronizes them with
-`pipeline_configs` in the database.
+experiments in the database.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from ..common import get_logger
-from ..db import PipelineConfigRepository, PipelineConfigModel, session_scope
+from ..db import ExperimentRepository, ExperimentModel, session_scope
 
 logger = get_logger(__name__)
 
@@ -107,15 +107,15 @@ def discover_configs(
 def sync_configs_to_db(
     pipeline_dir: str = "configs/pipeline",
     attack_dir: str = "configs/attack",
-) -> List[PipelineConfigModel]:
+) -> List[ExperimentModel]:
     """
-    Scan configs and upsert them into `pipeline_configs`.
+    Scan configs and upsert them into ``experiments``.
     """
     discovered = discover_configs(pipeline_dir=pipeline_dir, attack_dir=attack_dir)
-    synced: List[PipelineConfigModel] = []
+    synced: List[ExperimentModel] = []
 
     with session_scope() as session:
-        repo = PipelineConfigRepository(session)
+        repo = ExperimentRepository(session)
         for cfg in discovered:
             existing = repo.get_by_id(cfg["id"])
             if existing is None:
@@ -137,12 +137,12 @@ def sync_configs_to_db(
     return [c for c in synced if c is not None]
 
 
-def get_all_configs() -> List[PipelineConfigModel]:
+def get_all_configs() -> List[ExperimentModel]:
     with session_scope() as session:
-        return PipelineConfigRepository(session).get_all()
+        return ExperimentRepository(session).get_all()
 
 
-def get_config_by_id(config_id: str) -> Optional[PipelineConfigModel]:
+def get_config_by_id(config_id: str) -> Optional[ExperimentModel]:
     with session_scope() as session:
-        return PipelineConfigRepository(session).get_by_id(config_id)
+        return ExperimentRepository(session).get_by_id(config_id)
 

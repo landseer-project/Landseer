@@ -2,7 +2,7 @@
 Unit tests for backend CLI argument parsing.
 
 Tests cover:
-- create_parser returns a valid ArgumentParser
+- create_parser / parse_args helpers
 - --config defaults to None (headless mode)
 - --config accepts a path when specified
 - --default-pipeline argument no longer exists
@@ -12,63 +12,63 @@ Tests cover:
 - main() with --config path (pipeline_config_path forwarded)
 """
 
-import argparse
-import pytest
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
-from src.backend.cli import create_parser, main
+from src.backend.cli import create_parser, main, parse_args
 
 
 class TestCreateParser:
-    """Tests for create_parser()."""
+    """Tests for create_parser() / parse_args()."""
 
-    def test_returns_argument_parser(self):
+    def test_returns_parser_with_parse_args(self):
         parser = create_parser()
-        assert isinstance(parser, argparse.ArgumentParser)
+        assert hasattr(parser, "parse_args")
+        assert callable(parser.parse_args)
 
     def test_config_defaults_to_none(self):
-        parser = create_parser()
-        args = parser.parse_args([])
+        args = parse_args([])
         assert args.config is None
 
     def test_config_accepts_path(self):
-        parser = create_parser()
-        args = parser.parse_args(["--config", "configs/pipeline/mini.yaml"])
+        args = parse_args(["--config", "configs/pipeline/mini.yaml"])
+        assert args.config == "configs/pipeline/mini.yaml"
+
+    def test_pipeline_config_alias(self):
+        args = parse_args(["--pipeline-config", "configs/pipeline/mini.yaml"])
         assert args.config == "configs/pipeline/mini.yaml"
 
     def test_default_pipeline_arg_removed(self):
-        parser = create_parser()
-        assert not hasattr(parser.parse_args([]), "default_pipeline")
+        args = parse_args([])
+        assert not hasattr(args, "default_pipeline")
 
     def test_tools_config_default(self):
-        parser = create_parser()
-        args = parser.parse_args([])
+        args = parse_args([])
         assert args.tools_config == "configs/tools.yaml"
 
     def test_tools_config_override(self):
-        parser = create_parser()
-        args = parser.parse_args(["--tools-config", "/custom/tools.yaml"])
+        args = parse_args(["--tools-config", "/custom/tools.yaml"])
         assert args.tools_config == "/custom/tools.yaml"
 
     def test_host_default(self):
-        parser = create_parser()
-        args = parser.parse_args([])
+        args = parse_args([])
         assert args.host == "0.0.0.0"
 
     def test_port_default(self):
-        parser = create_parser()
-        args = parser.parse_args([])
+        args = parse_args([])
         assert args.port == 8000
 
     def test_debug_default_false(self):
-        parser = create_parser()
-        args = parser.parse_args([])
+        args = parse_args([])
         assert args.debug is False
 
     def test_debug_flag(self):
-        parser = create_parser()
-        args = parser.parse_args(["--debug"])
+        args = parse_args(["--debug"])
         assert args.debug is True
+
+    def test_parse_args_returns_namespace(self):
+        args = create_parser().parse_args([])
+        assert isinstance(args, SimpleNamespace)
 
 
 class TestMainHeadless:

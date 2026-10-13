@@ -1,8 +1,10 @@
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { StatsCard } from '@/components/StatsCard';
@@ -11,6 +13,8 @@ import { ProgressRing } from '@/components/ProgressRing';
 import {
   getPipelineDetail,
   getProgress,
+  getExperimentRuns,
+  getPipelineConfigs,
   getWorkers,
   getAllTasks,
   getRunningTasks,
@@ -20,6 +24,7 @@ import {
   reclaimStaleTasks,
 } from '@/lib/api';
 import { formatDuration, formatRelativeTime, truncateId } from '@/lib/utils';
+import type { ProgressResponse } from '@/types/api';
 import {
   Activity,
   CheckCircle2,
@@ -39,6 +44,39 @@ import {
 import { Link } from 'react-router-dom';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 
+function StatusBars({ progress }: { progress?: ProgressResponse }) {
+  const total = progress?.total || 1;
+  const rows = [
+    { label: 'Completed', value: progress?.completed || 0, dot: 'bg-green-500', bar: 'bg-green-500' },
+    { label: 'Running', value: progress?.running || 0, dot: 'bg-blue-500', bar: 'bg-blue-500' },
+    { label: 'Pending', value: progress?.pending || 0, dot: 'bg-yellow-500', bar: 'bg-yellow-500' },
+  ];
+  if ((progress?.failed || 0) > 0) {
+    rows.push({ label: 'Failed', value: progress?.failed || 0, dot: 'bg-red-500', bar: 'bg-red-500' });
+  }
+
+  return (
+    <div className="flex-1 space-y-4">
+      {rows.map((row) => (
+        <div key={row.label} className="space-y-2">
+          <div className="flex items-center justify-between text-sm">
+            <span className="flex items-center gap-2">
+              <div className={`h-3 w-3 rounded-full ${row.dot}`} />
+              {row.label}
+            </span>
+            <span className="font-medium">{row.value}</span>
+          </div>
+          <Progress
+            value={(row.value / total) * 100}
+            className="h-2"
+            indicatorClassName={row.bar}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 const TASK_TYPE_LABELS: Record<string, string> = {
   pre_training: 'Pre-training',
   in_training: 'During-training',
@@ -57,9 +95,49 @@ export function Dashboard() {
 
   const { data: progress, isFetching: progressFetching } = useQuery({
     queryKey: ['progress'],
-    queryFn: getProgress,
+    queryFn: () => getProgress(),
     refetchInterval: 3_000,
   });
+
+  const { data: configsData } = useQuery({
+    queryKey: ['pipeline-configs'],
+    queryFn: getPipelineConfigs,
+    refetchInterval: 15_000,
+  });
+
+  const { data: runsData } = useQuery({
+    queryKey: ['experiment-runs'],
+    queryFn: getExperimentRuns,
+    refetchInterval: 10_000,
+  });
+
+  const [selectedRunId, setSelectedRunId] = useState<string>('');
+
+  const runs = runsData?.runs ?? [];
+  const selectedRun = useMemo(() => {
+    if (selectedRunId) {
+      return runs.find((run) => run.id === selectedRunId) ?? runs[0];
+    }
+    return (
+      runs.find((run) => run.status === 'running' || run.status === 'pending') ??
+      runs[0]
+    );
+  }, [runs, selectedRunId]);
+
+  const { data: runProgress, isFetching: runProgressFetching } = useQuery({
+    queryKey: ['progress', selectedRun?.id],
+    queryFn: () => getProgress(selectedRun!.id),
+    enabled: !!selectedRun?.id,
+    refetchInterval: 3_000,
+  });
+
+  const configNameById = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const config of configsData?.configs ?? []) {
+      names.set(config.id, config.name);
+    }
+    return names;
+  }, [configsData]);
 
   const { data: workers } = useQuery({
     queryKey: ['workers'],
@@ -102,7 +180,7 @@ export function Dashboard() {
     alert(`Reclaimed ${result.reclaimed_count} stale task(s) back to pending.`);
   };
 
-  const isRefreshing = pipelineFetching || progressFetching;
+  const isRefreshing = pipelineFetching || progressFetching || runProgressFetching;
 
   if (pipelineLoading && !pipeline && schedulerLoading && !scheduler) {
     return (
@@ -233,6 +311,79 @@ export function Dashboard() {
         />
       </div>
 
+      <Card>
+        <CardHeader className="gap-4 md:flex-row md:items-start md:justify-between">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <Rocket className="h-5 w-5" />
+              One run
+            </CardTitle>
+            <CardDescription>
+              Task progress for a single experiment run. Overall progress below is every loaded run combined.
+            </CardDescription>
+          </div>
+          <div className="flex w-full flex-col gap-2 md:w-80">
+            <Select
+              value={selectedRun?.id ?? ''}
+              onValueChange={setSelectedRunId}
+              disabled={runs.length === 0}
+            >
+              <SelectTrigger aria-label="Experiment run">
+                <SelectValue placeholder={runs.length === 0 ? 'No runs yet' : 'Select a run'} />
+              </SelectTrigger>
+              <SelectContent>
+                {runs.map((run) => {
+                  const name =
+                    configNameById.get(run.pipeline_config_id) ||
+                    run.pipeline_config_id ||
+                    run.id;
+                  return (
+                    <SelectItem key={run.id} value={run.id}>
+                      {name} #{run.run_number} · {run.status}
+                    </SelectItem>
+                  );
+                })}
+              </SelectContent>
+            </Select>
+            {selectedRun && (
+              <div className="flex items-center justify-end gap-2">
+                <Badge variant="secondary">{selectedRun.status}</Badge>
+                <Button variant="ghost" size="sm" asChild>
+                  <Link to="/runs">
+                    Run details
+                    <ArrowRight className="ml-1 h-4 w-4" />
+                  </Link>
+                </Button>
+              </div>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent>
+          {!selectedRun ? (
+            <p className="text-sm text-muted-foreground">
+              Start an experiment run to track it here.
+            </p>
+          ) : runProgress && runProgress.total === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              This run has no tasks in the live scheduler. Overall progress still includes every loaded run.
+            </p>
+          ) : (
+            <div className="flex flex-col gap-6 md:flex-row md:items-center">
+              <div className="flex justify-center md:justify-start">
+                <ProgressRing progress={runProgress?.progress_percent || 0} size={140} strokeWidth={12} />
+              </div>
+              <StatusBars progress={runProgress} />
+            </div>
+          )}
+          {selectedRun && (runProgress?.total || 0) > 0 && (
+            <p className="mt-4 text-sm text-muted-foreground">
+              {runProgress?.completed || 0} completed of {runProgress?.total || 0} tasks
+              {runProgress?.is_complete ? ' · this run is finished' : ''}
+            </p>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Main Content Grid */}
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Progress Overview */}
@@ -240,10 +391,10 @@ export function Dashboard() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Activity className="h-5 w-5" />
-              Experiment Progress
+              Overall progress
             </CardTitle>
             <CardDescription>
-              Real-time overview of task execution status
+              All experiment runs currently loaded in the scheduler
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -253,70 +404,7 @@ export function Dashboard() {
                 <ProgressRing progress={progress?.progress_percent || 0} size={160} strokeWidth={12} />
               </div>
 
-              {/* Status Breakdown */}
-              <div className="flex-1 space-y-4">
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="flex items-center gap-2">
-                      <div className="h-3 w-3 rounded-full bg-green-500" />
-                      Completed
-                    </span>
-                    <span className="font-medium">{progress?.completed || 0}</span>
-                  </div>
-                  <Progress
-                    value={((progress?.completed || 0) / (progress?.total || 1)) * 100}
-                    className="h-2"
-                    indicatorClassName="bg-green-500"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="flex items-center gap-2">
-                      <div className="h-3 w-3 rounded-full bg-blue-500" />
-                      Running
-                    </span>
-                    <span className="font-medium">{progress?.running || 0}</span>
-                  </div>
-                  <Progress
-                    value={((progress?.running || 0) / (progress?.total || 1)) * 100}
-                    className="h-2"
-                    indicatorClassName="bg-blue-500"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="flex items-center gap-2">
-                      <div className="h-3 w-3 rounded-full bg-yellow-500" />
-                      Pending
-                    </span>
-                    <span className="font-medium">{progress?.pending || 0}</span>
-                  </div>
-                  <Progress
-                    value={((progress?.pending || 0) / (progress?.total || 1)) * 100}
-                    className="h-2"
-                    indicatorClassName="bg-yellow-500"
-                  />
-                </div>
-
-                {(progress?.failed || 0) > 0 && (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="flex items-center gap-2">
-                        <div className="h-3 w-3 rounded-full bg-red-500" />
-                        Failed
-                      </span>
-                      <span className="font-medium">{progress?.failed || 0}</span>
-                    </div>
-                    <Progress
-                      value={((progress?.failed || 0) / (progress?.total || 1)) * 100}
-                      className="h-2"
-                      indicatorClassName="bg-red-500"
-                    />
-                  </div>
-                )}
-              </div>
+              <StatusBars progress={progress} />
             </div>
 
             {/* Stage breakdown (only when tasks are running) */}

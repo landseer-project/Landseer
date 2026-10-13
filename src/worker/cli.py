@@ -5,7 +5,6 @@ The worker connects to the Landseer backend scheduler, claims tasks,
 executes them in containers, and reports results back.
 """
 
-import argparse
 import hashlib
 import json
 import os
@@ -16,8 +15,10 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
+import click
 import yaml
 
 from ..common import get_logger, init_sentry
@@ -1089,12 +1090,10 @@ class Worker:
         logger.info("Worker cleanup complete")
 
 
-def create_parser() -> argparse.ArgumentParser:
-    """Create and configure the argument parser for the worker CLI."""
-    parser = argparse.ArgumentParser(
-        description="Landseer Worker - ML Security Pipeline Task Worker",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
+@click.command(
+    context_settings={"help_option_names": ["-h", "--help"]},
+    help="Landseer Worker - ML Security Pipeline Task Worker",
+    epilog="""\
 Examples:
   # Start worker with defaults
   landseer-worker
@@ -1110,163 +1109,192 @@ Examples:
 
   # Disable caching
   landseer-worker --no-cache
-        """
+""",
+)
+@click.version_option(version="0.1.0", prog_name="landseer-worker")
+@click.option(
+    "--backend-url",
+    default=lambda: os.environ.get("LANDSEER_BACKEND_URL", "http://localhost:8000"),
+    show_default="http://localhost:8000",
+    help="Backend API URL (env: LANDSEER_BACKEND_URL)",
+)
+@click.option(
+    "--worker-id",
+    default=lambda: os.environ.get("LANDSEER_WORKER_ID"),
+    help="Unique worker identifier (auto-generated if not provided, env: LANDSEER_WORKER_ID)",
+)
+@click.option(
+    "--gpu",
+    type=int,
+    default=None,
+    metavar="ID",
+    help="GPU ID to use (default: CPU only)",
+)
+@click.option(
+    "--timeout",
+    type=int,
+    default=lambda: int(os.environ.get("LANDSEER_TASK_TIMEOUT_SECONDS", "28000")),
+    show_default="28000",
+    metavar="SECONDS",
+    help=(
+        "Task execution timeout in seconds (env: LANDSEER_TASK_TIMEOUT_SECONDS). "
+        "Use 0 or a negative value to disable timeout."
+    ),
+)
+@click.option(
+    "--runtime",
+    type=click.Choice(["docker", "apptainer", "singularity", "auto"], case_sensitive=False),
+    default="auto",
+    show_default=True,
+    help="Container runtime to use",
+)
+@click.option(
+    "--workspace",
+    default=lambda: os.environ.get("LANDSEER_WORKSPACE"),
+    type=click.Path(),
+    metavar="DIR",
+    help="Workspace directory for task execution (env: LANDSEER_WORKSPACE)",
+)
+@click.option(
+    "--cache-dir",
+    default=lambda: os.environ.get("LANDSEER_CACHE_DIR", "/data/landseer/cache"),
+    show_default="/data/landseer/cache",
+    type=click.Path(),
+    metavar="DIR",
+    help="Artifact cache directory (env: LANDSEER_CACHE_DIR)",
+)
+@click.option(
+    "--no-cache",
+    is_flag=True,
+    default=False,
+    help="Disable artifact caching",
+)
+@click.option(
+    "--data-path",
+    default=lambda: os.environ.get("LANDSEER_DATA_PATH"),
+    type=click.Path(),
+    metavar="DIR",
+    help=(
+        "Override: manual path to dataset directory. If not specified, "
+        "dataset is automatically fetched from backend/MinIO (env: LANDSEER_DATA_PATH)"
+    ),
+)
+@click.option(
+    "--minio-endpoint",
+    default=lambda: os.environ.get("MINIO_ENDPOINT", "localhost:9000"),
+    show_default="localhost:9000",
+    metavar="HOST:PORT",
+    help="MinIO server endpoint (env: MINIO_ENDPOINT)",
+)
+@click.option(
+    "--poll-interval",
+    type=float,
+    default=5.0,
+    show_default=True,
+    metavar="SECONDS",
+    help="Seconds between task polls when idle",
+)
+@click.option(
+    "--heartbeat-interval",
+    type=float,
+    default=30.0,
+    show_default=True,
+    metavar="SECONDS",
+    help="Seconds between heartbeats",
+)
+@click.option(
+    "--debug",
+    is_flag=True,
+    default=False,
+    help="Enable debug mode",
+)
+@click.option(
+    "--log-level",
+    type=click.Choice(
+        ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        case_sensitive=False,
+    ),
+    default="INFO",
+    show_default=True,
+    help="Logging level",
+)
+def cli(
+    backend_url: str,
+    worker_id: Optional[str],
+    gpu: Optional[int],
+    timeout: int,
+    runtime: str,
+    workspace: Optional[str],
+    cache_dir: str,
+    no_cache: bool,
+    data_path: Optional[str],
+    minio_endpoint: str,
+    poll_interval: float,
+    heartbeat_interval: float,
+    debug: bool,
+    log_level: str,
+) -> int:
+    """Run the Landseer worker."""
+    init_sentry("worker")
+
+    from ..common.pylogger import set_global_log_level
+    import logging
+
+    set_global_log_level(getattr(logging, log_level.upper()))
+    if debug:
+        set_global_log_level(logging.DEBUG)
+
+    resolved_runtime = None if runtime.lower() == "auto" else runtime
+    os.environ["MINIO_ENDPOINT"] = minio_endpoint
+
+    worker = Worker(
+        backend_url=backend_url,
+        worker_id=worker_id,
+        workspace_dir=Path(workspace) if workspace else None,
+        cache_dir=Path(cache_dir),
+        data_path=Path(data_path) if data_path else None,
+        gpu_id=gpu,
+        poll_interval=poll_interval,
+        task_timeout=timeout,
+        heartbeat_interval=heartbeat_interval,
+        use_cache=not no_cache,
+        runtime=resolved_runtime,
     )
-    
-    parser.add_argument(
-        "--version",
-        action="version",
-        version="%(prog)s 0.1.0",
-    )
-    
-    # Connection options
-    conn_group = parser.add_argument_group("Connection Options")
-    conn_group.add_argument(
-        "--backend-url",
-        type=str,
-        default=os.environ.get("LANDSEER_BACKEND_URL", "http://localhost:8000"),
-        help="Backend API URL (default: http://localhost:8000, env: LANDSEER_BACKEND_URL)",
-    )
-    conn_group.add_argument(
-        "--worker-id",
-        type=str,
-        default=os.environ.get("LANDSEER_WORKER_ID"),
-        help="Unique worker identifier (auto-generated if not provided, env: LANDSEER_WORKER_ID)",
-    )
-    
-    # Execution options
-    exec_group = parser.add_argument_group("Execution Options")
-    exec_group.add_argument(
-        "--gpu",
-        type=int,
-        default=None,
-        metavar="ID",
-        help="GPU ID to use (default: CPU only)",
-    )
-    exec_group.add_argument(
-        "--timeout",
-        type=int,
-        default=int(os.environ.get("LANDSEER_TASK_TIMEOUT_SECONDS", "28000")),
-        metavar="SECONDS",
-        help="Task execution timeout in seconds (default: 28000, env: LANDSEER_TASK_TIMEOUT_SECONDS). Use 0 or a negative value to disable timeout.",
-    )
-    exec_group.add_argument(
-        "--runtime",
-        type=str,
-        choices=["docker", "apptainer", "singularity", "auto"],
-        default="auto",
-        help="Container runtime to use (default: auto-detect)",
-    )
-    
-    # Storage options
-    storage_group = parser.add_argument_group("Storage Options")
-    storage_group.add_argument(
-        "--workspace",
-        type=str,
-        default=os.environ.get("LANDSEER_WORKSPACE"),
-        metavar="DIR",
-        help="Workspace directory for task execution (env: LANDSEER_WORKSPACE)",
-    )
-    storage_group.add_argument(
-        "--cache-dir",
-        type=str,
-        default=os.environ.get("LANDSEER_CACHE_DIR", "/data/landseer/cache"),
-        metavar="DIR",
-        help="Artifact cache directory (default: /data/landseer/cache, env: LANDSEER_CACHE_DIR)",
-    )
-    storage_group.add_argument(
-        "--no-cache",
-        action="store_true",
-        help="Disable artifact caching",
-    )
-    storage_group.add_argument(
-        "--data-path",
-        type=str,
-        default=os.environ.get("LANDSEER_DATA_PATH"),
-        metavar="DIR",
-        help="Override: manual path to dataset directory. If not specified, "
-             "dataset is automatically fetched from backend/MinIO (env: LANDSEER_DATA_PATH)",
-    )
-    storage_group.add_argument(
-        "--minio-endpoint",
-        type=str,
-        default=os.environ.get("MINIO_ENDPOINT", "localhost:9000"),
-        metavar="HOST:PORT",
-        help="MinIO server endpoint (default: localhost:9000, env: MINIO_ENDPOINT)",
-    )
-    
-    # Timing options
-    timing_group = parser.add_argument_group("Timing Options")
-    timing_group.add_argument(
-        "--poll-interval",
-        type=float,
-        default=5.0,
-        metavar="SECONDS",
-        help="Seconds between task polls when idle (default: 5.0)",
-    )
-    timing_group.add_argument(
-        "--heartbeat-interval",
-        type=float,
-        default=30.0,
-        metavar="SECONDS",
-        help="Seconds between heartbeats (default: 30.0)",
-    )
-    
-    # Debug options
-    debug_group = parser.add_argument_group("Debug Options")
-    debug_group.add_argument(
-        "--debug",
-        action="store_true",
-        help="Enable debug mode",
-    )
-    debug_group.add_argument(
-        "--log-level",
-        type=str,
-        default="INFO",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-        help="Logging level (default: INFO)",
-    )
-    
-    return parser
+    return worker.start()
+
+
+def parse_args(argv: Optional[list[str]] = None) -> SimpleNamespace:
+    """Parse CLI arguments without starting the worker (for tests)."""
+    with cli.make_context("landseer-worker", list(argv or [])) as ctx:
+        return SimpleNamespace(**ctx.params)
+
+
+def create_parser():
+    """Test helper exposing parse_args(), matching the old argparse API."""
+
+    class _Parser:
+        def parse_args(self, argv: Optional[list[str]] = None) -> SimpleNamespace:
+            return parse_args(argv)
+
+    return _Parser()
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     """Main entry point for the worker CLI."""
-    parser = create_parser()
-    args = parser.parse_args(argv)
-
-    init_sentry("worker")
-    
-    # Configure logging
-    from ..common.pylogger import set_global_log_level
-    import logging
-    log_level = getattr(logging, args.log_level.upper())
-    set_global_log_level(log_level)
-    
-    if args.debug:
-        set_global_log_level(logging.DEBUG)
-    
-    # Determine runtime
-    runtime = None if args.runtime == "auto" else args.runtime
-
-    os.environ["MINIO_ENDPOINT"] = args.minio_endpoint
-    
-    # Create and start worker
-    worker = Worker(
-        backend_url=args.backend_url,
-        worker_id=args.worker_id,
-        workspace_dir=Path(args.workspace) if args.workspace else None,
-        cache_dir=Path(args.cache_dir),
-        data_path=Path(args.data_path) if args.data_path else None,
-        gpu_id=args.gpu,
-        poll_interval=args.poll_interval,
-        task_timeout=args.timeout,
-        heartbeat_interval=args.heartbeat_interval,
-        use_cache=not args.no_cache,
-        runtime=runtime
-    )
-    
-    return worker.start()
+    try:
+        result = cli.main(
+            args=argv,
+            prog_name="landseer-worker",
+            standalone_mode=False,
+        )
+        return int(result) if result is not None else 0
+    except SystemExit as e:
+        code = e.code
+        if code is None:
+            return 0
+        if isinstance(code, int):
+            return code
+        return 1
 
 
 if __name__ == "__main__":
