@@ -47,15 +47,24 @@ async def get_database_stats(state: SchedulerState = Depends(get_scheduler_state
     # Add pipeline-specific evaluation count if scheduler is initialized
     if state.scheduler and state.scheduler.pipeline:
         try:
-            from src.db.models import EvaluationResultModel
+            from src.db.models import EvaluationResultModel, WorkflowModel
             from src.db import session_scope
             
             with session_scope() as session:
-                pipeline_eval_count = session.query(EvaluationResultModel).filter(
-                    EvaluationResultModel.pipeline_id == state.scheduler.pipeline.id
-                ).count()
+                pipeline_eval_count = (
+                    session.query(EvaluationResultModel)
+                    .join(
+                        WorkflowModel,
+                        EvaluationResultModel.workflow_id == WorkflowModel.id,
+                    )
+                    .filter(
+                        WorkflowModel.experiment_run_id
+                        == state.scheduler.pipeline.id
+                    )
+                    .count()
+                )
                 stats["evaluation_results"]["pipeline_count"] = pipeline_eval_count
-                stats["evaluation_results"]["pipeline_id"] = state.scheduler.pipeline.id
+                stats["evaluation_results"]["experiment_run_id"] = state.scheduler.pipeline.id
         except Exception as e:
             logger.warning(f"Failed to get pipeline evaluation count: {e}")
     

@@ -1,6 +1,6 @@
 attacks:
-  backdoor: True
+  backdoor: False
   evasion: False
   extraction: False
   inference: False
-  other: False
+  other: True

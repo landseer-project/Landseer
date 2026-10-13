@@ -39,6 +39,16 @@ class MinioConfig:
     - MINIO_BUCKET: Default bucket name (default: landseer-artifacts)
     - MINIO_SECURE: Use HTTPS (default: false)
     """
+    
+    "log if any of the following are not set"
+    if not os.getenv("MINIO_ENDPOINT"):
+        logger.warning("MINIO_ENDPOINT not set, using default: localhost:9000")
+    if not os.getenv("MINIO_ACCESS_KEY"):
+        logger.warning("MINIO_ACCESS_KEY not set, using default: minioadmin")
+    if not os.getenv("MINIO_SECRET_KEY"):
+        logger.warning("MINIO_SECRET_KEY not set, using default: minioadmin")
+    if not os.getenv("MINIO_BUCKET"):
+        logger.warning("MINIO_BUCKET not set, using default: landseer-artifacts")
     endpoint: str = field(
         default_factory=lambda: os.getenv("MINIO_ENDPOINT", "localhost:9000")
     )

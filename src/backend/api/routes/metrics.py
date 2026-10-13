@@ -170,7 +170,7 @@ def _export_run_metrics_csv(run_id: str, scheduler: Scheduler) -> Optional[Path]
     """
     try:
         from src.db import session_scope
-        from src.db.models import EvaluationResultModel, PipelineRunModel
+        from src.db.models import EvaluationResultModel, ExperimentRunModel, WorkflowModel
     except Exception as e:
         logger.warning(f"Unable to import DB models for metrics CSV export: {e}")
         return None
@@ -203,20 +203,17 @@ def _export_run_metrics_csv(run_id: str, scheduler: Scheduler) -> Optional[Path]
         return None
 
     with session_scope() as session:
-        run = session.query(PipelineRunModel).filter(PipelineRunModel.id == run_id).first()
+        run = session.query(ExperimentRunModel).filter(ExperimentRunModel.id == run_id).first()
 
-        results = session.query(EvaluationResultModel).filter(
-            EvaluationResultModel.run_id == run_id
-        ).all()
-
-        # Backward compatibility for rows keyed only by pipeline_id.
-        if not results:
-            results = session.query(EvaluationResultModel).filter(
-                EvaluationResultModel.pipeline_id == run_id
-            ).all()
+        results = (
+            session.query(EvaluationResultModel)
+            .join(WorkflowModel, EvaluationResultModel.workflow_id == WorkflowModel.id)
+            .filter(WorkflowModel.experiment_run_id == run_id)
+            .all()
+        )
  
     if run is not None:
-        config_id = run.pipeline_config_id
+        config_id = run.experiment_id
     else:
         pipeline_name = getattr(pipeline, "name", None) or "unknown_config"
         config_id = (
@@ -360,16 +357,24 @@ async def get_pipeline_metrics(
     if state.db_service and state.db_service.is_available():
         # Get from database
         try:
-            from src.db.models import EvaluationResultModel
+            from src.db.models import EvaluationResultModel, WorkflowModel
             from src.db import session_scope
 
             current_workflow_ids = {wf.id for wf in pipeline.workflows}
 
             with session_scope() as session:
-                results = session.query(EvaluationResultModel).filter(
-                    EvaluationResultModel.pipeline_id == pipeline.id,
-                    EvaluationResultModel.workflow_id.in_(current_workflow_ids)
-                ).all()
+                results = (
+                    session.query(EvaluationResultModel)
+                    .join(
+                        WorkflowModel,
+                        EvaluationResultModel.workflow_id == WorkflowModel.id,
+                    )
+                    .filter(
+                        WorkflowModel.experiment_run_id == pipeline.id,
+                        EvaluationResultModel.workflow_id.in_(current_workflow_ids),
+                    )
+                    .all()
+                )
 
                 logger.debug(f"Found {len(results)} evaluation results in database for pipeline {pipeline.id}")
 

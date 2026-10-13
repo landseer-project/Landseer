@@ -2,7 +2,9 @@
 from __future__ import annotations
 from src.backend.api.models import PriorityLevelsResponse, ProgressResponse, TaskListResponse
 
-from fastapi import APIRouter, Depends
+from typing import Optional
+
+from fastapi import APIRouter, Depends, Query
 
 from src.common import get_logger
 from src.pipeline.tasks import TaskStatus
@@ -14,9 +16,12 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 @router.get("/progress", response_model=ProgressResponse, tags=["Progress"])
-async def get_progress(scheduler: Scheduler = Depends(get_scheduler)):
-    """Get current progress of pipeline execution."""
-    stats = scheduler.get_progress()
+async def get_progress(
+    run_id: Optional[str] = Query(default=None, description="Filter progress to one run"),
+    scheduler: Scheduler = Depends(get_scheduler),
+):
+    """Get current progress of pipeline execution (optionally for one run)."""
+    stats = scheduler.get_progress(run_id=run_id)
     
     total = stats["total"]
     completed = stats["completed"]
@@ -31,7 +36,7 @@ async def get_progress(scheduler: Scheduler = Depends(get_scheduler)):
         completed=completed,
         failed=failed,
         progress_percent=round(progress_percent, 2),
-        is_complete=scheduler.is_complete()
+        is_complete=scheduler.is_complete(run_id=run_id),
     )
 
 @router.get("/progress/levels", response_model=PriorityLevelsResponse, tags=["Progress"])

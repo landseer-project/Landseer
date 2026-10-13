@@ -1,7 +1,6 @@
 """In-memory scheduler state shared by API routes."""
 from __future__ import annotations
 
-import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
@@ -37,6 +36,8 @@ class SchedulerState:
     def __init__(self):
         self.scheduler: Optional[Scheduler] = None
         self.pipeline: Optional[Pipeline] = None
+        # Active pipelines/runs keyed by pipeline.id (set to run_id on start).
+        self.pipelines: Dict[str, Pipeline] = {}
         self.started_at: Optional[datetime] = None
         self.task_metadata: Dict[str, Dict[str, Any]] = {}
         self.workers: Dict[str, Dict[str, Any]] = {}
@@ -56,22 +57,46 @@ class SchedulerState:
     
     def initialize(self, pipeline: Pipeline, scheduler_type: str = "priority") -> None:
         """
-        Initialize the scheduler with a pipeline.
-        
-        Args:
-            pipeline: Pipeline instance to schedule
-            scheduler_type: Type of scheduler to use ('priority' is default)
+        Replace the scheduler with a fresh one for a single pipeline.
+
+        Use this for hard resets / first boot. Prefer ``add_run`` when starting
+        an additional concurrent pipeline.
         """
         self.pipeline = pipeline
+        self.pipelines = {pipeline.id: pipeline}
         
         if scheduler_type == "priority":
-            t_sched_ctor_start = time.time()
             self.scheduler = PriorityScheduler(pipeline)
         else:
             raise ValueError(f"Unknown scheduler type: {scheduler_type}")
         
         self.started_at = datetime.now()
         logger.info(f"Scheduler initialized with pipeline: {pipeline.name}")
+
+    def add_run(self, pipeline: Pipeline, scheduler_type: str = "priority") -> int:
+        """
+        Add a pipeline/run's tasks to the shared scheduler without dropping others.
+
+        If no scheduler exists yet, behaves like ``initialize``. Returns number
+        of tasks newly added to ``_all_tasks``.
+        """
+        if self.scheduler is None:
+            self.initialize(pipeline, scheduler_type=scheduler_type)
+            return len(self.scheduler.get_all_tasks())
+
+        if scheduler_type != "priority":
+            raise ValueError(f"Unknown scheduler type: {scheduler_type}")
+
+        added = self.scheduler.add_pipeline(pipeline)
+        self.pipeline = pipeline
+        self.pipelines[pipeline.id] = pipeline
+        if self.started_at is None:
+            self.started_at = datetime.now()
+        logger.info(
+            f"Added run/pipeline {pipeline.id} ({pipeline.name}) "
+            f"with {added} new task(s); total tasks={len(self.scheduler.get_all_tasks())}"
+        )
+        return added
     
     def is_initialized(self) -> bool:
         """Check if scheduler is initialized."""

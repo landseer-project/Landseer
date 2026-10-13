@@ -23,21 +23,15 @@ class ToolDefinition(BaseModel):
     """Tool definition loaded from tools.yaml."""
 
     name: str = Field(description="Tool name")
-    container: ContainerConfig = Field(description="Container configuration")
-    is_baseline: bool = Field(default=False, description="Whether this tool is a baseline/noop tool")
     defense_stage: Optional[str] = Field(
         default=None,
         description=(
             "Pipeline stage this tool belongs to (synonym of pre_training, during_training, "
             "post_training, deployment). Alias key in YAML: 'stage'. Used for config validation; "
             "not inferred from tool id."
-        ),
-    )
-
-
-# Alias for backward compatibility and cleaner naming
-Tool = ToolDefinition
-
+        ),)
+    is_baseline: bool = Field(default=False, description="Whether this tool is a baseline/noop tool")
+    container: ContainerConfig = Field(description="Container configuration")
 
 # Global tool registry - loaded at module import time
 _TOOL_REGISTRY: Dict[str, ToolDefinition] = {}
@@ -47,11 +41,6 @@ def load_tools_from_yaml(yaml_path: str) -> Dict[str, ToolDefinition]:
     """
     Load tool definitions from a YAML file.
     
-    Args:
-        yaml_path: Path to the tools.yaml configuration file
-        
-    Returns:
-        Dictionary mapping tool names to ToolDefinition objects
     """
     import yaml
     from pathlib import Path
@@ -71,9 +60,9 @@ def load_tools_from_yaml(yaml_path: str) -> Dict[str, ToolDefinition]:
     for tool_name, tool_data in data['tools'].items():
         tools[tool_name] = ToolDefinition(
             name=tool_data.get('name', tool_name),
-            container=ContainerConfig(**tool_data['container']),
-            is_baseline=tool_data.get('is_baseline', False),
             defense_stage=tool_data.get('defense_stage') or tool_data.get('stage'),
+            is_baseline=tool_data.get('is_baseline', False),
+            container=ContainerConfig(**tool_data['container']),
         )
     
     return tools
@@ -111,3 +100,7 @@ def get_all_tools() -> Dict[str, ToolDefinition]:
         Dictionary of all tool definitions
     """
     return _TOOL_REGISTRY.copy()
+
+
+# Backward-compatible alias used by package exports / older callers.
+Tool = ToolDefinition

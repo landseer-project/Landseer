@@ -45,6 +45,13 @@ class PriorityScheduler(Scheduler):
         """
         super().__init__(pipeline)
         self._update_task_priorities()
+
+    def add_pipeline(self, pipeline: Pipeline) -> int:
+        """Merge another run's tasks and recalculate priorities."""
+        added = super().add_pipeline(pipeline)
+        if added:
+            self._update_task_priorities()
+        return added
     
     def _update_task_priorities(self) -> None:
         """

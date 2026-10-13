@@ -12,6 +12,7 @@ from src.pipeline.tasks import TaskStatus, TaskType
 from src.backend.scheduler import Scheduler, PriorityScheduler
 from src.backend.api.state import SchedulerState, get_scheduler, get_scheduler_state
 from src.backend.api.helpers import task_to_response
+from src.backend.api.routes.metrics import _export_run_metrics_csv
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -121,42 +122,53 @@ async def update_task_status(
         task = scheduler._find_task_by_id(request.task_id)
         if task and task.task_type == TaskType.EVALUATION:
             eval_data = request.result["evaluation_result"]
-            evaluator_name = task.tool.name
-            run_id = getattr(task, 'run_id', None)
+            run_id = getattr(task, "run_id", None) or getattr(
+                task, "experiment_run_id", None
+            ) or task.pipeline_id
             for workflow_id in task.workflows:
                 state.db_service.save_evaluation_result(
                     workflow_id=workflow_id,
-                    pipeline_id=task.pipeline_id,
-                    evaluator_name=evaluator_name,
-                    result_data=eval_data,
                     evaluation_task_id=request.task_id,
-                    evaluator_image=task.tool.container.image,
-                    run_id=run_id
+                    result_data=eval_data,
+                    pipeline_id=task.pipeline_id,
+                    run_id=run_id,
                 )
 
-    # If all tasks are terminal, finalize the pipeline-run status in DB.
-    # This keeps historical run state in sync with scheduler completion so
-    # the UI does not stay stuck on "running".
-    if scheduler.is_complete():
+    # If this task's run is fully terminal, finalize that run in DB.
+    # Do not wait for ALL runs in a multi-run scheduler.
+    completed_task = scheduler._find_task_by_id(request.task_id)
+    run_id = None
+    if completed_task is not None:
+        run_id = getattr(completed_task, "run_id", None) or completed_task.pipeline_id
+    if run_id and scheduler.is_complete(run_id=run_id):
         try:
-            from src.db import session_scope, PipelineRunRepository, PipelineRunStatus
-            run_id = getattr(scheduler.pipeline, "id", None)
-            if run_id:
-                csv_path: Optional[Path] = None
-                with session_scope() as session:
-                    run_repo = PipelineRunRepository(session)
-                    run = run_repo.get_by_id(run_id)
-                    if run and run.status in (PipelineRunStatus.PENDING, PipelineRunStatus.RUNNING, PipelineRunStatus.STOPPING):
-                        progress = scheduler.get_progress()
-                        final_status = PipelineRunStatus.FAILED if progress.get("failed", 0) > 0 else PipelineRunStatus.COMPLETED
-                        run_repo.update_status(run_id, final_status)
-                        logger.info(f"Pipeline run {run_id} finalized as {final_status.value}")
-                try:
-                    csv_path = _export_run_metrics_csv(run_id, scheduler)
-                except Exception as export_err:
-                    logger.warning(f"Failed to export metrics CSV for run {run_id}: {export_err}", exc_info=True)
-                if csv_path:
-                    logger.info(f"Exported run metrics CSV: {csv_path}")
+            from src.db import session_scope, ExperimentRunRepository, ExperimentRunStatus
+            csv_path: Optional[Path] = None
+            with session_scope() as session:
+                run_repo = ExperimentRunRepository(session)
+                run = run_repo.get_by_id(run_id)
+                if run and run.status in (
+                    ExperimentRunStatus.PENDING,
+                    ExperimentRunStatus.RUNNING,
+                    ExperimentRunStatus.STOPPING,
+                ):
+                    progress = scheduler.get_progress(run_id=run_id)
+                    final_status = (
+                        ExperimentRunStatus.FAILED
+                        if progress.get("failed", 0) > 0
+                        else ExperimentRunStatus.COMPLETED
+                    )
+                    run_repo.update_status(run_id, final_status)
+                    logger.info(f"Pipeline run {run_id} finalized as {final_status.value}")
+            try:
+                csv_path = _export_run_metrics_csv(run_id, scheduler)
+            except Exception as export_err:
+                logger.warning(
+                    f"Failed to export metrics CSV for run {run_id}: {export_err}",
+                    exc_info=True,
+                )
+            if csv_path:
+                logger.info(f"Exported run metrics CSV: {csv_path}")
         except Exception as e:
             logger.warning(f"Failed to finalize pipeline run status: {e}")
     
@@ -173,28 +185,33 @@ async def update_task_status(
 @router.get("/tasks", response_model=TaskListResponse, tags=["Tasks"])
 async def get_all_tasks(
     status: Optional[str] = Query(default=None, description="Filter by status"),
+    run_id: Optional[str] = Query(default=None, description="Filter by pipeline run id"),
     limit: int = Query(default=200, ge=1, le=2000, description="Maximum number of tasks to return"),
     offset: int = Query(default=0, ge=0, description="Number of tasks to skip"),
     scheduler: Scheduler = Depends(get_scheduler),
     state: SchedulerState = Depends(get_scheduler_state)
 ):
     """
-    Get all tasks, optionally filtered by status.
+    Get all tasks, optionally filtered by status and/or run.
     
     Query Parameters:
         status: Filter by task status (pending, running, completed, failed)
+        run_id: Filter to tasks belonging to one pipeline run
     """
+    if run_id:
+        tasks = scheduler.get_tasks_for_run(run_id)
+    else:
+        tasks = scheduler.get_all_tasks()
+
     if status:
         try:
             task_status = TaskStatus(status.lower())
-            tasks = scheduler.get_tasks_by_status(task_status)
+            tasks = [t for t in tasks if t.status == task_status]
         except ValueError:
             raise HTTPException(
                 status_code=400,
                 detail=f"Invalid status: {status}. Must be one of: pending, running, completed, failed"
             )
-    else:
-        tasks = scheduler.get_all_tasks()
 
     total_matching = len(tasks)
     paged_tasks = tasks[offset:offset + limit]

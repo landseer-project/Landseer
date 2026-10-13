@@ -15,7 +15,7 @@ evaluators:
   clean:
     name: clean
     container:
-      image: ghcr.io/landseer-project/evals/clean:v2
+      image: ghcr.io/landseer-project/evals/clean:v3
       command: ""
     required_artifacts: []
     metrics:
@@ -59,7 +59,7 @@ evaluators:
   fairness:
     name: fairness
     container:
-      image: ghcr.io/landseer-project/evals/fairness:v2
+      image: ghcr.io/landseer-project/evals/fairness:v3
       command: ""
     required_artifacts:
       - test_sensitive.npy

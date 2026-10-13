@@ -343,7 +343,7 @@ class StartPipelineRunRequest(BaseModel):
 class PipelineRunResponse(BaseModel):
     """Response model for a pipeline run."""
     id: str = Field(description="Run ID")
-    pipeline_config_id: str = Field(description="Config ID")
+    experiment_id: str = Field(description="Config ID")
     run_number: int = Field(description="Run number for this config")
     use_cache: bool = Field(description="Whether cache was used")
     tools_config: Optional[Dict[str, List[str]]] = Field(

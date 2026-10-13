@@ -29,11 +29,11 @@ try:
         TaskRepository,
         WorkerRepository,
         WorkflowRepository,
-        PipelineRepository,
+        ExperimentRunRepository,
         TaskModel,
         WorkerModel,
         WorkflowModel,
-        PipelineModel,
+        ExperimentRunModel,
         DBTaskStatus,
         WorkerStatus,
     )
@@ -112,117 +112,155 @@ class DatabaseService:
     
     def sync_pipeline_to_db(self, pipeline: Pipeline, run_id: Optional[str] = None) -> Optional[str]:
         """
-        Sync a pipeline and all its workflows/tasks to the database.
-        
-        Args:
-            pipeline: Pipeline to sync
-            run_id: Optional run ID to associate with this pipeline
-            
-        Returns:
-            Pipeline ID if successful, None otherwise
+        Sync an in-memory pipeline's workflows/tasks onto an experiment run.
+
+        ``run_id`` (or ``pipeline.id``) must already exist as an ``ExperimentRun``.
         """
         if not self.is_available():
             return None
-        
+
         try:
+            from ..db.models import (
+                TaskType as DBTaskType,
+                ToolModel,
+                ToolType,
+                ToolStage,
+                ToolDefenseType,
+                WorkflowStatus,
+            )
+
             with session_scope() as session:
-                pipeline_repo = PipelineRepository(session)
+                run_repo = ExperimentRunRepository(session)
                 workflow_repo = WorkflowRepository(session)
                 task_repo = TaskRepository(session)
-                
-                # Get run_id from pipeline if not provided
-                if run_id is None:
-                    run_id = getattr(pipeline, 'run_id', None)
-                    if not run_id:
-                        # Try to get from first workflow
-                        if pipeline.workflows:
-                            run_id = getattr(pipeline.workflows[0], 'run_id', None)
-                
-                # Create or update pipeline
-                db_pipeline = pipeline_repo.get_by_id(pipeline.id)
-                if not db_pipeline:
-                    db_pipeline = pipeline_repo.create({
-                        "id": pipeline.id,
-                        "name": pipeline.name,
-                        "run_id": run_id,
-                        "config": pipeline.config,
-                        "dataset_config": pipeline.dataset,
-                        "model_config": pipeline.model,
-                        "status": "pending"
-                    })
-                else:
-                    # Update run_id if provided
-                    if run_id:
-                        db_pipeline.run_id = run_id
-                
-                # Collect all unique tasks
+
+                effective_run_id = (
+                    run_id
+                    or getattr(pipeline, "run_id", None)
+                    or pipeline.id
+                )
+                db_run = run_repo.get_by_id(effective_run_id)
+                if not db_run:
+                    logger.error(
+                        "Cannot sync pipeline %s: experiment run %s not found",
+                        pipeline.id,
+                        effective_run_id,
+                    )
+                    return None
+
+                def _ensure_tool(task: Task) -> str:
+                    tool = task.tool
+                    tool_id = getattr(tool, "id", None) or tool.name
+                    existing = session.get(ToolModel, tool_id)
+                    if existing:
+                        return tool_id
+
+                    stage_raw = (
+                        getattr(tool, "defense_stage", None)
+                        or getattr(tool, "stage", None)
+                        or "other"
+                    )
+                    if hasattr(stage_raw, "value"):
+                        stage_raw = stage_raw.value
+                    try:
+                        stage = ToolStage(str(stage_raw))
+                    except ValueError:
+                        stage = ToolStage.OTHER
+
+                    if getattr(tool, "is_baseline", False):
+                        tool_type = ToolType.BASELINE
+                    elif str(getattr(task.task_type, "value", task.task_type)) == "evaluation":
+                        tool_type = ToolType.EVAL
+                    else:
+                        tool_type = ToolType.DEFENSE
+
+                    session.add(
+                        ToolModel(
+                            id=tool_id,
+                            tool_name=tool.name,
+                            tool_type=tool_type,
+                            tool_defense_type=ToolDefenseType.NONE,
+                            tool_stage=stage,
+                            tool_image=tool.container.image,
+                            tool_parameters=getattr(tool, "parameters", None) or {},
+                        )
+                    )
+                    session.flush()
+                    return tool_id
+
+                def _db_task_type(task: Task) -> DBTaskType:
+                    token = str(getattr(task.task_type, "value", task.task_type))
+                    if token == "evaluation":
+                        return DBTaskType.EVALUATION
+                    return DBTaskType.TOOL
+
+                # Tasks first
                 task_map: Dict[str, Task] = {}
                 for workflow in pipeline.workflows:
                     for task in workflow.tasks:
                         task_map[task.id] = task
-                
-                # Create tasks
+
                 for task in task_map.values():
-                    task_run_id = getattr(task, 'run_id', None) or run_id
+                    tool_id = _ensure_tool(task)
                     db_task = task_repo.get_by_id(task.id)
                     if not db_task:
-                        task_repo.create({
-                            "id": task.id,
-                            "tool_name": task.tool.name,
-                            "tool_image": task.tool.container.image,
-                            "tool_command": task.tool.container.command,
-                            "tool_is_baseline": task.tool.is_baseline,
-                            "config": task.config,
-                            "priority": task.priority,
-                            "status": self._convert_status(task.status),
-                            "task_type": task.task_type.value,
-                            "task_hash": task.get_hash(),
-                            "counter": task.counter,
-                            "pipeline_id": pipeline.id,
-                            "run_id": task_run_id
-                        })
+                        task_repo.create(
+                            {
+                                "id": task.id,
+                                "task_type": _db_task_type(task),
+                                "tool_id": tool_id,
+                                "config": task.config or {},
+                                "priority": task.priority,
+                                "status": self._convert_status(task.status),
+                                "task_hash": task.get_hash(),
+                                "counter": task.counter,
+                                "experiment_run_id": effective_run_id,
+                            }
+                        )
                     else:
-                        # Update run_id if not set
-                        if task_run_id and not db_task.run_id:
-                            db_task.run_id = task_run_id
-                
-                # Create workflows and link tasks
+                        db_task.experiment_run_id = effective_run_id
+                        db_task.status = self._convert_status(task.status)
+
+                # Workflows + ordered membership
                 for workflow in pipeline.workflows:
-                    workflow_run_id = getattr(workflow, 'run_id', None) or run_id
                     db_workflow = workflow_repo.get_by_id(workflow.id)
                     if not db_workflow:
-                        db_workflow = workflow_repo.create({
-                            "id": workflow.id,
-                            "name": workflow.name,
-                            "pipeline_id": pipeline.id,
-                            "run_id": workflow_run_id,
-                            "status": "pending"
-                        })
+                        db_workflow = workflow_repo.create(
+                            {
+                                "id": workflow.id,
+                                "experiment_run_id": effective_run_id,
+                                "status": WorkflowStatus.PENDING,
+                            }
+                        )
                     else:
-                        # Update run_id if not set
-                        if workflow_run_id and not db_workflow.run_id:
-                            db_workflow.run_id = workflow_run_id
-                    
-                    # Link tasks to workflow
-                    for task in workflow.tasks:
-                        db_task = task_repo.get_by_id(task.id)
-                        if db_task and db_workflow not in db_task.workflows:
-                            db_task.workflows.append(db_workflow)
-                
-                # Set task dependencies
+                        db_workflow.experiment_run_id = effective_run_id
+
+                    ordered = []
+                    for t in workflow.tasks:
+                        db_t = task_repo.get_by_id(t.id)
+                        if db_t:
+                            ordered.append(db_t)
+                    db_workflow.set_ordered_tasks(session, ordered)
+
+                # Dependencies
                 for task in task_map.values():
                     db_task = task_repo.get_by_id(task.id)
-                    if db_task:
-                        for dep in task.dependencies:
-                            db_dep = task_repo.get_by_id(dep.id)
-                            if db_dep and db_dep not in db_task.dependencies:
-                                db_task.dependencies.append(db_dep)
-                
-                logger.info(f"Synced pipeline {pipeline.id} to database (run_id={run_id})")
-                return pipeline.id
-                
+                    if not db_task:
+                        continue
+                    for dep in task.dependencies:
+                        db_dep = task_repo.get_by_id(dep.id)
+                        if db_dep and db_dep not in db_task.dependencies:
+                            db_task.dependencies.append(db_dep)
+
+                logger.info(
+                    "Synced pipeline %s to experiment run %s",
+                    pipeline.id,
+                    effective_run_id,
+                )
+                return effective_run_id
+
         except Exception as e:
-            logger.error(f"Failed to sync pipeline to database: {e}")
+            logger.error(f"Failed to sync pipeline to database: {e}", exc_info=True)
             return None
     
     def sync_task_status(
@@ -271,56 +309,54 @@ class DatabaseService:
     def save_evaluation_result(
         self,
         workflow_id: str,
-        pipeline_id: str,
-        evaluator_name: str,
+        evaluation_task_id: str,
         result_data: Dict[str, Any],
-        evaluation_task_id: Optional[str] = None,
+        pipeline_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+        experiment_run_id: Optional[str] = None,
+        # Legacy kwargs ignored (tool identity comes from evaluation_task → tools)
+        evaluator_name: Optional[str] = None,
         evaluator_image: Optional[str] = None,
-        run_id: Optional[str] = None
+        evaluator_tool_id: Optional[str] = None,
     ) -> bool:
         """
-        Save or update an evaluation result for a workflow (used when workers report evaluator completion).
-        
-        Args:
-            workflow_id: Workflow that was evaluated
-            pipeline_id: Pipeline the workflow belongs to
-            evaluator_name: Name of the evaluator (e.g. adversarial-evaluator)
-            result_data: Parsed evaluation_results.json (metrics, success, skipped, etc.)
-            evaluation_task_id: Task ID that produced this result
-            evaluator_image: Optional container image used
-            
-        Returns:
-            True if saved successfully
+        Save or update an evaluation result for a workflow.
+
+        Tool name/image and experiment run are not stored on this row —
+        resolve via ``evaluation_task → tools`` and ``workflow → experiment_run``.
         """
         if not self.is_available():
-            logger.warning(f"Database not available, cannot save evaluation result for {workflow_id}/{evaluator_name}")
+            logger.warning(
+                f"Database not available, cannot save evaluation result for "
+                f"{workflow_id}/{evaluation_task_id}"
+            )
             return False
         try:
             from ..db.models import EvaluationResultModel
-            result_id = f"{workflow_id}_{evaluator_name}"
+
+            result_id = f"{workflow_id}_{evaluation_task_id}"
             with session_scope() as session:
                 er = EvaluationResultModel.from_evaluation_result(
                     result_id=result_id,
                     workflow_id=workflow_id,
-                    pipeline_id=pipeline_id,
-                    evaluator_name=evaluator_name,
-                    result_data=result_data,
                     evaluation_task_id=evaluation_task_id,
-                    evaluator_image=evaluator_image
+                    result_data=result_data,
                 )
-                # Set run_id if provided
-                if run_id:
-                    er.run_id = run_id
                 session.merge(er)
-            
+
             metrics_count = len(result_data.get("metrics", {}))
             logger.info(
-                f"Saved evaluation result {result_id} (pipeline={pipeline_id}, "
-                f"metrics={metrics_count}, skipped={result_data.get('skipped', False)})"
+                f"Saved evaluation result {result_id} "
+                f"(metrics={metrics_count}, "
+                f"skipped={result_data.get('skipped', False)})"
             )
             return True
         except Exception as e:
-            logger.error(f"Failed to save evaluation result for {workflow_id}/{evaluator_name}: {e}", exc_info=True)
+            logger.error(
+                f"Failed to save evaluation result for "
+                f"{workflow_id}/{evaluation_task_id}: {e}",
+                exc_info=True,
+            )
             return False
     
     # =========================================================================
