@@ -16,7 +16,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from ..common import get_logger
 from ..common.fsutil import (
@@ -25,6 +25,9 @@ from ..common.fsutil import (
     mirror_tree_link_or_copy,
 )
 from .client import TaskInfo
+
+if TYPE_CHECKING:
+    from .db import ArtifactCacheDB
 
 logger = get_logger(__name__)
 
@@ -995,8 +998,6 @@ class TaskRunner:
             missing,
         )
         return result
-
-        return task_dir, input_dir, output_dir
     
     def _cleanup_task_workspace(self, task_dir: Path, keep_logs: bool = True) -> None:
         """

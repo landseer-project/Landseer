@@ -27,7 +27,11 @@ from src.backend.api.models import (
 )
 from src.backend.api.state import SchedulerState, get_scheduler, get_scheduler_state
 from src.backend.api.helpers import _require_pipeline_key
-from src.backend.api.routes.metrics import _allowed_metrics_for_evaluator
+from src.backend.api.routes.metrics import (
+    _allowed_metrics_for_evaluator,
+    _should_override_metric,
+    _workflow_tools_metadata,
+)
 
 logger = get_logger(__name__)
 router = APIRouter()
