@@ -480,12 +480,11 @@ class TestGPUSecurity:
             assert "--nv" in call_args, "Apptainer should use --nv flag for GPU"
             
             # Check CUDA_VISIBLE_DEVICES
-            # Apptainer sets env in the subprocess env, not as flags
-            # So we check the env parameter
+            # Apptainer gets container env via APPTAINERENV_* in the subprocess
+            # env (--containall drops the rest of the host env)
             if 'env' in mock_run.call_args.kwargs:
                 env = mock_run.call_args.kwargs['env']
-                assert "CUDA_VISIBLE_DEVICES" in env
-                assert env["CUDA_VISIBLE_DEVICES"] == "1"
+                assert env["APPTAINERENV_CUDA_VISIBLE_DEVICES"] == "1"
 
 
 # ============================================================================
@@ -937,10 +936,11 @@ class TestSubprocessEnvSanitization:
             )
 
             assert exit_code == 0
+            # --containall drops the host env; container vars go via APPTAINERENV_*.
             run_env = mock_run.call_args.kwargs["env"]
-            assert run_env["OK"] == "yes"
-            assert run_env["_run_use_cache"] == "True"
-            assert "metrics" not in run_env
+            assert run_env["APPTAINERENV_OK"] == "yes"
+            assert run_env["APPTAINERENV__run_use_cache"] == "True"
+            assert "APPTAINERENV_metrics" not in run_env
             assert all(isinstance(v, str) for v in run_env.values())
 
     def test_docker_skips_non_string_env_values(self, docker_runner, temp_workspace):

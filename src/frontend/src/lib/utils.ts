@@ -105,7 +105,14 @@ export function getProgressColor(percent: number): string {
   return 'bg-red-500';
 }
 
+// Run-scoped task IDs: "<8-hex run prefix>-<12-hex lineage>[-n]" (see
+// src/pipeline/run_identity.py). Every task in a run shares the prefix, so
+// show the lineage part instead.
+const RUN_SCOPED_TASK_ID = /^[0-9a-f]{8}-([0-9a-f]{12}(?:-\d+)?)$/;
+
 export function truncateId(id: string, length: number = 8): string {
+  const runScoped = RUN_SCOPED_TASK_ID.exec(id);
+  if (runScoped) id = runScoped[1];
   if (id.length <= length) return id;
   return `${id.substring(0, length)}...`;
 }

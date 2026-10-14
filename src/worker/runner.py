@@ -9,9 +9,11 @@ This module handles the actual execution of tasks, including:
 """
 
 import json
+import re
 import os
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
@@ -73,11 +75,21 @@ def _copy_artifact_into_input(src: Path, dest: Path) -> None:
             dest.unlink()
     dest.parent.mkdir(parents=True, exist_ok=True)
     if src.is_dir():
-        shutil.copytree(src, dest)
+        mirror_tree_link_or_copy(src, dest)
     elif src.is_symlink():
         shutil.copy2(src, dest, follow_symlinks=False)
     else:
         link_or_copy(src, dest)
+
+
+# Task workspace directories are named after the task ID: legacy counter IDs
+# ("task_17") or run-scoped IDs ("e807ab0e-3f9a2c41d0e7", see
+# src/pipeline/run_identity.py).
+_TASK_DIR_RE = re.compile(r"^(task_\d+|[0-9a-f]{8}-[0-9a-f]{12}(-\d+)?)$")
+
+
+def _is_task_dir_name(name: str) -> bool:
+    return bool(_TASK_DIR_RE.match(name))
 
 
 @dataclass
@@ -541,6 +553,9 @@ class ApptainerRunner:
         self.timeout = timeout
         self.runtime = runtime
         self.default_workdir = os.environ.get("LANDSEER_APPTAINER_WORKDIR", "/app")
+        # Per-task writable overlay and /tmp. Must be node-local disk: overlayfs
+        # cannot use Lustre (/scratch) as its upper dir. None = system temp dir.
+        self.scratch_root = os.environ.get("LANDSEER_APPTAINER_SCRATCH") or None
     
     def convert_docker_image(self, docker_image: str) -> str:
         """
@@ -592,6 +607,22 @@ class ApptainerRunner:
         # both cases (every tool and evals/* image uses /app).
         verb = "exec" if command else "run"
         apptainer_cmd = [self.runtime, verb, "--pwd", self.default_workdir]
+
+        # The tool images are built and tested with Docker, so mirror `docker run`:
+        #   --containall  no host env, $HOME or cwd inside, own PID namespace
+        #   --workdir     /tmp and /var/tmp on disk, not the small session tmpfs
+        #   --overlay     writable layer over the read-only SIF, like Docker's
+        #                 container layer (tools such as in-fair write under /app)
+        scratch = Path(tempfile.mkdtemp(
+            prefix=f"landseer-{output_dir.parent.name}-", dir=self.scratch_root
+        ))
+        (scratch / "overlay").mkdir()
+        (scratch / "tmp").mkdir()
+        apptainer_cmd.extend([
+            "--containall",
+            "--workdir", str(scratch / "tmp"),
+            "--overlay", str(scratch / "overlay"),
+        ])
         
         # Add GPU support if available
         if self.gpu_id is not None:
@@ -646,8 +677,12 @@ class ApptainerRunner:
         try:
             # Set environment for the subprocess. Coerce to str values —
             # os.environ / subprocess require PathLike strings, not bool/list.
+            # --containall drops the host environment, so container variables
+            # are passed as APPTAINERENV_<NAME>.
             run_env = os.environ.copy()
-            run_env.update(_subprocess_env(env_vars))
+            run_env.update({
+                f"APPTAINERENV_{k}": v for k, v in _subprocess_env(env_vars).items()
+            })
             
             result = subprocess.run(
                 apptainer_cmd,
@@ -666,6 +701,9 @@ class ApptainerRunner:
         except Exception as e:
             logger.error(f"Container execution failed: {e}")
             return -1, str(e), cmd_str
+        finally:
+            # The overlay holds whatever the tool wrote outside /output (can be GBs).
+            shutil.rmtree(scratch, ignore_errors=True)
 
 
 class TaskRunner:
@@ -737,8 +775,8 @@ class TaskRunner:
         removed_workspace = 0
 
         # Prune stale task directories in workspace.
-        for p in self.workspace_dir.glob("task_*"):
-            if not p.is_dir():
+        for p in self.workspace_dir.iterdir():
+            if not p.is_dir() or not _is_task_dir_name(p.name):
                 continue
             try:
                 st = p.stat()
@@ -1156,8 +1194,10 @@ class TaskRunner:
                         elif item.is_dir():
                             if dest.exists():
                                 shutil.rmtree(dest)
-                            shutil.copytree(item, dest)
-                            logger.debug(f"Copied dir {item.name} from {dep_output_path.name}")
+                            # Hard-link like files: a copied dataset folder (e.g. CelebA's
+                            # ~200k images) per task exhausts file-count quotas.
+                            mirror_tree_link_or_copy(item, dest)
+                            logger.debug(f"Linked dir {item.name} from {dep_output_path.name}")
                 else:
                     dest = input_dir / dep_output_path.name
                     if dest.exists():
@@ -1189,6 +1229,10 @@ class TaskRunner:
             # containers can read structured context (defense types, stage tools).
             if isinstance(task.config, dict):
                 config_json_path = input_dir / "config.json"
+                # An ancestor's output may have been hard-linked here as a read-only
+                # config.json; drop that link (the ancestor's copy is untouched) so we
+                # neither fail with EACCES nor overwrite the ancestor's file.
+                config_json_path.unlink(missing_ok=True)
                 config_json_path.write_text(json.dumps(task.config, indent=2, default=str))
 
             # Evaluation tasks: materialize required_artifacts from dataset /

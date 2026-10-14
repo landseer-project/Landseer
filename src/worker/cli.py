@@ -878,11 +878,10 @@ class Worker:
                 refreshed = self._fetch_dataset()
                 if refreshed:
                     self._dataset_path = refreshed
-                # Task IDs are reused across runs (task_1, task_2, ...). Clear
-                # per-task output lineage cache to avoid mixing dependency outputs
-                # from prior runs (e.g. CIFAR ancestry leaking into CelebA runs).
-                self._task_outputs.clear()
-                self._task_dataset_id.clear()
+                # Task IDs are run-scoped (src/pipeline/run_identity.py), so the
+                # per-task lineage caches (_task_outputs, _task_dataset_id) stay
+                # valid across run switches and are not cleared: a worker
+                # alternating between concurrent runs keeps its local lineage.
                 self._active_run_id = task.run_id
                 self._dataset_mismatch = self._manual_dataset_mismatch()
 
