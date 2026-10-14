@@ -64,6 +64,7 @@ TYPE_REQUIRED: Dict[str, tuple] = {
     "tool": (NS + "stage", NS + "defense_type"),
     "dataset": (NS + "dataset", NS + "variant", NS + "outputs"),
     "evaluator": (NS + "metrics", NS + "required_artifacts", NS + "defense_types"),
+    "adapter": (NS + "source_framework", NS + "target_framework"),
 }
 
 # Labels that may legitimately be an empty string.
@@ -259,6 +260,7 @@ CONTAINER_DIRS = {
     "datasets": "dataset",
     "evals": "evaluator",
     "tools": "tool",
+    "adapters": "adapter",
 }
 
 
@@ -327,11 +329,12 @@ def _config_images(root: Path) -> Dict[str, str]:
     import yaml
 
     images: Dict[str, str] = {}
-    sources = {
-        "tools.yaml": ("tools", "tool"),
-        "evaluators.yaml": ("evaluators", "evaluator"),
-    }
-    for filename, (section, image_type) in sources.items():
+    sources = [
+        ("tools.yaml", "tools", "tool"),
+        ("tools.yaml", "adapters", "adapter"),
+        ("evaluators.yaml", "evaluators", "evaluator"),
+    ]
+    for filename, section, image_type in sources:
         path = root / "configs" / filename
         if not path.exists():
             continue

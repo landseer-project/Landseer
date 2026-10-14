@@ -57,6 +57,13 @@ Stamped at build time, never written in the Dockerfile (CI's
 | `org.landseer.stage` | `pre_training` / `during_training` / `post_training` / `deployment` | Pipeline stage; read by stage validation when `tools.yaml` has no `defense_stage` |
 | `org.landseer.defense_type` | `adversarial` | Defense family; matches evaluator `defense_types` |
 
+**Adapter** (`org.landseer.type=adapter`, see [adapter layers](../how-to/adapter-layers.md))
+
+| Label | Example | Meaning |
+|---|---|---|
+| `org.landseer.source_framework` | `pytorch,tensorflow` | Framework(s) the adapter reads |
+| `org.landseer.target_framework` | `tensorflow,pytorch` | Framework(s) the adapter writes |
+
 **Dataset loader** (`org.landseer.type=dataset`)
 
 | Label | Example | Meaning |
