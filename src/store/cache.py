@@ -13,7 +13,6 @@ Cache operations:
 """
 
 import os
-import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -21,6 +20,7 @@ from typing import Any, Dict, List, Optional
 from ..common import get_logger
 from .minio_store import MinioStore, MinioConfig
 from .artifact_manager import ArtifactManager, ArtifactInfo
+from .local_lru import GB
 
 logger = get_logger(__name__)
 
@@ -30,8 +30,10 @@ class CacheConfig:
     Two-level cache configuration.
     
     Env:
-    - LANDSEER_CACHE_DIR: Local staging directory (cleared after MinIO upload)
-    - LANDSEER_CACHE_MAX_SIZE_GB: Max local size before LRU eviction
+    - LANDSEER_CACHE_DIR: Local cache directory
+    - LANDSEER_CACHE_MAX_SIZE_GB: Local cap; least recently used entries are
+      evicted past it (default: min(500 GB, 40% of the cache filesystem))
+    - LANDSEER_CACHE_KEEP_LOCAL: Keep entries locally after upload (default 1)
     """
     local_cache_dir: Path = field(
         default_factory=lambda: Path(os.getenv(
@@ -39,14 +41,13 @@ class CacheConfig:
             "/data/landseer/cache"
         ))
     )
-    max_local_size_gb: float = field(
-        default_factory=lambda: float(os.getenv(
-            "LANDSEER_CACHE_MAX_SIZE_GB",
-            "50"
-        ))
+    # None -> local_lru.default_max_bytes (reads LANDSEER_CACHE_MAX_SIZE_GB)
+    max_local_size_gb: Optional[float] = None
+    keep_local: bool = field(
+        default_factory=lambda: os.getenv("LANDSEER_CACHE_KEEP_LOCAL", "1").lower()
+        not in ("0", "false", "no")
     )
     minio_config: Optional[MinioConfig] = None
-    eviction_threshold: float = 0.9
 
 
 class TwoLevelCache:
@@ -67,18 +68,24 @@ class TwoLevelCache:
         self.config = config or CacheConfig()
         
         minio_store = MinioStore(self.config.minio_config)
+        max_bytes = (
+            int(self.config.max_local_size_gb * GB)
+            if self.config.max_local_size_gb is not None
+            else None
+        )
         self.manager = ArtifactManager(
             local_cache_dir=self.config.local_cache_dir,
             minio_store=minio_store,
             use_minio=True,
+            max_local_bytes=max_bytes,
+            keep_local=self.config.keep_local,
         )
-        
-        # Track access times for LRU eviction
-        self._access_times: Dict[str, float] = {}
-        
+
         logger.info(
             f"Two-level cache initialized. "
-            f"Local: {self.config.local_cache_dir}, MinIO: enabled"
+            f"Local: {self.config.local_cache_dir} "
+            f"(cap {self.manager.lru.max_bytes / GB:.0f} GB, "
+            f"keep local: {self.config.keep_local}), MinIO: enabled"
         )
     
     # =========================================================================
@@ -98,15 +105,7 @@ class TwoLevelCache:
         Returns:
             Path to artifact output directory, or None if not found
         """
-        import time
-        
-        path = self.manager.get_artifact(cache_key)
-        
-        if path:
-            # Update access time
-            self._access_times[cache_key] = time.time()
-        
-        return path
+        return self.manager.get_artifact(cache_key)
     
     def put(
         self,
@@ -134,13 +133,8 @@ class TwoLevelCache:
         Returns:
             ArtifactInfo object
         """
-        import time
-        
-        # Check if eviction needed
-        self._maybe_evict()
-        
-        # Store artifact
-        info = self.manager.store_artifact(
+        # Eviction (if needed) happens inside the manager before the write.
+        return self.manager.store_artifact(
             cache_key=cache_key,
             source_dir=source_dir,
             task_id=task_id,
@@ -148,14 +142,6 @@ class TwoLevelCache:
             parent_hashes=parent_hashes,
             metadata=metadata,
         )
-        
-        # Track access time only while a local copy remains
-        if info.local_path is not None:
-            self._access_times[cache_key] = time.time()
-        else:
-            self._access_times.pop(cache_key, None)
-        
-        return info
     
     def exists(self, cache_key: str) -> bool:
         """
@@ -172,122 +158,43 @@ class TwoLevelCache:
     def invalidate(self, cache_key: str) -> bool:
         """
         Remove artifact from local cache.
-        
+
         Note: Does not remove from MinIO to allow other workers to use it.
-        
+
         Args:
             cache_key: Cache key to invalidate
-            
+
         Returns:
             True if removed
         """
-        local_path = self.manager.get_local_path(cache_key)
-        
-        if local_path.exists():
-            shutil.rmtree(local_path, ignore_errors=True)
-            self._access_times.pop(cache_key, None)
-            logger.debug(f"Invalidated local cache: {cache_key[:12]}")
-            return True
-        
-        return False
-    
+        return self.manager.delete_local(cache_key)
+
     # =========================================================================
     # Eviction
     # =========================================================================
-    
+
     def _get_local_size(self) -> int:
-        """Get current local cache size in bytes."""
-        total = 0
-        for cache_dir in self.config.local_cache_dir.iterdir():
-            if cache_dir.is_dir():
-                for f in cache_dir.rglob("*"):
-                    if f.is_file():
-                        total += f.stat().st_size
-        return total
-    
+        """Bytes held by complete local entries (datasets/ and staging dirs excluded)."""
+        return self.manager.lru.total_size()
+
     def _maybe_evict(self) -> int:
-        """
-        Evict old entries if cache is too full.
-        
-        Uses LRU eviction to remove least recently used entries.
-        
-        Returns:
-            Number of entries evicted
-        """
-        max_size = int(self.config.max_local_size_gb * 1024 * 1024 * 1024)
-        threshold = int(max_size * self.config.eviction_threshold)
-        
-        current_size = self._get_local_size()
-        
-        if current_size < threshold:
-            return 0
-        
-        logger.info(
-            f"Cache eviction triggered. "
-            f"Size: {self._format_size(current_size)} / {self._format_size(max_size)}"
-        )
-        
-        evicted = 0
-        target_size = int(max_size * 0.7)  # Evict down to 70%
-        
-        # Sort by access time (oldest first)
-        sorted_keys = sorted(
-            self._access_times.keys(),
-            key=lambda k: self._access_times.get(k, 0)
-        )
-        
-        for cache_key in sorted_keys:
-            if current_size <= target_size:
-                break
-            
-            local_path = self.manager.get_local_path(cache_key)
-            if not local_path.exists():
-                continue
-            
-            # Calculate size before removal
-            entry_size = sum(
-                f.stat().st_size
-                for f in local_path.rglob("*")
-                if f.is_file()
-            )
-            
-            # Ensure it's uploaded to MinIO before evicting
-            if not self.manager.minio_exists(cache_key):
-                self.manager.upload_to_minio(cache_key)
-            
-            # Remove local copy
-            shutil.rmtree(local_path, ignore_errors=True)
-            self._access_times.pop(cache_key, None)
-            
-            current_size -= entry_size
-            evicted += 1
-            logger.debug(f"Evicted: {cache_key[:12]}")
-        
-        logger.info(
-            f"Evicted {evicted} entries. "
-            f"New size: {self._format_size(current_size)}"
-        )
-        
-        return evicted
-    
+        """Evict least-recently-used entries if the local cache is over its cap."""
+        return len(self.manager.lru.ensure_space(can_evict=self.manager._durable))
+
     def clear_local(self) -> int:
         """
-        Clear all local cache entries.
-        
+        Clear all local cache entries (datasets/ is kept).
+
         Returns:
             Number of entries removed
         """
         removed = 0
-        
-        for cache_dir in self.config.local_cache_dir.iterdir():
-            if cache_dir.is_dir():
-                shutil.rmtree(cache_dir, ignore_errors=True)
+        for cache_key in self.manager.lru.entries():
+            if self.manager.delete_local(cache_key):
                 removed += 1
-        
-        self._access_times.clear()
         logger.info(f"Cleared local cache: {removed} entries")
         return removed
-    
+
     # =========================================================================
     # Pre-fetching
     # =========================================================================
@@ -341,8 +248,8 @@ class TwoLevelCache:
             "local": self.manager.get_local_stats(),
             "minio": self.manager.get_minio_stats(),
             "config": {
-                "max_local_size_gb": self.config.max_local_size_gb,
-                "eviction_threshold": self.config.eviction_threshold,
+                "max_local_size_gb": self.manager.lru.max_bytes / GB,
+                "keep_local": self.config.keep_local,
             }
         }
     

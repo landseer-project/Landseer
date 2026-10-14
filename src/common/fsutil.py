@@ -7,12 +7,14 @@ permission failures fall back to ``shutil.copy2``.
 
 from __future__ import annotations
 
+import contextlib
 import errno
 import filecmp
 import os
 import shutil
+import stat
 from pathlib import Path
-from typing import Union
+from typing import Dict, Union
 
 from .pylogger import get_logger
 
@@ -148,3 +150,96 @@ def link_identical_output_to_input(output_dir: PathLike, input_dir: PathLike) ->
                 )
             else:
                 raise
+
+# ---------------------------------------------------------------------------
+# Cheap tree copies for the artifact cache
+# ---------------------------------------------------------------------------
+
+_FICLONE = 0x40049409  # Linux copy-on-write clone ioctl
+_LINK_FALLBACK_ERRNOS = (errno.EXDEV, errno.EPERM, errno.EACCES, errno.EMLINK)
+_REFLINK_FALLBACK_ERRNOS = _LINK_FALLBACK_ERRNOS + (
+    errno.EOPNOTSUPP, errno.ENOTTY, errno.EINVAL, errno.ENOSYS,
+)
+_WRITE_BITS = stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH
+_copy_fallback_logged = False
+
+
+def _reflink(src: Path, dst: Path) -> bool:
+    """Copy-on-write clone ``src`` to ``dst``; False if unsupported."""
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover - non-POSIX
+        return False
+    try:
+        with open(src, "rb") as fsrc, open(dst, "wb") as fdst:
+            fcntl.ioctl(fdst.fileno(), _FICLONE, fsrc.fileno())
+    except OSError as exc:
+        with contextlib.suppress(OSError):
+            dst.unlink()
+        if exc.errno in _REFLINK_FALLBACK_ERRNOS:
+            return False
+        raise
+    shutil.copystat(src, dst)
+    return True
+
+
+def clone_file(src: PathLike, dst: PathLike) -> str:
+    """Copy via reflink, else hard link, else bytes; return the method used."""
+    global _copy_fallback_logged
+    src, dst = Path(src), Path(dst)
+    if _reflink(src, dst):
+        return "reflink"
+    try:
+        os.link(src, dst)
+        return "hardlink"
+    except OSError as exc:
+        if exc.errno not in _LINK_FALLBACK_ERRNOS:
+            raise
+        if not _copy_fallback_logged:
+            logger.warning(
+                "Cannot reflink or hard-link %s -> %s (%s); falling back to full copies",
+                src.parent, dst.parent, os.strerror(exc.errno),
+            )
+            _copy_fallback_logged = True
+    shutil.copy2(src, dst)
+    return "copy"
+
+
+def clone_tree(src: PathLike, dst: PathLike) -> Dict[str, int]:
+    """Copy a tree with :func:`clone_file`; return a count per method used."""
+    counts: Dict[str, int] = {}
+
+    def _copy(s: str, d: str) -> str:
+        method = clone_file(s, d)
+        counts[method] = counts.get(method, 0) + 1
+        return d
+
+    shutil.copytree(src, dst, symlinks=True, copy_function=_copy)
+    return counts
+
+
+def same_filesystem(a: PathLike, b: PathLike) -> bool:
+    """True when both paths (or their nearest existing parents) share a device."""
+
+    def _dev(p: Path) -> int:
+        while not p.exists() and p != p.parent:
+            p = p.parent
+        return p.stat().st_dev
+
+    try:
+        return _dev(Path(a)) == _dev(Path(b))
+    except OSError:
+        return False
+
+
+def make_tree_read_only(root: PathLike) -> None:
+    """Remove write permission from every regular file under ``root``."""
+    for dirpath, _, filenames in os.walk(root):
+        for name in filenames:
+            path = os.path.join(dirpath, name)
+            try:
+                mode = os.lstat(path).st_mode
+                if stat.S_ISREG(mode) and mode & _WRITE_BITS:
+                    os.chmod(path, mode & ~_WRITE_BITS)
+            except OSError:
+                pass

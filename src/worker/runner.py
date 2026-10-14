@@ -16,7 +16,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from ..common import get_logger
 from ..common.fsutil import (
@@ -25,9 +25,6 @@ from ..common.fsutil import (
     mirror_tree_link_or_copy,
 )
 from .client import TaskInfo
-
-if TYPE_CHECKING:
-    from .db import ArtifactCacheDB
 
 logger = get_logger(__name__)
 
@@ -731,15 +728,14 @@ class TaskRunner:
             return
         self._last_prune_ts = now
 
+        # Only task workspaces are pruned by age. The local artifact cache is
+        # managed by its size cap (src/store/local_lru.py), so
+        # LANDSEER_CACHE_RETENTION_HOURS is no longer used.
         workspace_retention_h = int(os.environ.get("LANDSEER_WORKSPACE_RETENTION_HOURS", "24"))
-        cache_retention_h = int(os.environ.get("LANDSEER_CACHE_RETENTION_HOURS", "72"))
         workspace_cutoff = now - (workspace_retention_h * 3600)
-        cache_cutoff = now - (cache_retention_h * 3600)
 
         reclaimed_workspace = 0
-        reclaimed_cache = 0
         removed_workspace = 0
-        removed_cache = 0
 
         # Prune stale task directories in workspace.
         for p in self.workspace_dir.glob("task_*"):
@@ -755,23 +751,6 @@ class TaskRunner:
                 removed_workspace += 1
             except Exception:
                 continue
-
-        # Prune stale local cache entries.
-        if self.artifact_cache_dir and self.artifact_cache_dir.exists():
-            for p in self.artifact_cache_dir.iterdir():
-                try:
-                    st = p.stat()
-                    if st.st_mtime >= cache_cutoff:
-                        continue
-                    size = self._dir_size_bytes(p) if p.is_dir() else p.stat().st_size
-                    if p.is_dir():
-                        shutil.rmtree(p, ignore_errors=True)
-                    else:
-                        p.unlink(missing_ok=True)
-                    reclaimed_cache += size
-                    removed_cache += 1
-                except Exception:
-                    continue
 
     @staticmethod
     def _dir_size_bytes(path: Path) -> int:
@@ -1331,53 +1310,3 @@ class TaskRunner:
             
             self._write_task_log(task_dir, task, result, docker_command=None)
             return result
-    
-    def run_task_with_cache(
-        self,
-        task: TaskInfo,
-        cache_db: "ArtifactCacheDB",
-        input_path: Optional[Path] = None,
-        env: Optional[Dict[str, str]] = None,
-        parent_hashes: Optional[List[str]] = None
-    ) -> ExecutionResult:
-        """
-        Execute a task with artifact caching.
-        
-        Checks cache before execution and stores results after successful execution.
-        
-        Args:
-            task: Task to execute
-            cache_db: Artifact cache database
-            input_path: Path to input data
-            env: Additional environment variables
-            parent_hashes: Parent artifact hashes for cache key computation
-            
-        Returns:
-            ExecutionResult with execution details
-        """
-        # Compute cache key
-        cache_key = cache_db.compute_task_hash(task, parent_hashes or [])
-        
-        # Check cache
-        cached_path = cache_db.get_cached_artifact(cache_key)
-        if cached_path and cached_path.exists():
-            logger.info(f"Cache hit for task {task.id}: {cache_key[:12]}")
-            return ExecutionResult(
-                success=True,
-                exit_code=0,
-                execution_time_ms=0,
-                output_path=cached_path,
-                artifacts={"cache_hit": True, "cache_key": cache_key}
-            )
-        
-        # Cache miss - execute task
-        logger.info(f"Cache miss for task {task.id}: {cache_key[:12]}")
-        result = self.run_task(task, input_path, env)
-        
-        # Store in cache if successful
-        if result.success and result.output_path:
-            cache_db.store_artifact(cache_key, result.output_path, task)
-            result.artifacts["cache_key"] = cache_key
-            result.artifacts["cache_hit"] = False
-        
-        return result

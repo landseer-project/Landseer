@@ -9,15 +9,24 @@ Provides high-level interface for:
 
 import hashlib
 import json
+import os
 import shutil
+import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 from ..common import get_logger
-from ..common.fsutil import copytree_with_optional_hardlinks
-from .minio_store import MinioStore, MinioConfig
+from ..common.fsutil import clone_tree, make_tree_read_only
+from .local_lru import LocalLRU
+from .minio_store import (
+    ARTIFACT_COMPLETE_MARKER,
+    ARTIFACT_MANIFEST,
+    MinioStore,
+    MinioConfig,
+)
 
 logger = get_logger(__name__)
 
@@ -65,17 +74,23 @@ class ArtifactManager:
         local_cache_dir: Path,
         minio_store: Optional[MinioStore] = None,
         use_minio: bool = True,
+        max_local_bytes: Optional[int] = None,
+        keep_local: bool = True,
     ):
         """
         Initialize artifact manager.
-        
+
         Args:
             local_cache_dir: Directory for local artifact cache
             minio_store: MinIO store instance (creates new if not provided)
             use_minio: Whether to use MinIO for remote storage
+            max_local_bytes: Local cache cap (default: see local_lru.default_max_bytes)
+            keep_local: Keep entries locally after upload, evicting LRU past the cap
         """
         self.local_cache_dir = Path(local_cache_dir)
         self.local_cache_dir.mkdir(parents=True, exist_ok=True)
+        self.lru = LocalLRU(self.local_cache_dir, max_bytes=max_local_bytes)
+        self.keep_local = keep_local
         
         self.use_minio = use_minio
         if use_minio:
@@ -147,9 +162,101 @@ class ArtifactManager:
             Path to local artifact directory, or None if not found
         """
         if self.local_exists(cache_key):
+            self.lru.touch(cache_key)
             return self.get_local_path(cache_key) / "output"
         return None
-    
+
+    @contextmanager
+    def _entry_lock(self, cache_key: str) -> Iterator[None]:
+        """Serialize writers of one cache entry on this host (flock).
+
+        Eviction takes the same lock, so an entry being written or read here
+        is never removed underneath us.
+        """
+        with self.lru.entry_lock(cache_key):
+            yield
+
+    def _durable(self, cache_key: str) -> bool:
+        """Safe to drop locally: a complete copy is in MinIO (uploading it if needed)."""
+        if not self.use_minio:
+            return True
+        return self.minio_exists(cache_key) or self.upload_to_minio(cache_key)
+
+    def _make_room(self, incoming_bytes: int, protect: Optional[str] = None) -> None:
+        """Evict least-recently-used local entries if this write would pass the cap."""
+        try:
+            self.lru.ensure_space(incoming_bytes, can_evict=self._durable, protect=protect)
+        except Exception as e:
+            logger.warning(f"Local cache eviction failed: {e}")
+
+    def should_keep_local(self, cache_key: str) -> bool:
+        """Keep this entry on local disk after use (False if keep-local is off or it exceeds the cap)."""
+        return self.keep_local and self.lru.fits(self.lru.entry_size(cache_key))
+
+    def _staging_dir(self, cache_key: str) -> Path:
+        """Private temp dir next to the final entry (same filesystem, so rename is atomic)."""
+        return self.local_cache_dir / f".tmp-{cache_key}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+
+    def _publish_local(self, staging: Path, cache_key: str) -> Path:
+        """Move a fully written staging dir into place as the final entry."""
+        final = self.get_local_path(cache_key)
+        if final.exists() and (final / ".success").exists():
+            # A complete copy is already published; keep it.
+            shutil.rmtree(staging, ignore_errors=True)
+            return final
+        if final.exists():
+            shutil.rmtree(final, ignore_errors=True)
+        os.replace(staging, final)
+        return final
+
+    @staticmethod
+    def _list_files(root: Path) -> Dict[str, int]:
+        """Map of posix relative path -> size for every regular file under root."""
+        if not root.is_dir():
+            return {}
+        return {
+            p.relative_to(root).as_posix(): p.stat().st_size
+            for p in root.rglob("*")
+            if p.is_file()
+        }
+
+    @staticmethod
+    def _sha256_file(path: Path) -> str:
+        digest = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    @classmethod
+    def _describe_files(cls, root: Path) -> Dict[str, Dict[str, Any]]:
+        """Map of posix relative path -> {size, sha256} for every regular file under root."""
+        return {
+            rel: {"size": size, "sha256": cls._sha256_file(root / rel)}
+            for rel, size in cls._list_files(root).items()
+        }
+
+    @classmethod
+    def _mismatched_files(
+        cls, root: Path, expected: Dict[str, Dict[str, Any]]
+    ) -> Dict[str, List[str]]:
+        """Compare files under root with the marker's list; empty lists mean a match."""
+        actual = cls._list_files(root)
+        size_mismatch, hash_mismatch = [], []
+        for rel, exp in expected.items():
+            if rel not in actual:
+                continue
+            if actual[rel] != exp["size"]:
+                size_mismatch.append(rel)
+            elif "sha256" in exp and cls._sha256_file(root / rel) != exp["sha256"]:
+                hash_mismatch.append(rel)
+        return {
+            "missing": sorted(set(expected) - set(actual)),
+            "unexpected": sorted(set(actual) - set(expected)),
+            "size_mismatch": sorted(size_mismatch),
+            "sha256_mismatch": sorted(hash_mismatch),
+        }
+
     def store_local(
         self,
         cache_key: str,
@@ -161,7 +268,10 @@ class ArtifactManager:
     ) -> ArtifactInfo:
         """
         Store artifact in local cache.
-        
+
+        Files are written to a private staging dir and renamed into place, so
+        readers never see a half-written entry.
+
         Args:
             cache_key: Cache key for the artifact
             source_dir: Directory containing output files
@@ -169,42 +279,50 @@ class ArtifactManager:
             tool_name: Tool name
             parent_hashes: Parent artifact hashes
             metadata: Additional metadata
-            
+
         Returns:
             ArtifactInfo object
         """
-        cache_dir = self.get_local_path(cache_key)
-        output_dir = cache_dir / "output"
-        
-        # Create directory
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Store files. Use hardlinks only when the hardlink macro is enabled.
-        if source_dir.exists():
-            if output_dir.exists():
-                shutil.rmtree(output_dir)
-            copytree_with_optional_hardlinks(source_dir, output_dir)
-        else:
-            output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Calculate size
-        size = sum(f.stat().st_size for f in output_dir.rglob("*") if f.is_file())
-        
-        # Write manifest
-        manifest = {
-            "cache_key": cache_key,
-            "task_id": task_id,
-            "tool_name": tool_name,
-            "parent_hashes": parent_hashes or [],
-            "created_at": datetime.utcnow().isoformat(),
-            "size_bytes": size,
-            "metadata": metadata or {}
-        }
-        (cache_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
-        
-        # Mark as complete
-        (cache_dir / ".success").touch()
-        
+        incoming = sum(self._list_files(source_dir).values()) if source_dir.exists() else 0
+        self._make_room(incoming, protect=cache_key)
+
+        with self._entry_lock(cache_key):
+            staging = self._staging_dir(cache_key)
+            try:
+                staging_output = staging / "output"
+                staging.mkdir(parents=True)
+                # Reflink, else hard-link, else copy: no second full write of
+                # the output when the filesystem allows it.
+                if source_dir.exists():
+                    clone_tree(source_dir, staging_output)
+                else:
+                    staging_output.mkdir(parents=True, exist_ok=True)
+
+                files = self._list_files(staging_output)
+                size = sum(files.values())
+
+                manifest = {
+                    "cache_key": cache_key,
+                    "task_id": task_id,
+                    "tool_name": tool_name,
+                    "parent_hashes": parent_hashes or [],
+                    "created_at": datetime.utcnow().isoformat(),
+                    "size_bytes": size,
+                    "files": files,
+                    "metadata": metadata or {}
+                }
+                (staging / ARTIFACT_MANIFEST).write_text(json.dumps(manifest, indent=2))
+                # Read-only so an in-place edit through a hard link fails
+                # instead of silently changing the cached copy.
+                make_tree_read_only(staging_output)
+                (staging / ".success").touch()
+                final = self._publish_local(staging, cache_key)
+                self.lru.touch(cache_key)
+            except BaseException:
+                shutil.rmtree(staging, ignore_errors=True)
+                raise
+        output_dir = final / "output"
+
         # Create info
         info = ArtifactInfo(
             cache_key=cache_key,
@@ -216,11 +334,11 @@ class ArtifactManager:
             parent_hashes=parent_hashes or [],
             metadata=metadata or {}
         )
-        
+
         self._artifacts[cache_key] = info
         logger.debug(f"Stored artifact locally: {cache_key[:12]}")
         return info
-    
+
     # =========================================================================
     # MinIO Operations
     # =========================================================================
@@ -258,30 +376,49 @@ class ArtifactManager:
             logger.error(f"Source directory not found: {source_dir}")
             return False
         
-        # Upload directory
+        # Upload all files, then the manifest, then the completion marker
+        # LAST: artifact_exists() only reports a hit once the marker is there,
+        # so a crash mid-upload leaves a miss rather than a truncated hit.
         prefix = self.minio.get_artifact_key(cache_key)
+        files = self._describe_files(source_dir)
         count = self.minio.upload_directory(source_dir, prefix)
-        
-        # Upload manifest if exists
-        manifest_path = source_dir.parent / "manifest.json"
-        if manifest_path.exists():
-            self.minio.upload_file(
-                manifest_path,
-                f"{prefix}manifest.json",
-                content_type="application/json"
+        if count != len(files):
+            logger.error(
+                f"Uploaded {count}/{len(files)} files for {cache_key[:12]}; "
+                "not marking artifact complete"
             )
-        
-        if count > 0:
-            # Update artifact info
-            if cache_key in self._artifacts:
-                self._artifacts[cache_key].storage_type = "both"
-                self._artifacts[cache_key].minio_key = prefix
-            
-            logger.info(f"Uploaded artifact to MinIO: {cache_key[:12]} ({count} files)")
-            return True
-        
-        return False
-    
+            return False
+
+        manifest_path = source_dir.parent / ARTIFACT_MANIFEST
+        if manifest_path.exists():
+            if not self.minio.upload_file(
+                manifest_path,
+                f"{prefix}{ARTIFACT_MANIFEST}",
+                content_type="application/json"
+            ):
+                logger.error(f"Failed to upload manifest for {cache_key[:12]}")
+                return False
+
+        marker = {
+            "cache_key": cache_key,
+            "files": files,
+            "completed_at": datetime.utcnow().isoformat(),
+        }
+        if not self.minio.upload_bytes(
+            json.dumps(marker, sort_keys=True).encode(),
+            f"{prefix}{ARTIFACT_COMPLETE_MARKER}",
+            content_type="application/json",
+        ):
+            logger.error(f"Failed to upload completion marker for {cache_key[:12]}")
+            return False
+
+        if cache_key in self._artifacts:
+            self._artifacts[cache_key].storage_type = "both"
+            self._artifacts[cache_key].minio_key = prefix
+
+        logger.info(f"Uploaded artifact to MinIO: {cache_key[:12]} ({count} files)")
+        return True
+
     def download_from_minio(self, cache_key: str) -> Optional[Path]:
         """
         Download artifact from MinIO to local cache.
@@ -298,22 +435,89 @@ class ArtifactManager:
         if not self.minio_exists(cache_key):
             return None
         
-        # Download to local cache
-        cache_dir = self.get_local_path(cache_key)
-        output_dir = cache_dir / "output"
-        
         prefix = self.minio.get_artifact_key(cache_key)
-        count = self.minio.download_directory(prefix, output_dir)
-        
-        if count > 0:
-            # Mark as complete
-            (cache_dir / ".success").touch()
-            
-            logger.info(f"Downloaded artifact from MinIO: {cache_key[:12]} ({count} files)")
-            return output_dir
-        
-        return None
-    
+        expected = self._expected_files(prefix)
+        incoming = sum(e["size"] for e in expected.values()) if expected else 0
+        self._make_room(incoming, protect=cache_key)
+
+        with self._entry_lock(cache_key):
+            if self.local_exists(cache_key):
+                self.lru.touch(cache_key)
+                return self.get_local_path(cache_key) / "output"
+
+            staging = self._staging_dir(cache_key)
+            staging_output = staging / "output"
+            try:
+                staging_output.mkdir(parents=True)
+                count = 0
+                for obj in self.minio.list_objects(prefix, recursive=True):
+                    if obj.is_dir:
+                        continue
+                    rel = obj.object_name[len(prefix):].lstrip("/")
+                    if not rel or rel == ARTIFACT_COMPLETE_MARKER:
+                        continue
+                    if rel == ARTIFACT_MANIFEST:
+                        dest = staging / ARTIFACT_MANIFEST
+                    else:
+                        dest = staging_output / rel
+                    if not self.minio.download_file(obj.object_name, dest):
+                        raise RuntimeError(f"failed to download {obj.object_name}")
+                    count += 1
+                    # A tool output named manifest.json shares its object key
+                    # with the cache manifest; keep a copy in output as well.
+                    if rel == ARTIFACT_MANIFEST and expected and ARTIFACT_MANIFEST in expected:
+                        shutil.copy2(dest, staging_output / ARTIFACT_MANIFEST)
+
+                if expected is not None:
+                    mismatch = self._mismatched_files(staging_output, expected)
+                    if any(mismatch.values()):
+                        details = ", ".join(f"{k}={v[:5]}" for k, v in mismatch.items() if v)
+                        raise RuntimeError(
+                            f"downloaded files do not match completion marker ({details})"
+                        )
+                elif not self._list_files(staging_output):
+                    raise RuntimeError("legacy artifact has no output files")
+
+                make_tree_read_only(staging_output)
+                (staging / ".success").touch()
+                final = self._publish_local(staging, cache_key)
+                self.lru.touch(cache_key)
+            except Exception as e:
+                shutil.rmtree(staging, ignore_errors=True)
+                logger.warning(f"Download of artifact {cache_key[:12]} from MinIO failed: {e}")
+                return None
+
+        logger.info(f"Downloaded artifact from MinIO: {cache_key[:12]} ({count} files)")
+        return final / "output"
+
+    def _expected_files(self, prefix: str) -> Optional[Dict[str, Dict[str, Any]]]:
+        """
+        File list from the completion marker, or None for legacy entries.
+
+        Each entry is ``{"size": int, "sha256": str}``. Markers written before
+        checksums were added store only the size, so ``sha256`` may be absent.
+        """
+        marker_key = f"{prefix}{ARTIFACT_COMPLETE_MARKER}"
+        if not self.minio.exists(marker_key):
+            return None
+        raw = self.minio.download_bytes(marker_key)
+        if raw is None:
+            return None
+        try:
+            files = json.loads(raw).get("files")
+        except (ValueError, AttributeError):
+            return None
+        if not isinstance(files, dict):
+            return None
+        expected: Dict[str, Dict[str, Any]] = {}
+        for rel, entry in files.items():
+            if not isinstance(entry, dict):
+                entry = {"size": entry}
+            expected[str(rel)] = {"size": int(entry["size"])}
+            if entry.get("sha256"):
+                expected[str(rel)]["sha256"] = str(entry["sha256"])
+        return expected
+
     # =========================================================================
     # High-Level Operations
     # =========================================================================
@@ -390,10 +594,14 @@ class ArtifactManager:
                     f"Failed to upload artifact {cache_key[:12]} to MinIO/GCS"
                 )
             info.minio_key = self.minio.get_artifact_key(cache_key)
-            # Durable copy is remote; free local disk immediately.
-            self.delete_local(cache_key)
-            info.storage_type = "minio"
-            info.local_path = None
+            if self.should_keep_local(cache_key):
+                # Keep for local hits; LRU eviction frees it when space is needed.
+                info.storage_type = "both"
+            else:
+                # Keep-local is off, or the entry alone exceeds the local cap.
+                self.delete_local(cache_key)
+                info.storage_type = "minio"
+                info.local_path = None
         
         return info
 
@@ -403,9 +611,10 @@ class ArtifactManager:
         if not local_path.exists():
             self._artifacts.pop(cache_key, None)
             return False
-        shutil.rmtree(local_path, ignore_errors=True)
+        with self._entry_lock(cache_key):
+            shutil.rmtree(local_path, ignore_errors=True)
         self._artifacts.pop(cache_key, None)
-        logger.debug(f"Dropped local cache after remote upload: {cache_key[:12]}")
+        logger.debug(f"Dropped local cache entry: {cache_key[:12]}")
         return True
     
     def artifact_exists(self, cache_key: str) -> bool:

@@ -16,6 +16,12 @@ from ..common import get_logger
 
 logger = get_logger(__name__)
 
+# Uploaded last by ArtifactManager.upload_to_minio; its presence means every
+# file of the artifact is in the bucket. Lists the files and their sizes.
+ARTIFACT_COMPLETE_MARKER = ".landseer_complete.json"
+# Legacy entries (before the marker existed) uploaded manifest.json last.
+ARTIFACT_MANIFEST = "manifest.json"
+
 # Try to import minio, but don't fail if not installed
 try:
     from minio import Minio
@@ -540,18 +546,21 @@ class MinioStore:
     
     def artifact_exists(self, cache_key: str) -> bool:
         """
-        Check if an artifact with the given cache key exists.
-        
+        Check if a complete artifact with the given cache key exists.
+
+        An artifact counts as present only once its completion marker was
+        uploaded (or, for legacy entries, its manifest.json). A partially
+        uploaded prefix is treated as missing.
+
         Args:
             cache_key: Artifact cache key/hash
-            
+
         Returns:
             True if artifact exists
         """
-        prefix = self.get_artifact_key(cache_key)
-        for _ in self.list_objects(prefix):
-            return True
-        return False
+        return self.exists(
+            self.get_artifact_key(cache_key, ARTIFACT_COMPLETE_MARKER)
+        ) or self.exists(self.get_artifact_key(cache_key, ARTIFACT_MANIFEST))
 
 
 # Global store instance

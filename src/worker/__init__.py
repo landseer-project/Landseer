@@ -8,7 +8,6 @@ tasks, execute them in containers, and report results.
 Components:
 - client: HTTP client for backend API communication
 - runner: Task execution with container support (Docker/Apptainer)
-- db: Artifact cache handling for result reuse
 - cli: Command-line interface and Worker class
 
 Usage:
@@ -29,11 +28,6 @@ from .client import (
     TaskInfo,
     WorkerInfo,
 )
-from .db import (
-    ArtifactCacheDB,
-    ArtifactMetadata,
-    CacheManager,
-)
 from .runner import (
     ContainerRuntime,
     DockerRunner,
@@ -53,10 +47,6 @@ __all__ = [
     "LandseerClient",
     "TaskInfo",
     "WorkerInfo",
-    # Cache
-    "ArtifactCacheDB",
-    "ArtifactMetadata",
-    "CacheManager",
     # Runner
     "ContainerRuntime",
     "DockerRunner",

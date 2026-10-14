@@ -15,6 +15,15 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+_MANIFEST_ACCEPT = ", ".join(
+    (
+        "application/vnd.oci.image.index.v1+json",
+        "application/vnd.docker.distribution.manifest.list.v2+json",
+        "application/vnd.oci.image.manifest.v1+json",
+        "application/vnd.docker.distribution.manifest.v2+json",
+    )
+)
+
 
 def _labels_via_docker_inspect(image: str, timeout_s: float = 30.0) -> Optional[Dict[str, str]]:
     try:
@@ -70,10 +79,7 @@ def _labels_via_registry_http(image: str) -> Dict[str, str]:
             token = token_resp.json().get("token")
         headers = {
             "Authorization": f"Bearer {token}",
-            "Accept": (
-                "application/vnd.oci.image.manifest.v1+json, "
-                "application/vnd.docker.distribution.manifest.v2+json"
-            ),
+            "Accept": _MANIFEST_ACCEPT,
         }
     elif path.startswith("docker.io/") or "/" not in path:
         registry = "registry-1.docker.io"
@@ -86,26 +92,43 @@ def _labels_via_registry_http(image: str) -> Dict[str, str]:
         token = token_resp.json()["token"]
         headers = {
             "Authorization": f"Bearer {token}",
-            "Accept": (
-                "application/vnd.oci.image.manifest.v1+json, "
-                "application/vnd.docker.distribution.manifest.v2+json"
-            ),
+            "Accept": _MANIFEST_ACCEPT,
         }
     else:
         raise ValueError(f"Unsupported registry for remote label fetch: {image}")
 
     manifest_url = f"https://{registry}/v2/{repo}/manifests/{tag}"
-    with httpx.Client(timeout=60.0) as client:
+    with httpx.Client(timeout=60.0, follow_redirects=True) as client:
         manifest_resp = client.get(manifest_url, headers=headers)
         manifest_resp.raise_for_status()
         manifest: Dict[str, Any] = manifest_resp.json()
+        if "manifests" in manifest:
+            # Multi-platform index (buildx default): labels live on the
+            # per-platform manifest's config, so pick linux/amd64.
+            entries = manifest["manifests"]
+            chosen = next(
+                (
+                    m
+                    for m in entries
+                    if (m.get("platform") or {}).get("os") == "linux"
+                    and (m.get("platform") or {}).get("architecture") == "amd64"
+                ),
+                entries[0] if entries else None,
+            )
+            if chosen is None:
+                raise ValueError("Image index has no manifests.")
+            manifest_resp = client.get(
+                f"https://{registry}/v2/{repo}/manifests/{chosen['digest']}", headers=headers
+            )
+            manifest_resp.raise_for_status()
+            manifest = manifest_resp.json()
 
     if "config" not in manifest:
         raise ValueError("Image manifest does not contain 'config'.")
 
     config_digest = manifest["config"]["digest"]
     config_url = f"https://{registry}/v2/{repo}/blobs/{config_digest}"
-    with httpx.Client(timeout=60.0) as client:
+    with httpx.Client(timeout=60.0, follow_redirects=True) as client:
         config_resp = client.get(config_url, headers={"Authorization": f"Bearer {token}"})
         config_resp.raise_for_status()
         cfg = config_resp.json()

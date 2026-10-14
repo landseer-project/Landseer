@@ -2,7 +2,8 @@
 Validate that each pipeline stage only lists tools whose declared stage matches.
 
 Uses ``defense_stage`` / ``stage`` from ``tools.yaml`` and/or OCI image labels
-(``org.opencontainers.image.stage``, ``org.opencontainers.image.defense_stage``).
+(``org.landseer.stage``, or the legacy ``org.opencontainers.image.stage`` /
+``org.opencontainers.image.defense_stage``).
 There is **no** inference from tool id prefixes — explicit YAML or image labels only.
 
 When no stage information is available for a tool, validation is skipped for that
@@ -16,6 +17,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from .container_labels import get_container_labels_for_image
+from .image_labels import stage_label
 from .tools import ToolDefinition, load_tools_from_yaml
 
 logger = logging.getLogger(__name__)
@@ -73,9 +75,7 @@ def _effective_stage_label(
 ) -> Optional[str]:
     if tool_def.defense_stage:
         return tool_def.defense_stage.strip().lower()
-    raw = labels.get("org.opencontainers.image.stage") or labels.get(
-        "org.opencontainers.image.defense_stage"
-    )
+    raw = stage_label(labels)
     if raw:
         return str(raw).strip().lower()
     return None

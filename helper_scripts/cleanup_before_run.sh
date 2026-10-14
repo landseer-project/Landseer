@@ -233,12 +233,13 @@ echo -e "${GREEN}✅ Cleanup Complete!${NC}"
 echo "================================================"
 echo ""
 echo "You can now safely run Landseer:"
-echo -e "${BLUE}  poetry run python -m landseer_pipeline.main -c <config> -a <attack>${NC}"
+echo -e "${BLUE}  uv run landseer-backend --config <config>${NC}"
+echo -e "${BLUE}  uv run landseer-worker --gpu 0${NC}"
 echo ""
 
 # Optional: Auto-run check
-if [ "$1" == "--auto-run" ] && [ -n "$2" ] && [ -n "$3" ]; then
-    echo "Auto-running Landseer with provided config..."
+if [ "$1" == "--auto-run" ] && [ -n "${2:-}" ]; then
+    echo "Auto-running Landseer backend with provided config..."
     echo ""
-    poetry run python -m landseer_pipeline.main -c "$2" -a "$3"
+    uv run landseer-backend --config "$2"
 fi

@@ -211,19 +211,16 @@ async def start_pipeline_run(
                                 dir_suffix = Path(ds_info.output_dir).name
                                 dataset_key = f"datasets/{cfg.dataset.name}/{dir_suffix}"
                                 try:
-                                    marker = f"{dataset_key}/data.npy"
-                                    if ctx.store.exists(marker):
-                                        ctx.dataset_info["minio_key"] = dataset_key
-                                        logger.info(
-                                            f"Dataset already in MinIO ({marker}), skipping upload"
-                                        )
-                                    else:
-                                        t_upload_start = time.time()
-                                        ctx.store.upload_directory(ds_info.output_dir, dataset_key)
-                                        ctx.dataset_info["minio_key"] = dataset_key
-                                        logger.info(
-                                            f"Dataset uploaded to MinIO in {time.time() - t_upload_start:.1f}s: {dataset_key}"
-                                        )
+                                    from src.backend.dataset_publish import publish_dataset
+
+                                    # Skips the upload when MinIO already has a
+                                    # manifest with the same content_id.
+                                    t_upload_start = time.time()
+                                    if not publish_dataset(ctx.store, ctx.dataset_info, dataset_key):
+                                        raise RuntimeError(f"dataset upload to {dataset_key} incomplete")
+                                    logger.info(
+                                        f"Dataset available in MinIO after {time.time() - t_upload_start:.1f}s: {dataset_key}"
+                                    )
 
                                     model_script = (
                                         getattr(cfg.model, "script", None) if cfg and cfg.model else None

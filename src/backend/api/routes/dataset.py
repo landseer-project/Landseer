@@ -2,14 +2,35 @@
 from __future__ import annotations
 from src.backend.api.models import DatasetInfoResponse
 
+from pathlib import Path
+from typing import Any, Dict, Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 
 from src.common import get_logger
+from src.common import dataset_manifest as dsm
 from src.backend.initialization import get_backend_context
 from src.backend.api.state import SchedulerState, get_scheduler_state
 
 logger = get_logger(__name__)
 router = APIRouter()
+
+
+def _manifest_summary(ds_info: Dict[str, Any]) -> Dict[str, Any]:
+    """content_id/provenance from dataset info, else from the manifest file on disk."""
+    if ds_info.get("content_id"):
+        return {
+            "content_id": ds_info.get("content_id"),
+            "provenance_id": ds_info.get("provenance_id"),
+            "provenance": ds_info.get("provenance"),
+            "file_count": ds_info.get("file_count"),
+            "total_bytes": ds_info.get("total_bytes"),
+        }
+    out_dir = ds_info.get("output_dir")
+    manifest = dsm.load_manifest(out_dir) if out_dir else None
+    return dsm.summarize(manifest) if manifest else {}
+
 
 @router.get("/dataset", response_model=DatasetInfoResponse, tags=["Dataset"])
 async def get_dataset_info(state: SchedulerState = Depends(get_scheduler_state)):
@@ -61,6 +82,8 @@ async def get_dataset_info(state: SchedulerState = Depends(get_scheduler_state))
     if context.pipeline and context.pipeline.model:
         model_script = context.pipeline.model.get("script")
     
+    summary = _manifest_summary(ds_info)
+
     return DatasetInfoResponse(
         available=True,
         name=ds_info.get("name"),
@@ -74,7 +97,29 @@ async def get_dataset_info(state: SchedulerState = Depends(get_scheduler_state))
         poisoning=ds_info.get("poisoning"),
         model_script=model_script,
         model_script_minio_key=ds_info.get("model_script_minio_key"),
+        content_id=summary.get("content_id"),
+        provenance_id=summary.get("provenance_id"),
+        provenance=summary.get("provenance"),
+        file_count=summary.get("file_count"),
+        total_bytes=summary.get("total_bytes"),
+        manifest_minio_key=ds_info.get("manifest_minio_key"),
     )
+
+
+@router.get("/dataset/manifest", tags=["Dataset"])
+async def get_dataset_manifest():
+    """
+    Full dataset_manifest.json (file list with sizes and sha256, content_id,
+    provenance) for the dataset the backend serves. Workers with a manual
+    LANDSEER_DATA_PATH verify their copy against it.
+    """
+    context = get_backend_context()
+    ds_info = (context.dataset_info if context else None) or {}
+    out_dir = ds_info.get("output_dir")
+    path = Path(out_dir) / dsm.MANIFEST_NAME if out_dir else None
+    if not path or not path.is_file():
+        raise HTTPException(status_code=404, detail="Dataset manifest not available")
+    return FileResponse(path, media_type="application/json")
 
 @router.get("/dataset/download-url", tags=["Dataset"])
 async def get_dataset_download_url(

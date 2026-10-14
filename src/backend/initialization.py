@@ -185,9 +185,10 @@ def initialize_backend(
                     dir_suffix = Path(ds_info.output_dir).name  # "clean" or "poisoned_<hash>"
                     dataset_key = f"datasets/{config.dataset.name}/{dir_suffix}"
                     try:
-                        store.upload_directory(ds_info.output_dir, dataset_key)
-                        dataset_info["minio_key"] = dataset_key
-                        logger.info(f"Dataset uploaded to MinIO: {dataset_key}")
+                        from .dataset_publish import publish_dataset
+
+                        if not publish_dataset(store, dataset_info, dataset_key):
+                            raise RuntimeError(f"dataset upload to {dataset_key} incomplete")
 
                         model_script = (
                             getattr(config.model, "script", None) if config and config.model else None

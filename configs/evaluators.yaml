@@ -1,5 +1,5 @@
-# Evaluator containers (merged on top of built-in defaults in code).
-# Built-ins always include all evaluators; override here for registry paths/tags.
+# Evaluator containers. This file is required: it is the only source of evaluator
+# definitions, and a missing or invalid file stops the pipeline from loading.
 # Published images: ghcr.io/landseer-project/evals/<name>:<tag>.
 # artifact_roots: optional host directories that contain evaluator sidecars.
 # Can be set globally (here) and/or per evaluator.

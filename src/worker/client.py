@@ -42,6 +42,9 @@ class TaskInfo:
     cache_key: Optional[str] = None
     output_path: Optional[str] = None
     log_path: Optional[str] = None
+    # Identity of the dataset this task's output was produced on (manifest content_id)
+    dataset_content_id: Optional[str] = None
+    dataset_provenance_id: Optional[str] = None
 
     @classmethod
     def from_api_response(cls, data: Dict[str, Any]) -> "TaskInfo":
@@ -67,7 +70,9 @@ class TaskInfo:
             run_id=data.get("run_id"),
             cache_key=data.get("cache_key"),
             output_path=data.get("output_path"),
-            log_path=data.get("log_path")
+            log_path=data.get("log_path"),
+            dataset_content_id=data.get("dataset_content_id"),
+            dataset_provenance_id=data.get("dataset_provenance_id"),
         )
 
 
@@ -279,6 +284,16 @@ class LandseerClient:
         except Exception as e:
             logger.warning(f"Failed to get dataset info: {e}")
             return {"available": False}
+
+    def get_dataset_manifest(self) -> Optional[Dict[str, Any]]:
+        """Full dataset_manifest.json from the backend, or None if it has none."""
+        try:
+            response = self._make_request("GET", "/dataset/manifest")
+            data = response.json()
+            return data if isinstance(data, dict) else None
+        except Exception as e:
+            logger.warning(f"Failed to get dataset manifest: {e}")
+            return None
     
     # =========================================================================
     # Worker Registration
