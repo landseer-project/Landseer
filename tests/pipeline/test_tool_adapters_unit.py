@@ -7,6 +7,7 @@ Tests cover:
 - ``framework`` field and the warning for non-standard tools without an output adapter
 - adapter_task_config and its injection into task config by TaskFactory
 - Task hash/dedup: adapters are part of a task's identity
+- The repository's configs/tools.yaml declares in_freeat with its adapters
 """
 
 import logging
@@ -23,6 +24,9 @@ from src.pipeline.tools import (
     adapter_task_config,
     load_tools_from_yaml,
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 TOOLS_WITH_ADAPTERS = """\
 adapters:
@@ -222,3 +226,18 @@ class TestTaskIdentity:
         b = TaskFactory.create_task(task_type=TaskType.IN_TRAINING, tool=_tf_tool(), config=dict(a.config))
         assert a.get_hash() == b.get_hash()
 
+
+class TestRepositoryToolsYaml:
+    def test_in_freeat_declares_adapters(self):
+        tools = load_tools_from_yaml(str(REPO_ROOT / "configs" / "tools.yaml"))
+        tool = tools["in_freeat"]
+        assert tool.defense_stage == "during_training"
+        assert tool.framework == "tensorflow"
+        assert tool.adapters.input.target_framework == "tensorflow"
+        assert tool.adapters.output.source_framework == "tensorflow"
+        assert tool.adapters.output.target_framework == "pytorch"
+
+    def test_existing_tools_have_no_adapters(self):
+        tools = load_tools_from_yaml(str(REPO_ROOT / "configs" / "tools.yaml"))
+        assert tools["in_trades"].adapters is None
+        assert adapter_task_config(tools["in_trades"]) == {}
