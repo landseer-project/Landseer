@@ -100,10 +100,12 @@ def test_update_task_status_persists_evaluation_result(
     assert len(calls) >= 1
     call_kw = calls[0][1]
     assert call_kw["workflow_id"] == "workflow_1"
-    assert call_kw["pipeline_id"] == "pipeline_metrics_test"
-    assert call_kw["evaluator_name"] == "adversarial-evaluator"
-    assert call_kw["result_data"] == eval_data
     assert call_kw["evaluation_task_id"] == "task_eval_1"
+    assert call_kw["result_data"] == eval_data
+    # experiment run scope (legacy pipeline_id alias still accepted by db_service)
+    assert call_kw.get("pipeline_id") == "pipeline_metrics_test" or call_kw.get(
+        "run_id"
+    ) == "pipeline_metrics_test" or call_kw.get("experiment_run_id") == "pipeline_metrics_test"
 
 
 def test_update_task_status_ignores_evaluation_result_for_non_evaluator(

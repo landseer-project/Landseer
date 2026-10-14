@@ -79,9 +79,11 @@ landseer-pipeline/
 
 2. **Install dependencies**
    ```bash
-   pip install poetry
-   poetry install
+   # Install uv if needed: https://docs.astral.sh/uv/getting-started/installation/
+   uv sync --all-groups
    ```
+
+   Then run tools with `uv run …` (or activate `.venv`).
 
 3. **Configure Docker access**
    ```bash
@@ -124,32 +126,25 @@ landseer-pipeline/
 
 ## Usage
 
-### Quick Start
-
-For complete step-by-step instructions on running a pipeline, see **[Sphinx docs: Run a Pipeline](docs/how-to/run-a-pipeline.md)**, which covers:
-- System setup (backend, workers, frontend)
-- Starting pipeline runs via REST API or web UI
-- Monitoring progress in real-time
-- Interpreting and analyzing results
-
-### Basic Pipeline Execution
+Use **uv** for install and all commands. Full list: [docs/reference/cli.md](docs/reference/cli.md).
 
 ```bash
-# 1. Start backend server
-python -m src.backend.cli --config configs/pipeline/trades.yaml
+uv sync --all-groups
 
-# 2. Start worker(s) to execute tasks
-python -m src.worker.cli --backend-url http://localhost:8000 --gpu 0
+# Processes
+uv run landseer-backend                          # headless API + scheduler
+uv run landseer-worker --gpu 0
+uv run landseer-frontend dev
 
-# 3. Trigger a pipeline run via REST API
-curl -X POST http://localhost:8000/api/pipeline-configs/trades/runs \
-  -H "Content-Type: application/json" \
-  -d '{"use_cache": true}'
-
-# 4. (Optional) View results in web dashboard
-python -m http.server 3000 --directory src/frontend/dist
-# Open http://localhost:3000
+# Control plane (backend must be running)
+uv run landseer run start configs/pipeline/trades.yaml
+uv run landseer run list
+uv run landseer progress --run-id <run_id>
+uv run landseer task list <run_id>
+uv run landseer health
 ```
+
+Step-by-step: [Quickstart](docs/getting-started/quickstart.md) · [Run a pipeline](docs/how-to/run-a-pipeline.md)
 
 ### Configuration Options
 

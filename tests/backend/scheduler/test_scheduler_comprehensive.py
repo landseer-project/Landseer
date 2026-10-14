@@ -51,12 +51,14 @@ def _mk_task(tool, *, task_type=TaskType.PRE_TRAINING, config=None, deps=None):
     )
 
 
-def test_empty_pipeline_has_no_next_task_and_is_complete():
+def test_empty_pipeline_has_no_next_task_and_is_not_complete():
     pipeline = DefenseEvaluationPipeline(name="empty", workflows=[])
     scheduler = PriorityScheduler(pipeline)
 
     assert scheduler.get_next_task() is None
-    assert scheduler.is_complete() is True
+    # A run with no tasks is never reported complete, so it isn't finalized
+    # before its tasks are loaded.
+    assert scheduler.is_complete() is False
     assert scheduler.get_progress() == {
         "total": 0,
         "pending": 0,

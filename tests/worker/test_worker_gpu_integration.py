@@ -8,16 +8,69 @@ These tests verify:
 4. Docker can actually access the specified GPU
 """
 
+import io
+import re
 import pytest
 import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock, call
-from typing import List
+from contextlib import contextmanager
+from typing import List, Optional
 
 from src.worker.cli import Worker, create_parser, main
 from src.worker.runner import TaskRunner, DockerRunner
 from src.worker.client import TaskInfo
+
+
+NVIDIA_DOCKER_INFO = '{"nvidia": {}, "runc": {}}'
+
+GPU_TEST_IMAGE = "nvidia/cuda:11.0-base"
+
+
+def _gpu_docker_tests_enabled() -> bool:
+    """Real GPU containers run only on opt-in and when the image is already local
+    (never pull or launch GPU containers on a shared box by default)."""
+    import os
+    import shutil
+    if os.environ.get("LANDSEER_RUN_GPU_DOCKER_TESTS") != "1" or not shutil.which("docker"):
+        return False
+    try:
+        return subprocess.run(
+            ["docker", "image", "inspect", GPU_TEST_IMAGE],
+            capture_output=True, timeout=20,
+        ).returncode == 0
+    except Exception:
+        return False
+
+
+@contextmanager
+def _mock_docker(returncode: int = 0, stdout: str = "", stderr: str = "",
+                 capture: Optional[List[str]] = None):
+    """
+    Mock the subprocess calls DockerRunner.run makes.
+
+    DockerRunner.run probes `docker info` via subprocess.run (stubbed to report
+    an nvidia runtime) and launches the container via subprocess.Popen, whose
+    stdout/stderr it streams. Each Popen call returns a fake process with the
+    given exit code and output. If `capture` is given, each launched
+    `docker run` command is appended to it as a string.
+    Yields (mock_run, mock_popen).
+    """
+    def fake_popen(argv, *args, **kwargs):
+        if capture is not None:
+            capture.append(' '.join(argv))
+        proc = MagicMock()
+        proc.poll.return_value = returncode
+        proc.returncode = returncode
+        proc.stdout = io.StringIO(stdout)
+        proc.stderr = io.StringIO(stderr)
+        return proc
+
+    with patch("src.worker.runner.subprocess.run") as mock_run, \
+            patch("src.worker.runner.subprocess.Popen", side_effect=fake_popen) as mock_popen:
+        mock_run.return_value = MagicMock(returncode=0, stdout=NVIDIA_DOCKER_INFO, stderr="")
+        yield mock_run, mock_popen
 
 
 # ============================================================================
@@ -146,8 +199,7 @@ class TestGPUIDFlow:
         input_dir.mkdir(parents=True, exist_ok=True)
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        with _mock_docker():
             exit_code, logs, docker_cmd = runner.run(
                 image="test/image:latest",
                 command="python main.py",
@@ -158,8 +210,8 @@ class TestGPUIDFlow:
             # Check GPU ID in command
             assert "--runtime=nvidia" in docker_cmd, \
                 f"Should have --runtime=nvidia in Docker command: {docker_cmd}"
-            assert f"NVIDIA_VISIBLE_DEVICES=2" in docker_cmd, \
-                f"NVIDIA_VISIBLE_DEVICES=2 should be in Docker command: {docker_cmd}"
+            assert "NVIDIA_VISIBLE_DEVICES=all" in docker_cmd, \
+                f"NVIDIA_VISIBLE_DEVICES=all should be in Docker command: {docker_cmd}"
             assert f"CUDA_VISIBLE_DEVICES=2" in docker_cmd, \
                 f"CUDA_VISIBLE_DEVICES=2 should be in Docker command: {docker_cmd}"
             assert "NVIDIA_DRIVER_CAPABILITIES=all" in docker_cmd, \
@@ -193,29 +245,27 @@ class TestEndToEndGPUFlow:
         assert worker._runner._container_runner.gpu_id == gpu_id, \
             f"DockerRunner should have GPU ID {gpu_id}"
         
-        # Mock Docker execution and capture command
-        captured_docker_cmd = []
+        # Mock Docker execution and capture the `docker run` command
+        captured_docker_cmds = []
         
-        def capture_docker_call(*args, **kwargs):
-            if args and isinstance(args[0], list) and args[0][0] == "docker":
-                captured_docker_cmd.extend(args[0])
-            return MagicMock(returncode=0, stdout="", stderr="")
-        
-        with patch('subprocess.run', side_effect=capture_docker_call):
+        with _mock_docker(capture=captured_docker_cmds):
             with patch.object(worker._runner._container_runner, 'pull_image', return_value=True):
                 result = worker._runner.run_task(mock_task)
         
         # Verify GPU flags in captured command
-        if captured_docker_cmd:
-            cmd_str = ' '.join(captured_docker_cmd)
-            assert "--runtime=nvidia" in cmd_str, \
-                f"Should have --runtime=nvidia in Docker command: {cmd_str}"
-            assert f"NVIDIA_VISIBLE_DEVICES={gpu_id}" in cmd_str, \
-                f"NVIDIA_VISIBLE_DEVICES={gpu_id} should be in Docker command: {cmd_str}"
-            assert f"CUDA_VISIBLE_DEVICES={gpu_id}" in cmd_str, \
-                f"CUDA_VISIBLE_DEVICES={gpu_id} should be in Docker command: {cmd_str}"
-            assert "NVIDIA_DRIVER_CAPABILITIES=all" in cmd_str, \
-                f"NVIDIA_DRIVER_CAPABILITIES=all should be in Docker command: {cmd_str}"
+        assert len(captured_docker_cmds) == 1, \
+            f"Should launch exactly one docker run, got {captured_docker_cmds}"
+        cmd_str = captured_docker_cmds[0]
+        assert cmd_str.startswith("docker run "), f"Should be a docker run command: {cmd_str[:100]}"
+        assert result.success, f"Task should succeed: {result.error_message}"
+        assert "--runtime=nvidia" in cmd_str, \
+            f"Should have --runtime=nvidia in Docker command: {cmd_str}"
+        assert "NVIDIA_VISIBLE_DEVICES=all" in cmd_str, \
+            f"NVIDIA_VISIBLE_DEVICES=all should be in Docker command: {cmd_str}"
+        assert f"CUDA_VISIBLE_DEVICES={gpu_id}" in cmd_str, \
+            f"CUDA_VISIBLE_DEVICES={gpu_id} should be in Docker command: {cmd_str}"
+        assert "NVIDIA_DRIVER_CAPABILITIES=all" in cmd_str, \
+            f"NVIDIA_DRIVER_CAPABILITIES=all should be in Docker command: {cmd_str}"
     
     def test_multiple_gpu_ids_flow_correctly(self, temp_workspace, mock_task):
         """Test that different GPU IDs flow correctly through the system."""
@@ -236,8 +286,7 @@ class TestEndToEndGPUFlow:
             input_dir.mkdir(parents=True, exist_ok=True)
             output_dir.mkdir(parents=True, exist_ok=True)
             
-            with patch('subprocess.run') as mock_run:
-                mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            with _mock_docker():
                 exit_code, logs, docker_cmd = docker_runner.run(
                     image="test/image:latest",
                     command="python main.py",
@@ -248,8 +297,8 @@ class TestEndToEndGPUFlow:
                 # Verify GPU ID in command
                 assert "--runtime=nvidia" in docker_cmd, \
                     f"Should have --runtime=nvidia in Docker command"
-                assert f"NVIDIA_VISIBLE_DEVICES={gpu_id}" in docker_cmd, \
-                    f"NVIDIA_VISIBLE_DEVICES={gpu_id} should be in Docker command"
+                assert "NVIDIA_VISIBLE_DEVICES=all" in docker_cmd, \
+                    f"NVIDIA_VISIBLE_DEVICES=all should be in Docker command"
                 assert f"CUDA_VISIBLE_DEVICES={gpu_id}" in docker_cmd, \
                     f"CUDA_VISIBLE_DEVICES={gpu_id} should be in Docker command"
                 assert "NVIDIA_DRIVER_CAPABILITIES=all" in docker_cmd, \
@@ -274,8 +323,7 @@ class TestDockerGPUAccess:
             input_dir.mkdir(parents=True, exist_ok=True)
             output_dir.mkdir(parents=True, exist_ok=True)
             
-            with patch('subprocess.run') as mock_run:
-                mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            with _mock_docker():
                 exit_code, logs, docker_cmd = runner.run(
                     image="test/image:latest",
                     command="python main.py",
@@ -286,10 +334,12 @@ class TestDockerGPUAccess:
                 # Verify GPU flags
                 assert "--runtime=nvidia" in docker_cmd, \
                     f"Should have --runtime=nvidia"
-                assert f"NVIDIA_VISIBLE_DEVICES={gpu_id}" in docker_cmd, \
-                    f"Should have NVIDIA_VISIBLE_DEVICES={gpu_id}"
+                assert "NVIDIA_VISIBLE_DEVICES=all" in docker_cmd, \
+                    f"Should have NVIDIA_VISIBLE_DEVICES=all"
                 assert f"CUDA_VISIBLE_DEVICES={gpu_id}" in docker_cmd, \
                     f"Should have CUDA_VISIBLE_DEVICES={gpu_id}"
+                assert "--gpus" not in docker_cmd, \
+                    "Should NOT have --gpus (conflicts with CDI/nvidia runtime)"
                 assert "NVIDIA_DRIVER_CAPABILITIES=all" in docker_cmd, \
                     f"Should have NVIDIA_DRIVER_CAPABILITIES=all"
     
@@ -302,8 +352,7 @@ class TestDockerGPUAccess:
         input_dir.mkdir(parents=True, exist_ok=True)
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        with _mock_docker():
             exit_code, logs, docker_cmd = runner.run(
                 image="test/image:latest",
                 command="python main.py",
@@ -311,13 +360,12 @@ class TestDockerGPUAccess:
                 output_dir=output_dir
             )
             
-            # Extract GPU ID from NVIDIA_VISIBLE_DEVICES
-            import re
-            nvidia_match = re.search(r'NVIDIA_VISIBLE_DEVICES=(\d+)', docker_cmd)
-            assert nvidia_match is not None, "Should have NVIDIA_VISIBLE_DEVICES=X in command"
-            gpu_id_from_nvidia = int(nvidia_match.group(1))
+            # NVIDIA_VISIBLE_DEVICES exposes all devices to the nvidia runtime (CDI)
+            nvidia_values = re.findall(r'NVIDIA_VISIBLE_DEVICES=(\S+)', docker_cmd)
+            assert nvidia_values == ["all"], \
+                f"NVIDIA_VISIBLE_DEVICES should be 'all', got {nvidia_values}"
             
-            # Extract GPU ID from CUDA_VISIBLE_DEVICES
+            # Extract GPU ID from CUDA_VISIBLE_DEVICES (the actual pin)
             cuda_match = re.search(r'CUDA_VISIBLE_DEVICES=(\d+)', docker_cmd)
             assert cuda_match is not None, "Should have CUDA_VISIBLE_DEVICES=X in command"
             gpu_id_from_cuda = int(cuda_match.group(1))
@@ -325,13 +373,9 @@ class TestDockerGPUAccess:
             # Verify runtime flag
             assert "--runtime=nvidia" in docker_cmd, "Should have --runtime=nvidia"
             
-            # Both should match the runner's GPU ID
-            assert gpu_id_from_nvidia == 1, \
-                f"GPU ID from NVIDIA_VISIBLE_DEVICES should be 1, got {gpu_id_from_nvidia}"
+            # Should match the runner's GPU ID
             assert gpu_id_from_cuda == 1, \
                 f"GPU ID from CUDA_VISIBLE_DEVICES should be 1, got {gpu_id_from_cuda}"
-            assert gpu_id_from_nvidia == gpu_id_from_cuda, \
-                "GPU IDs from NVIDIA_VISIBLE_DEVICES and CUDA_VISIBLE_DEVICES should match"
 
 
 # ============================================================================
@@ -397,8 +441,7 @@ class TestDockerGPUIntegration:
         input_dir.mkdir(parents=True, exist_ok=True)
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        with _mock_docker():
             exit_code, logs, docker_cmd = runner.run(
                 image="test/image:latest",
                 command="python main.py",
@@ -428,10 +471,11 @@ class TestDockerGPUIntegration:
                     if "CUDA_VISIBLE_DEVICES" in env_var:
                         cuda_env = env_var
             
+            assert "--gpus" not in cmd_parts, "Should NOT have --gpus flag"
             assert nvidia_env is not None, "Should have NVIDIA_VISIBLE_DEVICES in command"
-            assert nvidia_env == "NVIDIA_VISIBLE_DEVICES=0", \
-                f"NVIDIA_VISIBLE_DEVICES should be 0, got '{nvidia_env}'"
-            assert cuda_env is not None, "Should also have CUDA_VISIBLE_DEVICES for compatibility"
+            assert nvidia_env == "NVIDIA_VISIBLE_DEVICES=all", \
+                f"NVIDIA_VISIBLE_DEVICES should be 'all', got '{nvidia_env}'"
+            assert cuda_env is not None, "Should have CUDA_VISIBLE_DEVICES to pin the GPU"
             assert cuda_env == "CUDA_VISIBLE_DEVICES=0", \
                 f"CUDA_VISIBLE_DEVICES should be 0, got '{cuda_env}'"
             
@@ -521,12 +565,7 @@ class TestRealWorldScenarios:
         # Capture Docker command
         docker_commands = []
         
-        def capture_command(*args, **kwargs):
-            if args and isinstance(args[0], list):
-                docker_commands.append(' '.join(args[0]))
-            return MagicMock(returncode=0, stdout="", stderr="")
-        
-        with patch('subprocess.run', side_effect=capture_command):
+        with _mock_docker(capture=docker_commands):
             with patch.object(worker._runner._container_runner, 'pull_image', return_value=True):
                 result = worker._runner.run_task(mock_task)
         
@@ -535,8 +574,8 @@ class TestRealWorldScenarios:
         docker_cmd = docker_commands[0]
         assert "--runtime=nvidia" in docker_cmd, \
             f"Should use --runtime=nvidia, command: {docker_cmd[:200]}"
-        assert "NVIDIA_VISIBLE_DEVICES=0" in docker_cmd, \
-            f"Should set NVIDIA_VISIBLE_DEVICES=0, command: {docker_cmd[:200]}"
+        assert "NVIDIA_VISIBLE_DEVICES=all" in docker_cmd, \
+            f"Should set NVIDIA_VISIBLE_DEVICES=all, command: {docker_cmd[:200]}"
         assert "CUDA_VISIBLE_DEVICES=0" in docker_cmd, \
             f"Should set CUDA_VISIBLE_DEVICES=0, command: {docker_cmd[:200]}"
         assert "NVIDIA_DRIVER_CAPABILITIES=all" in docker_cmd, \
@@ -554,12 +593,7 @@ class TestRealWorldScenarios:
         for gpu_id, worker in workers:
             docker_commands = []
             
-            def capture_command(*args, **kwargs):
-                if args and isinstance(args[0], list):
-                    docker_commands.append(' '.join(args[0]))
-                return MagicMock(returncode=0, stdout="", stderr="")
-            
-            with patch('subprocess.run', side_effect=capture_command):
+            with _mock_docker(capture=docker_commands):
                 with patch.object(worker._runner._container_runner, 'pull_image', return_value=True):
                     result = worker._runner.run_task(mock_task)
             
@@ -568,8 +602,8 @@ class TestRealWorldScenarios:
             docker_cmd = docker_commands[0]
             assert "--runtime=nvidia" in docker_cmd, \
                 f"Worker {gpu_id} should use --runtime=nvidia, command: {docker_cmd[:200]}"
-            assert f"NVIDIA_VISIBLE_DEVICES={gpu_id}" in docker_cmd, \
-                f"Worker {gpu_id} should set NVIDIA_VISIBLE_DEVICES={gpu_id}"
+            assert "NVIDIA_VISIBLE_DEVICES=all" in docker_cmd, \
+                f"Worker {gpu_id} should set NVIDIA_VISIBLE_DEVICES=all"
             assert f"CUDA_VISIBLE_DEVICES={gpu_id}" in docker_cmd, \
                 f"Worker {gpu_id} should set CUDA_VISIBLE_DEVICES={gpu_id}"
             assert "NVIDIA_DRIVER_CAPABILITIES=all" in docker_cmd, \
@@ -582,12 +616,7 @@ class TestRealWorldScenarios:
         
         docker_commands = []
         
-        def capture_command(*args, **kwargs):
-            if args and isinstance(args[0], list):
-                docker_commands.append(' '.join(args[0]))
-            return MagicMock(returncode=0, stdout="", stderr="")
-        
-        with patch('subprocess.run', side_effect=capture_command):
+        with _mock_docker(capture=docker_commands):
             with patch.object(worker._runner._container_runner, 'pull_image', return_value=True):
                 result = worker._runner.run_task(mock_task)
         
@@ -681,9 +710,10 @@ class TestDockerGPUVerification:
             """Verify GPU ID is correctly set in Docker command."""
             checks = {
                 "--runtime=nvidia": "--runtime=nvidia" in docker_cmd,
-                f"NVIDIA_VISIBLE_DEVICES={expected_gpu_id}": f"NVIDIA_VISIBLE_DEVICES={expected_gpu_id}" in docker_cmd,
+                "NVIDIA_VISIBLE_DEVICES=all": "NVIDIA_VISIBLE_DEVICES=all" in docker_cmd,
                 f"CUDA_VISIBLE_DEVICES={expected_gpu_id}": f"CUDA_VISIBLE_DEVICES={expected_gpu_id}" in docker_cmd,
-                "NVIDIA_DRIVER_CAPABILITIES=all": "NVIDIA_DRIVER_CAPABILITIES=all" in docker_cmd
+                "NVIDIA_DRIVER_CAPABILITIES=all": "NVIDIA_DRIVER_CAPABILITIES=all" in docker_cmd,
+                "no --gpus": "--gpus" not in docker_cmd,
             }
             
             all_passed = all(checks.values())
@@ -701,8 +731,7 @@ class TestDockerGPUVerification:
         input_dir.mkdir(parents=True, exist_ok=True)
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        with _mock_docker():
             exit_code, logs, docker_cmd = runner.run(
                 image="test/image:latest",
                 command="python main.py",
@@ -723,8 +752,7 @@ class TestDockerGPUVerification:
             input_dir.mkdir(parents=True, exist_ok=True)
             output_dir.mkdir(parents=True, exist_ok=True)
             
-            with patch('subprocess.run') as mock_run:
-                mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            with _mock_docker():
                 exit_code, logs, docker_cmd = runner.run(
                     image="test/image:latest",
                     command="python main.py",
@@ -732,25 +760,18 @@ class TestDockerGPUVerification:
                     output_dir=output_dir
                 )
                 
-                # Extract GPU IDs from different parts of command
-                import re
-                nvidia_match = re.search(r'NVIDIA_VISIBLE_DEVICES=(\d+)', docker_cmd)
-                cuda_match = re.search(r'CUDA_VISIBLE_DEVICES=(\d+)', docker_cmd)
+                # Extract GPU-related values from the command
+                nvidia_values = re.findall(r'NVIDIA_VISIBLE_DEVICES=(\S+)', docker_cmd)
+                cuda_values = re.findall(r'CUDA_VISIBLE_DEVICES=(\S+)', docker_cmd)
                 
                 assert "--runtime=nvidia" in docker_cmd, "Should have --runtime=nvidia"
-                assert nvidia_match is not None, "Should have NVIDIA_VISIBLE_DEVICES=X"
-                assert cuda_match is not None, "Should have CUDA_VISIBLE_DEVICES=X"
                 
-                gpu_from_nvidia = int(nvidia_match.group(1))
-                gpu_from_cuda = int(cuda_match.group(1))
-                
-                # All should match
-                assert gpu_from_nvidia == gpu_id, \
-                    f"NVIDIA_VISIBLE_DEVICES should have GPU ID {gpu_id}, got {gpu_from_nvidia}"
-                assert gpu_from_cuda == gpu_id, \
-                    f"CUDA_VISIBLE_DEVICES should have GPU ID {gpu_id}, got {gpu_from_cuda}"
-                assert gpu_from_nvidia == gpu_from_cuda, \
-                    "GPU IDs should be consistent across environment variables"
+                # NVIDIA_VISIBLE_DEVICES is always 'all' (CDI); the GPU ID lives
+                # only in CUDA_VISIBLE_DEVICES, and appears exactly once
+                assert nvidia_values == ["all"], \
+                    f"NVIDIA_VISIBLE_DEVICES should be ['all'], got {nvidia_values}"
+                assert cuda_values == [str(gpu_id)], \
+                    f"CUDA_VISIBLE_DEVICES should be [{gpu_id}], got {cuda_values}"
 
 
 # ============================================================================
@@ -777,8 +798,7 @@ class TestGPUIsolation:
         input_dir.mkdir(parents=True, exist_ok=True)
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        with _mock_docker():
             exit_code, logs, docker_cmd = runner.run(
                 image="test/image:latest",
                 command="python main.py",
@@ -789,14 +809,14 @@ class TestGPUIsolation:
             # Verify GPU 0 is specified
             assert "--runtime=nvidia" in docker_cmd, \
                 "Should have --runtime=nvidia"
-            assert "NVIDIA_VISIBLE_DEVICES=0" in docker_cmd, \
-                "Should have NVIDIA_VISIBLE_DEVICES=0"
+            assert "NVIDIA_VISIBLE_DEVICES=all" in docker_cmd, \
+                "Should have NVIDIA_VISIBLE_DEVICES=all"
             assert "CUDA_VISIBLE_DEVICES=0" in docker_cmd, \
                 "Should have CUDA_VISIBLE_DEVICES=0"
             
-            # Verify GPU 1 is NOT accessible
-            assert "NVIDIA_VISIBLE_DEVICES=1" not in docker_cmd, \
-                "Should NOT have NVIDIA_VISIBLE_DEVICES=1 (worker should only access GPU 0)"
+            # Verify GPU 1 is NOT selected (CUDA_VISIBLE_DEVICES pins GPU 0)
+            assert "--gpus" not in docker_cmd, \
+                "Should NOT have --gpus flag"
             assert "CUDA_VISIBLE_DEVICES=1" not in docker_cmd, \
                 "Should NOT have CUDA_VISIBLE_DEVICES=1"
     
@@ -809,8 +829,7 @@ class TestGPUIsolation:
         input_dir.mkdir(parents=True, exist_ok=True)
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        with _mock_docker():
             exit_code, logs, docker_cmd = runner.run(
                 image="test/image:latest",
                 command="python main.py",
@@ -821,14 +840,14 @@ class TestGPUIsolation:
             # Verify GPU 1 is specified
             assert "--runtime=nvidia" in docker_cmd, \
                 "Should have --runtime=nvidia"
-            assert "NVIDIA_VISIBLE_DEVICES=1" in docker_cmd, \
-                "Should have NVIDIA_VISIBLE_DEVICES=1"
+            assert "NVIDIA_VISIBLE_DEVICES=all" in docker_cmd, \
+                "Should have NVIDIA_VISIBLE_DEVICES=all"
             assert "CUDA_VISIBLE_DEVICES=1" in docker_cmd, \
                 "Should have CUDA_VISIBLE_DEVICES=1"
             
-            # Verify GPU 0 is NOT accessible
-            assert "NVIDIA_VISIBLE_DEVICES=0" not in docker_cmd, \
-                "Should NOT have NVIDIA_VISIBLE_DEVICES=0 (worker should only access GPU 1)"
+            # Verify GPU 0 is NOT selected (CUDA_VISIBLE_DEVICES pins GPU 1)
+            assert "--gpus" not in docker_cmd, \
+                "Should NOT have --gpus flag"
             assert "CUDA_VISIBLE_DEVICES=0" not in docker_cmd, \
                 "Should NOT have CUDA_VISIBLE_DEVICES=0"
     
@@ -846,8 +865,7 @@ class TestGPUIsolation:
             input_dir.mkdir(parents=True, exist_ok=True)
             output_dir.mkdir(parents=True, exist_ok=True)
             
-            with patch('subprocess.run') as mock_run:
-                mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            with _mock_docker():
                 exit_code, logs, docker_cmd = runner.run(
                     image="test/image:latest",
                     command="python main.py",
@@ -858,18 +876,8 @@ class TestGPUIsolation:
                 # Verify only the specified GPU is accessible
                 assert "--runtime=nvidia" in docker_cmd, \
                     f"Should have --runtime=nvidia"
-                assert f"NVIDIA_VISIBLE_DEVICES={gpu_id}" in docker_cmd, \
-                    f"Should have NVIDIA_VISIBLE_DEVICES={gpu_id}"
                 assert f"CUDA_VISIBLE_DEVICES={gpu_id}" in docker_cmd, \
                     f"Should have CUDA_VISIBLE_DEVICES={gpu_id}"
-                
-                # Verify no other GPU IDs are present
-                import re
-                nvidia_specs = re.findall(r'NVIDIA_VISIBLE_DEVICES=(\d+)', docker_cmd)
-                assert len(nvidia_specs) == 1, \
-                    f"Should have exactly one NVIDIA_VISIBLE_DEVICES spec, got {nvidia_specs}"
-                assert nvidia_specs[0] == str(gpu_id), \
-                    f"NVIDIA_VISIBLE_DEVICES should be {gpu_id}, got {nvidia_specs[0]}"
                 
                 # Verify CUDA_VISIBLE_DEVICES only has one GPU
                 cuda_specs = re.findall(r'CUDA_VISIBLE_DEVICES=([\d,]+)', docker_cmd)
@@ -878,9 +886,9 @@ class TestGPUIsolation:
                 assert cuda_specs[0] == str(gpu_id), \
                     f"CUDA_VISIBLE_DEVICES should be {gpu_id}, got {cuda_specs[0]}"
                 
-                # Verify no "all" or multiple GPU access
-                assert "--gpus all" not in docker_cmd, \
-                    f"Should NOT have --gpus all (worker should only access GPU {gpu_id})"
+                # Verify no "all" or multiple GPU access via --gpus
+                assert "--gpus" not in docker_cmd, \
+                    f"Should NOT have --gpus (worker should only access GPU {gpu_id})"
                 assert "," not in cuda_specs[0], \
                     f"CUDA_VISIBLE_DEVICES should not contain multiple GPUs: {cuda_specs[0]}"
     
@@ -898,8 +906,7 @@ class TestGPUIsolation:
         input_dir.mkdir(parents=True, exist_ok=True)
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        with _mock_docker():
             exit_code, logs, docker_cmd = runner.run(
                 image="test/image:latest",
                 command="python main.py",
@@ -921,44 +928,6 @@ class TestGPUIsolation:
             assert cuda_value != "all", \
                 f"CUDA_VISIBLE_DEVICES should not be 'all': {cuda_value}"
     
-    def test_docker_runtime_nvidia_restricts_access(self, temp_workspace):
-        """
-        Docker --runtime=nvidia with NVIDIA_VISIBLE_DEVICES should restrict container to only GPU X.
-        
-        This ensures Docker runtime restricts GPU access via NVIDIA_VISIBLE_DEVICES.
-        """
-        for gpu_id in [0, 1, 2]:
-            runner = DockerRunner(workspace_dir=temp_workspace, gpu_id=gpu_id)
-            
-            input_dir = temp_workspace / "input"
-            output_dir = temp_workspace / "output"
-            input_dir.mkdir(parents=True, exist_ok=True)
-            output_dir.mkdir(parents=True, exist_ok=True)
-            
-            with patch('subprocess.run') as mock_run:
-                mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-                exit_code, logs, docker_cmd = runner.run(
-                    image="test/image:latest",
-                    command="python main.py",
-                    input_dir=input_dir,
-                    output_dir=output_dir
-                )
-                
-                # Verify --runtime=nvidia and NVIDIA_VISIBLE_DEVICES
-                assert "--runtime=nvidia" in docker_cmd, \
-                    f"Should have --runtime=nvidia"
-                
-                import re
-                nvidia_matches = re.findall(r'NVIDIA_VISIBLE_DEVICES=([^ ]+)', docker_cmd)
-                assert len(nvidia_matches) == 1, \
-                    f"Should have exactly one NVIDIA_VISIBLE_DEVICES=X, got {nvidia_matches}"
-                
-                gpu_spec = nvidia_matches[0]
-                assert gpu_spec == str(gpu_id), \
-                    f"NVIDIA_VISIBLE_DEVICES should be '{gpu_id}', got '{gpu_spec}'"
-                assert "," not in gpu_spec, \
-                    f"NVIDIA_VISIBLE_DEVICES should not contain multiple GPUs: {gpu_spec}"
-    
     def test_worker_isolation_across_different_gpus(self, temp_workspace, mock_task):
         """
         Multiple workers with different GPU IDs should be isolated.
@@ -975,12 +944,7 @@ class TestGPUIsolation:
         for assigned_gpu_id, worker in workers:
             docker_commands = []
             
-            def capture_command(*args, **kwargs):
-                if args and isinstance(args[0], list):
-                    docker_commands.append(' '.join(args[0]))
-                return MagicMock(returncode=0, stdout="", stderr="")
-            
-            with patch('subprocess.run', side_effect=capture_command):
+            with _mock_docker(capture=docker_commands):
                 with patch.object(worker._runner._container_runner, 'pull_image', return_value=True):
                     result = worker._runner.run_task(mock_task)
             
@@ -992,16 +956,14 @@ class TestGPUIsolation:
             # Verify assigned GPU is used
             assert "--runtime=nvidia" in docker_cmd, \
                 f"Worker {assigned_gpu_id} should use --runtime=nvidia"
-            assert f"NVIDIA_VISIBLE_DEVICES={assigned_gpu_id}" in docker_cmd, \
-                f"Worker {assigned_gpu_id} should set NVIDIA_VISIBLE_DEVICES={assigned_gpu_id}"
+            assert "NVIDIA_VISIBLE_DEVICES=all" in docker_cmd, \
+                f"Worker {assigned_gpu_id} should set NVIDIA_VISIBLE_DEVICES=all"
             assert f"CUDA_VISIBLE_DEVICES={assigned_gpu_id}" in docker_cmd, \
                 f"Worker {assigned_gpu_id} should set CUDA_VISIBLE_DEVICES={assigned_gpu_id}"
             
             # Verify other GPUs are NOT accessible
             for other_gpu_id in [0, 1, 2]:
                 if other_gpu_id != assigned_gpu_id:
-                    assert f"NVIDIA_VISIBLE_DEVICES={other_gpu_id}" not in docker_cmd, \
-                        f"Worker {assigned_gpu_id} should NOT set NVIDIA_VISIBLE_DEVICES={other_gpu_id}"
                     assert f"CUDA_VISIBLE_DEVICES={other_gpu_id}" not in docker_cmd, \
                         f"Worker {assigned_gpu_id} should NOT set CUDA_VISIBLE_DEVICES={other_gpu_id}"
     
@@ -1020,8 +982,7 @@ class TestGPUIsolation:
         input_dir.mkdir(parents=True, exist_ok=True)
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        with _mock_docker() as (_mock_run, mock_popen):
             exit_code, logs, docker_cmd = runner.run(
                 image="test/image:latest",
                 command="python main.py",
@@ -1029,25 +990,20 @@ class TestGPUIsolation:
                 output_dir=output_dir
             )
             
-            # Extract GPU IDs from Docker command
-            import re
+            # Extract GPU ID from Docker command (CUDA_VISIBLE_DEVICES is the pin)
             assert "--runtime=nvidia" in docker_cmd, "Should have --runtime=nvidia"
-            nvidia_match = re.search(r'NVIDIA_VISIBLE_DEVICES=(\d+)', docker_cmd)
             cuda_match = re.search(r'CUDA_VISIBLE_DEVICES=(\d+)', docker_cmd)
-            
-            assert nvidia_match is not None, "Should have NVIDIA_VISIBLE_DEVICES=X"
             assert cuda_match is not None, "Should have CUDA_VISIBLE_DEVICES=X"
-            
-            gpu_from_nvidia = int(nvidia_match.group(1))
             gpu_from_cuda = int(cuda_match.group(1))
             
-            # Both should match worker's GPU ID
-            assert gpu_from_nvidia == worker_gpu_id, \
-                f"GPU ID from NVIDIA_VISIBLE_DEVICES ({gpu_from_nvidia}) should match worker GPU ID ({worker_gpu_id})"
+            # Should match worker's GPU ID
             assert gpu_from_cuda == worker_gpu_id, \
                 f"GPU ID from CUDA_VISIBLE_DEVICES ({gpu_from_cuda}) should match worker GPU ID ({worker_gpu_id})"
-            assert gpu_from_nvidia == gpu_from_cuda, \
-                "GPU IDs from NVIDIA_VISIBLE_DEVICES and CUDA_VISIBLE_DEVICES should match"
+            
+            # The returned command must be the one actually executed, so a
+            # mismatch in the logged command would reflect a real mismatch
+            assert docker_cmd == ' '.join(mock_popen.call_args[0][0]), \
+                "Returned docker command should match the executed command"
     
     @pytest.mark.skipif(
         not Path("/usr/bin/docker").exists() and not Path("/usr/local/bin/docker").exists(),
@@ -1125,12 +1081,7 @@ class TestGPUIsolation:
         
         docker_commands = []
         
-        def capture_command(*args, **kwargs):
-            if args and isinstance(args[0], list):
-                docker_commands.append(' '.join(args[0]))
-            return MagicMock(returncode=0, stdout="", stderr="")
-        
-        with patch('subprocess.run', side_effect=capture_command):
+        with _mock_docker(capture=docker_commands):
             with patch.object(worker._runner._container_runner, 'pull_image', return_value=True):
                 result = worker._runner.run_task(task_with_gpu_config)
         
@@ -1152,11 +1103,11 @@ class TestGPUIsolation:
             f"Final CUDA_VISIBLE_DEVICES should be 0 (worker's GPU), got {final_cuda_value}. " \
             f"All values: {cuda_matches}"
         
-        # Verify --runtime=nvidia and NVIDIA_VISIBLE_DEVICES=0 is used (this is the primary GPU restriction)
+        # Verify --runtime=nvidia is used and CUDA_VISIBLE_DEVICES=0 is the GPU pin
         assert "--runtime=nvidia" in docker_cmd, \
             "Worker should use --runtime=nvidia"
-        assert "NVIDIA_VISIBLE_DEVICES=0" in docker_cmd, \
-            "Worker should use NVIDIA_VISIBLE_DEVICES=0, not 1"
+        assert "NVIDIA_VISIBLE_DEVICES=all" in docker_cmd, \
+            "Worker should use NVIDIA_VISIBLE_DEVICES=all"
         
         # Verify that even if task config added CUDA_VISIBLE_DEVICES=1,
         # the worker's value (0) comes last and will be effective
@@ -1205,12 +1156,7 @@ class TestDockerRuntimeConfiguration:
             "(e.g. specify the --runtime=nvidia flag) instead."
         )
         
-        with patch('subprocess.run') as mock_run:
-            mock_result = MagicMock()
-            mock_result.returncode = 125
-            mock_result.stdout = ""
-            mock_result.stderr = cdi_error
-            mock_run.return_value = mock_result
+        with _mock_docker(returncode=125, stderr=cdi_error):
             
             exit_code, logs, docker_cmd = runner.run(
                 image="test/image:latest",
@@ -1223,8 +1169,12 @@ class TestDockerRuntimeConfiguration:
             assert exit_code == 125, "Should capture Docker error exit code"
             assert "cdi" in logs.lower() or "nvidia runtime" in logs.lower(), \
                 f"Should detect CDI mode error in logs: {logs[:200]}"
-            # Note: This test simulates the old error when --gpus was used
-            # With the new implementation using --runtime=nvidia, this error should not occur
+            # This error is what the old --gpus implementation triggered on CDI
+            # hosts; the command must use the remedy it suggests instead.
+            assert "--runtime=nvidia" in docker_cmd, \
+                "Command should use --runtime=nvidia (CDI-compatible)"
+            assert "--gpus" not in docker_cmd, \
+                "Command should NOT use --gpus (rejected in CDI mode)"
     
     def test_docker_command_fails_with_gpu_not_available_error(self, temp_workspace):
         """
@@ -1242,12 +1192,7 @@ class TestDockerRuntimeConfiguration:
             "with capabilities: [[gpu]]."
         )
         
-        with patch('subprocess.run') as mock_run:
-            mock_result = MagicMock()
-            mock_result.returncode = 125
-            mock_result.stdout = ""
-            mock_result.stderr = gpu_error
-            mock_run.return_value = mock_result
+        with _mock_docker(returncode=125, stderr=gpu_error):
             
             exit_code, logs, docker_cmd = runner.run(
                 image="test/image:latest",
@@ -1258,8 +1203,11 @@ class TestDockerRuntimeConfiguration:
             
             # Verify error is captured
             assert exit_code == 125, "Should capture Docker error exit code"
-            assert "NVIDIA_VISIBLE_DEVICES=999" in docker_cmd, \
-                "Command should request GPU 999 via NVIDIA_VISIBLE_DEVICES (which doesn't exist)"
+            assert "CUDA_VISIBLE_DEVICES=999" in docker_cmd, \
+                "Command should request GPU 999 via CUDA_VISIBLE_DEVICES (which doesn't exist)"
+            assert "NVIDIA_VISIBLE_DEVICES=all" in docker_cmd, \
+                "Command should expose all devices to the nvidia runtime"
+            assert gpu_error in logs, f"Logs should contain the Docker error: {logs[:200]}"
     
     def test_docker_runtime_error_detection(self, temp_workspace):
         """
@@ -1282,12 +1230,7 @@ class TestDockerRuntimeConfiguration:
         ]
         
         for error_name, error_text, expected_keyword in error_cases:
-            with patch('subprocess.run') as mock_run:
-                mock_result = MagicMock()
-                mock_result.returncode = 125
-                mock_result.stdout = ""
-                mock_result.stderr = f"docker: Error: {error_text}"
-                mock_run.return_value = mock_result
+            with _mock_docker(returncode=125, stderr=f"docker: Error: {error_text}"):
                 
                 exit_code, logs, docker_cmd = runner.run(
                     image="test/image:latest",
@@ -1302,8 +1245,11 @@ class TestDockerRuntimeConfiguration:
                     f"Should detect {error_name} in logs: {logs[:200]}"
     
     @pytest.mark.skipif(
-        not Path("/usr/bin/docker").exists() and not Path("/usr/local/bin/docker").exists(),
-        reason="Docker not available for integration test"
+        not _gpu_docker_tests_enabled(),
+        reason=(
+            "Launches a real GPU container: set LANDSEER_RUN_GPU_DOCKER_TESTS=1 and pull "
+            f"{GPU_TEST_IMAGE} locally to run it"
+        ),
     )
     def test_actual_docker_gpu_command_execution(self, temp_workspace):
         """
@@ -1342,15 +1288,19 @@ class TestDockerRuntimeConfiguration:
                         f"This is expected in CI/test environments without Docker access."
                     )
                 
+                # Skip when the Docker CLI exists but no daemon is reachable
+                # (test environment limitation, same as permission errors)
+                if ("cannot connect to the docker daemon" in error_lower
+                        or "failed to connect to the docker api" in error_lower):
+                    pytest.skip(f"Docker daemon not reachable (test environment limitation): {logs[:200]}")
+                
                 # Check for CDI mode error - THIS IS THE CRITICAL CHECK
                 if "cdi" in error_lower and ("nvidia runtime" in error_lower or "runtime" in error_lower):
                     pytest.fail(
-                        f"❌ CDI MODE ERROR DETECTED: Docker is configured in CDI mode but we're using --gpus flag.\n"
-                        f"This is the exact error from the user's terminal!\n\n"
+                        f"❌ CDI MODE ERROR DETECTED: Docker is configured in CDI mode and rejected the GPU request.\n"
+                        f"The command should use --runtime=nvidia (not --gpus) with NVIDIA_VISIBLE_DEVICES=all.\n\n"
                         f"Error: {logs[:500]}\n\n"
-                        f"Command: {docker_cmd}\n\n"
-                        f"SOLUTION: The code needs to detect CDI mode and use --runtime=nvidia instead of --gpus.\n"
-                        f"This test successfully caught the configuration mismatch!"
+                        f"Command: {docker_cmd}"
                     )
                 
                 # Check for GPU not available
@@ -1416,20 +1366,17 @@ class TestDockerRuntimeConfiguration:
         input_dir.mkdir(parents=True, exist_ok=True)
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        # Build command without executing
-        with patch('subprocess.run') as mock_run:
-            # Don't actually run, just capture the command
-            mock_run.side_effect = Exception("Should not execute")
-            
-            try:
-                exit_code, logs, docker_cmd = runner.run(
-                    image="test/image:latest",
-                    command="python main.py",
-                    input_dir=input_dir,
-                    output_dir=output_dir
-                )
-            except Exception:
-                pass  # Expected, we're just building the command
+        # Build command without executing: the runtime probe raises and the
+        # container launch fails, but run() still returns the command it built
+        with patch("src.worker.runner.subprocess.run", side_effect=Exception("Should not execute")), \
+                patch("src.worker.runner.subprocess.Popen", side_effect=Exception("Should not execute")):
+            exit_code, logs, docker_cmd = runner.run(
+                image="test/image:latest",
+                command="python main.py",
+                input_dir=input_dir,
+                output_dir=output_dir
+            )
+            assert exit_code == -1, "Launch failure should be reported as exit code -1"
             
             # Verify command structure
             cmd_parts = docker_cmd.split()
@@ -1448,10 +1395,15 @@ class TestDockerRuntimeConfiguration:
                     if "NVIDIA_VISIBLE_DEVICES" in env_var:
                         nvidia_env = env_var
                         break
-            assert nvidia_env is not None, "Should have NVIDIA_VISIBLE_DEVICES"
-            assert nvidia_env.startswith("NVIDIA_VISIBLE_DEVICES="), \
-                f"NVIDIA_VISIBLE_DEVICES should start with 'NVIDIA_VISIBLE_DEVICES=', got '{nvidia_env}'"
-            gpu_id_str = nvidia_env.split("=")[1]
+            assert nvidia_env == "NVIDIA_VISIBLE_DEVICES=all", \
+                f"NVIDIA_VISIBLE_DEVICES should be 'all', got '{nvidia_env}'"
+            
+            # Verify CUDA_VISIBLE_DEVICES format (the GPU pin)
+            cuda_env = next((cmd_parts[i + 1] for i, part in enumerate(cmd_parts)
+                             if part == "-e" and i + 1 < len(cmd_parts)
+                             and cmd_parts[i + 1].startswith("CUDA_VISIBLE_DEVICES=")), None)
+            assert cuda_env is not None, "Should have CUDA_VISIBLE_DEVICES"
+            gpu_id_str = cuda_env.split("=")[1]
             assert gpu_id_str.isdigit(), \
                 f"GPU ID should be numeric, got '{gpu_id_str}'"
     
@@ -1470,12 +1422,7 @@ class TestDockerRuntimeConfiguration:
         
         error_message = "Some Docker error occurred"
         
-        with patch('subprocess.run') as mock_run:
-            mock_result = MagicMock()
-            mock_result.returncode = 125
-            mock_result.stdout = ""
-            mock_result.stderr = error_message
-            mock_run.return_value = mock_result
+        with _mock_docker(returncode=125, stderr=error_message):
             
             exit_code, logs, docker_cmd = runner.run(
                 image="test/image:latest",
@@ -1507,8 +1454,7 @@ class TestDockerRuntimeConfiguration:
         input_dir.mkdir(parents=True, exist_ok=True)
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        with _mock_docker():
             exit_code, logs, docker_cmd = runner.run(
                 image="test/image:latest",
                 command="python main.py",
@@ -1516,16 +1462,17 @@ class TestDockerRuntimeConfiguration:
                 output_dir=output_dir
             )
             
-            # Verify only single GPU is specified
-            import re
-            nvidia_specs = re.findall(r'NVIDIA_VISIBLE_DEVICES=(\d+)', docker_cmd)
-            assert len(nvidia_specs) == 1, \
-                f"Should have exactly one NVIDIA_VISIBLE_DEVICES spec, got {nvidia_specs}"
+            # Verify only single GPU is specified (CUDA_VISIBLE_DEVICES is the pin;
+            # NVIDIA_VISIBLE_DEVICES is intentionally 'all' for CDI)
+            cuda_specs = re.findall(r'CUDA_VISIBLE_DEVICES=(\S+)', docker_cmd)
+            assert len(cuda_specs) == 1, \
+                f"Should have exactly one CUDA_VISIBLE_DEVICES spec, got {cuda_specs}"
             
-            gpu_value = nvidia_specs[0]
+            gpu_value = cuda_specs[0]
             # Should be single digit, not comma-separated list
             assert "," not in gpu_value, \
-                f"NVIDIA_VISIBLE_DEVICES should not contain multiple GPUs: {gpu_value}"
+                f"CUDA_VISIBLE_DEVICES should not contain multiple GPUs: {gpu_value}"
+            assert "--gpus" not in docker_cmd, "Should NOT request GPUs via --gpus"
             assert gpu_value.isdigit(), \
                 f"GPU spec should be a single digit: {gpu_value}"
     
@@ -1542,8 +1489,7 @@ class TestDockerRuntimeConfiguration:
         input_dir.mkdir(parents=True, exist_ok=True)
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        with _mock_docker():
             exit_code, logs, docker_cmd = runner.run(
                 image="test/image:latest",
                 command="python main.py",
@@ -1557,7 +1503,7 @@ class TestDockerRuntimeConfiguration:
                 "run",
                 "--rm",
                 "--runtime=nvidia",
-                "NVIDIA_VISIBLE_DEVICES=0",
+                "NVIDIA_VISIBLE_DEVICES=all",
                 "CUDA_VISIBLE_DEVICES=0",
                 "NVIDIA_DRIVER_CAPABILITIES=all",
                 "-v",  # Volume mounts

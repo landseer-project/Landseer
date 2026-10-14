@@ -7,12 +7,25 @@
 
 FROM python:3.11-slim
 
-LABEL org.opencontainers.image.title="CelebA BadNets Dataset Prep"
-LABEL org.opencontainers.image.description="Creates a BadNets-poisoned CelebA Landseer dataset"
-LABEL org.landseer.type="dataset"
-LABEL org.landseer.category="datasets"
-LABEL org.landseer.dataset="celeba"
-LABEL org.landseer.variant="badnets"
+LABEL org.opencontainers.image.title="CelebA BadNets Dataset Prep" \
+      org.opencontainers.image.description="Creates a BadNets-poisoned CelebA Landseer dataset" \
+      org.opencontainers.image.vendor="Landseer Project" \
+      org.opencontainers.image.source="https://github.com/landseer-project/landseer" \
+      org.opencontainers.image.base.name="python:3.11-slim" \
+      org.landseer.schema="1" \
+      org.landseer.type="dataset" \
+      org.landseer.name="celeba_poisoned" \
+      org.landseer.dataset="celeba" \
+      org.landseer.variant="poisoned" \
+      org.landseer.attack="badnets" \
+      org.landseer.datasets="celeba" \
+      org.landseer.modality="image" \
+      org.landseer.framework="numpy" \
+      org.landseer.python="3.11" \
+      org.landseer.accelerator="cpu" \
+      org.landseer.inputs="/source_artifacts:list_attr_celeba.csv,img_align_celeba" \
+      org.landseer.outputs="data.npy,labels.npy,test_data.npy,test_labels.npy,filenames.npy,test_filenames.npy,poisoning_metadata.json" \
+      org.landseer.dependencies="numpy,pandas,scikit-learn,pillow"
 
 WORKDIR /app
 

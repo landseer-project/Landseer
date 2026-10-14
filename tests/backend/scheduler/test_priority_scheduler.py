@@ -29,6 +29,19 @@ from src.backend.scheduler.priority_scheduler import PriorityScheduler
 # ============================================================================
 
 
+
+def _pipeline(name, workflows):
+    """Assemble a pipeline the way the config loader does: tasks join each
+    workflow under the pipeline's id, which records membership and the
+    usage counter."""
+    pipeline = DefenseEvaluationPipeline(name=name, workflows=[])
+    for workflow in workflows:
+        workflow.pipeline_id = pipeline.id
+        for task in workflow.tasks:
+            task.add_to_workflow(workflow.id, pipeline.id)
+        pipeline.add_workflow(workflow)
+    return pipeline
+
 @pytest.fixture
 def sample_tool():
     """Create a sample tool for testing."""
@@ -236,10 +249,7 @@ class TestGetNextTaskPriority:
             tasks=[task_high_usage]  # Only high_usage in this workflow
         )
         
-        pipeline = DefenseEvaluationPipeline(
-            name="counter_test_pipeline",
-            workflows=[workflow1, workflow2, workflow3]
-        )
+        pipeline = _pipeline("counter_test_pipeline", [workflow1, workflow2, workflow3])
         
         scheduler = PriorityScheduler(pipeline)
         

@@ -233,21 +233,27 @@ class TestRequestMethodValidation:
     
     def test_wrong_method_on_endpoints(self, client, initialized_pipeline):
         """Using wrong HTTP methods should return 405 Method Not Allowed."""
-        # GET on PUT endpoint
+        # GET /tasks/status is captured by /tasks/{task_id} (task_id="status") → 404
         response = client.get("/tasks/status")
-        assert response.status_code == 405
-        
+        assert response.status_code in [404, 405]
+
         # PUT on GET endpoint
         response = client.put("/tasks")
         assert response.status_code == 405
-        
+
         # DELETE on endpoints that don't support it
         response = client.delete("/tasks/task_1")
         assert response.status_code == 405
-    
+
     def test_options_method_supported(self, client):
         """OPTIONS method should be supported (CORS preflight)."""
-        response = client.options("/tasks/next")
+        response = client.options(
+            "/tasks/next",
+            headers={
+                "Origin": "http://localhost",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
         assert response.status_code in [200, 204]
 
 
@@ -268,7 +274,7 @@ class TestErrorHandling:
         )
         assert response.status_code == 422
     
-    def test_missing_content_type(self, client):
+    def test_missing_content_type(self, client, initialized_pipeline):
         """Missing Content-Type header should be handled."""
         response = client.put(
             "/tasks/status",
@@ -276,8 +282,8 @@ class TestErrorHandling:
         )
         # FastAPI might auto-detect JSON or return 422
         assert response.status_code in [200, 422]
-    
-    def test_empty_request_body(self, client):
+
+    def test_empty_request_body(self, client, initialized_pipeline):
         """Empty request body should return validation error."""
         response = client.put(
             "/tasks/status",
@@ -384,22 +390,21 @@ class TestConcurrentRequests:
         
         # Create multiple tasks
         from src.backend.api import _scheduler_state
+        from .conftest import create_task_with_id
+
         tool = ToolDefinition(
             name="tool2",
             container=ContainerConfig(image="test/image:latest", command="python main.py")
         )
         for i in range(2, 5):
-            task = Task.__new__(Task)
-            task.id = f"task_{i}"
-            task.tool = tool
-            task.config = {}
-            task.priority = 100 - i
-            task.status = TaskStatus.PENDING
-            task.task_type = TaskType.PRE_TRAINING
-            task.counter = 1
+            task = create_task_with_id(
+                task_id=f"task_{i}",
+                tool=tool,
+                task_type=TaskType.PRE_TRAINING,
+                priority=100 - i,
+                pipeline_id="pipeline_1",
+            )
             task.workflows = {"workflow_1"}
-            task.pipeline_id = "pipeline_1"
-            task.dependencies = []
             _scheduler_state.scheduler._all_tasks.append(task)
             _scheduler_state.pipeline.workflows[0].tasks.append(task)
         

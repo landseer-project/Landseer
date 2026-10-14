@@ -194,8 +194,10 @@ export async function updateTaskStatus(request: UpdateTaskStatusRequest): Promis
 // Progress
 // ==============================================================================
 
-export async function getProgress(): Promise<ProgressResponse> {
-  const { data } = await api.get<ProgressResponse>('/progress');
+export async function getProgress(runId?: string): Promise<ProgressResponse> {
+  const { data } = await api.get<ProgressResponse>('/progress', {
+    params: runId ? { run_id: runId } : undefined,
+  });
   return data;
 }
 
@@ -451,15 +453,49 @@ export async function getPipelineConfig(configId: string): Promise<PipelineConfi
   return data;
 }
 
+function normalizePipelineRun(raw: PipelineRun & { experiment_id?: string }): PipelineRun {
+  const configId = raw.pipeline_config_id || raw.experiment_id || '';
+  return {
+    ...raw,
+    pipeline_config_id: configId,
+    experiment_id: raw.experiment_id || configId,
+  };
+}
+
+function normalizePipelineRunList(data: PipelineRunListResponse): PipelineRunListResponse {
+  const runs = (data.runs ?? []).map((run) =>
+    normalizePipelineRun(run as PipelineRun & { experiment_id?: string })
+  );
+  return { runs, total: data.total ?? runs.length };
+}
+
 export async function getPipelineRuns(configId?: string): Promise<PipelineRunListResponse> {
   const params = configId ? { config_id: configId } : {};
   const { data } = await api.get<PipelineRunListResponse>('/api/pipeline-runs', { params });
-  return data;
+  return normalizePipelineRunList(data);
 }
 
 export async function getPipelineRunsForConfig(configId: string): Promise<PipelineRunListResponse> {
   const { data } = await api.get<PipelineRunListResponse>(`/api/pipeline-configs/${configId}/runs`);
-  return data;
+  return normalizePipelineRunList(data);
+}
+
+/** All experiment runs, loaded per config so the list works while the backend is up. */
+export async function getExperimentRuns(): Promise<PipelineRunListResponse> {
+  const { configs } = await getPipelineConfigs();
+  const batches = await Promise.all(
+    configs.map(async (config) => {
+      try {
+        return await getPipelineRunsForConfig(config.id);
+      } catch {
+        return { runs: [], total: 0 };
+      }
+    })
+  );
+  const runs = batches
+    .flatMap((batch) => batch.runs)
+    .sort((a, b) => (Date.parse(b.created_at || '') || 0) - (Date.parse(a.created_at || '') || 0));
+  return { runs, total: runs.length };
 }
 
 export async function startPipelineRun(

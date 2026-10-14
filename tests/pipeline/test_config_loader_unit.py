@@ -8,8 +8,8 @@ Tests cover:
 - PipelineConfig: validates required stages present; raises for missing stages
 - load_pipeline_config: FileNotFoundError, invalid YAML, valid YAML
 - EvaluatorDefinition: fields, to_tool() conversion
-- _builtin_evaluator_definitions: count and known keys
-- init_evaluator_registry: uses built-ins when YAML missing, merges when present
+- configs/evaluators.yaml: loads, every evaluator has an image
+- init_evaluator_registry: raises when YAML missing or empty, registers only YAML entries
 - add_evaluation_tasks_to_workflow: correct number of eval tasks, dependency setup
 - make_combinations: total count matches expected Cartesian product
 - create_workflow_from_combination: stage priorities, within-stage chaining
@@ -42,7 +42,6 @@ from src.pipeline.config_loader import (
     load_pipeline_config,
     load_evaluators_from_yaml,
     init_evaluator_registry,
-    _builtin_evaluator_definitions,
     add_evaluation_tasks_to_workflow,
     make_combinations,
     create_workflow_from_combination,
@@ -426,42 +425,30 @@ class TestEvaluatorDefinition:
 
 
 # ============================================================================
-# Tests: _builtin_evaluator_definitions
+# Tests: configs/evaluators.yaml
 # ============================================================================
 
+REPO_EVALUATORS_YAML = str(Path(__file__).parents[2] / "configs" / "evaluators.yaml")
 
-class TestBuiltinEvaluatorDefinitions:
-    """Tests for _builtin_evaluator_definitions."""
 
-    def test_returns_seven_evaluators(self):
-        builtins = _builtin_evaluator_definitions()
-        assert len(builtins) == 7
+@pytest.fixture
+def repo_evaluators() -> Dict[str, EvaluatorDefinition]:
+    return load_evaluators_from_yaml(REPO_EVALUATORS_YAML)
+
+
+class TestRepoEvaluatorsYaml:
+    """The checked-in evaluators.yaml is the only source of evaluator definitions."""
 
     @pytest.mark.parametrize("key", ["clean", "backdoor", "adversarial", "fairness",
                                       "fingerprinting", "ood", "watermark"])
-    def test_all_expected_keys_present(self, key):
-        builtins = _builtin_evaluator_definitions()
-        assert key in builtins
+    def test_expected_keys_present(self, repo_evaluators, key):
+        assert key in repo_evaluators
 
-    def test_clean_evaluator_no_required_artifacts(self):
-        builtins = _builtin_evaluator_definitions()
-        assert builtins["clean"].required_artifacts == []
+    def test_backdoor_requires_poisoning_metadata(self, repo_evaluators):
+        assert "poisoning_metadata.json" in repo_evaluators["backdoor"].required_artifacts
 
-    def test_backdoor_requires_poisoning_metadata(self):
-        builtins = _builtin_evaluator_definitions()
-        assert "poisoning_metadata.json" in builtins["backdoor"].required_artifacts
-
-    def test_watermark_requires_watermark_key(self):
-        builtins = _builtin_evaluator_definitions()
-        assert "watermark_key.json" in builtins["watermark"].required_artifacts
-
-    def test_fairness_requires_sensitive_attributes(self):
-        builtins = _builtin_evaluator_definitions()
-        assert "sensitive_attributes.npy" in builtins["fairness"].required_artifacts
-
-    def test_all_evaluators_have_container_image(self):
-        builtins = _builtin_evaluator_definitions()
-        for name, defn in builtins.items():
+    def test_all_evaluators_have_container_image(self, repo_evaluators):
+        for name, defn in repo_evaluators.items():
             assert defn.container.image, f"Evaluator {name} missing image"
 
 
@@ -473,11 +460,17 @@ class TestBuiltinEvaluatorDefinitions:
 class TestInitEvaluatorRegistry:
     """Tests for init_evaluator_registry."""
 
-    def test_uses_builtins_when_yaml_missing(self):
-        init_evaluator_registry("/nonexistent/evaluators.yaml")
-        assert len(config_loader_module._EVALUATOR_REGISTRY) == 7
+    def test_raises_when_yaml_missing(self):
+        with pytest.raises(FileNotFoundError):
+            init_evaluator_registry("/nonexistent/evaluators.yaml")
 
-    def test_merges_custom_with_builtins(self, tmp_path):
+    def test_raises_when_yaml_has_no_evaluators(self, tmp_path):
+        empty_yaml = tmp_path / "evaluators.yaml"
+        empty_yaml.write_text("evaluators: {}\n")
+        with pytest.raises(ValueError):
+            init_evaluator_registry(str(empty_yaml))
+
+    def test_registers_only_yaml_entries(self, tmp_path):
         custom_yaml = tmp_path / "evaluators.yaml"
         custom_yaml.write_text("""\
 evaluators:
@@ -489,24 +482,8 @@ evaluators:
     metrics: [my_metric]
 """)
         init_evaluator_registry(str(custom_yaml))
-        # Built-ins (7) + custom (1) = 8
-        assert len(config_loader_module._EVALUATOR_REGISTRY) == 8
-        assert "custom_eval" in config_loader_module._EVALUATOR_REGISTRY
-
-    def test_builtin_can_be_overridden(self, tmp_path):
-        custom_yaml = tmp_path / "evaluators.yaml"
-        custom_yaml.write_text("""\
-evaluators:
-  clean:
-    name: clean-override
-    container:
-      image: img/clean-custom:v99
-      command: run-custom
-    metrics: [custom_accuracy]
-""")
-        init_evaluator_registry(str(custom_yaml))
-        clean = config_loader_module._EVALUATOR_REGISTRY["clean"]
-        assert clean.container.image == "img/clean-custom:v99"
+        assert list(config_loader_module._EVALUATOR_REGISTRY) == ["custom_eval"]
+        assert config_loader_module._EVALUATOR_REGISTRY["custom_eval"].container.image == "img/custom:v1"
 
 
 # ============================================================================
@@ -517,9 +494,9 @@ evaluators:
 class TestAddEvaluationTasksToWorkflow:
     """Tests for add_evaluation_tasks_to_workflow."""
 
-    def test_adds_one_task_per_evaluator(self):
+    def test_adds_one_task_per_evaluator(self, repo_evaluators):
         wf = Workflow(name="wf", pipeline_id="p1")
-        evaluators = _builtin_evaluator_definitions()
+        evaluators = repo_evaluators
 
         tasks = add_evaluation_tasks_to_workflow(
             workflow=wf, evaluators=evaluators, pipeline_id="p1"
@@ -528,42 +505,42 @@ class TestAddEvaluationTasksToWorkflow:
         assert len(tasks) == len(evaluators)
         assert len(wf.tasks) == len(evaluators)
 
-    def test_all_added_tasks_are_evaluation_type(self):
+    def test_all_added_tasks_are_evaluation_type(self, repo_evaluators):
         wf = Workflow(name="wf", pipeline_id="p1")
-        evaluators = _builtin_evaluator_definitions()
+        evaluators = repo_evaluators
         tasks = add_evaluation_tasks_to_workflow(wf, evaluators, "p1")
 
         for task in tasks:
             assert isinstance(task, EvaluationTask)
 
-    def test_all_eval_tasks_have_low_priority(self):
+    def test_all_eval_tasks_have_low_priority(self, repo_evaluators):
         wf = Workflow(name="wf", pipeline_id="p1")
-        evaluators = _builtin_evaluator_definitions()
+        evaluators = repo_evaluators
         tasks = add_evaluation_tasks_to_workflow(wf, evaluators, "p1")
 
         for task in tasks:
             assert task.priority == 50
 
-    def test_eval_tasks_depend_on_last_deployment_task(self):
+    def test_eval_tasks_depend_on_last_deployment_task(self, repo_evaluators):
         wf = Workflow(name="wf", pipeline_id="p1")
         deploy_tool = make_tool("deploy-tool")
         last_deploy = TaskFactory.create_task(TaskType.DEPLOYMENT, tool=deploy_tool)
 
-        evaluators = {"clean": _builtin_evaluator_definitions()["clean"]}
+        evaluators = {"clean": repo_evaluators["clean"]}
         tasks = add_evaluation_tasks_to_workflow(wf, evaluators, "p1", last_deploy)
 
         assert last_deploy in tasks[0].dependencies
 
-    def test_eval_tasks_have_no_dep_when_no_deployment_task(self):
+    def test_eval_tasks_have_no_dep_when_no_deployment_task(self, repo_evaluators):
         wf = Workflow(name="wf", pipeline_id="p1")
-        evaluators = {"clean": _builtin_evaluator_definitions()["clean"]}
+        evaluators = {"clean": repo_evaluators["clean"]}
         tasks = add_evaluation_tasks_to_workflow(wf, evaluators, "p1", last_deployment_task=None)
 
         assert tasks[0].dependencies == []
 
-    def test_required_artifacts_propagated(self):
+    def test_required_artifacts_propagated(self, repo_evaluators):
         wf = Workflow(name="wf", pipeline_id="p1")
-        evaluators = {"backdoor": _builtin_evaluator_definitions()["backdoor"]}
+        evaluators = {"backdoor": repo_evaluators["backdoor"]}
         tasks = add_evaluation_tasks_to_workflow(wf, evaluators, "p1")
 
         assert "poisoning_metadata.json" in tasks[0].required_artifacts

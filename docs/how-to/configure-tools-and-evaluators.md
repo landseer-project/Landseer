@@ -22,7 +22,7 @@ Example starter: `configs/pipeline/trades.yaml`.
 
 ## Evaluators (`configs/evaluators.yaml`)
 
-Evaluators are merged on top of built-in evaluator defaults.
+This file is required. It is the only source of evaluator definitions, and the pipeline will not load without it.
 
 Fields:
 

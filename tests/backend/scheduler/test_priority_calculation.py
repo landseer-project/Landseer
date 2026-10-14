@@ -28,6 +28,19 @@ from src.backend.scheduler.priority_scheduler import PriorityScheduler
 # ============================================================================
 
 
+
+def _pipeline(name, workflows):
+    """Assemble a pipeline the way the config loader does: tasks join each
+    workflow under the pipeline's id, which records membership and the
+    usage counter."""
+    pipeline = DefenseEvaluationPipeline(name=name, workflows=[])
+    for workflow in workflows:
+        workflow.pipeline_id = pipeline.id
+        for task in workflow.tasks:
+            task.add_to_workflow(workflow.id, pipeline.id)
+        pipeline.add_workflow(workflow)
+    return pipeline
+
 @pytest.fixture
 def tool_a():
     """Tool A - baseline pre_training."""
@@ -364,10 +377,7 @@ class TestUsageCounterPriority:
             name="wf3", tasks=[task_high]
         )
         
-        pipeline = DefenseEvaluationPipeline(
-            name="test",
-            workflows=[workflow1, workflow2, workflow3]
-        )
+        pipeline = _pipeline("test", [workflow1, workflow2, workflow3])
         
         PriorityScheduler(pipeline)
         
@@ -448,7 +458,7 @@ class TestUsageCounterPriority:
             for i in range(20)
         ]
         
-        pipeline = DefenseEvaluationPipeline(name="test", workflows=workflows)
+        pipeline = _pipeline("test", workflows)
         
         scheduler = PriorityScheduler(pipeline)
         
@@ -521,7 +531,7 @@ class TestUsageCounterPriority:
                 name=f"wf_100_{i}", tasks=[task_100]
             ))
         
-        pipeline = DefenseEvaluationPipeline(name="test", workflows=workflows)
+        pipeline = _pipeline("test", workflows)
         
         PriorityScheduler(pipeline)
         

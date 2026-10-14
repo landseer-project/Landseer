@@ -1,5 +1,7 @@
 """Tests for pipeline tool stage validation (YAML + image labels, no id-prefix inference)."""
 
+from pathlib import Path
+
 import pytest
 
 from src.pipeline.config_loader import PipelineConfig, StageConfig, DatasetConfig, ModelConfig

@@ -15,7 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.backend.api import app
-from src.db import PipelineRunStatus
+from src.db import ExperimentRunStatus
 from src.pipeline.pipeline import DefenseEvaluationPipeline
 from src.pipeline.tasks import TaskType, TaskStatus
 from src.pipeline.tools import ContainerConfig, ToolDefinition
@@ -38,7 +38,7 @@ class _FakeRunRepoConflict:
     def __init__(self, _session):
         pass
 
-    def get_active_runs_for_config(self, _config_id):
+    def get_active_runs_for_experiment(self, _config_id):
         return [SimpleNamespace(id="run_existing")]
 
 
@@ -46,7 +46,7 @@ class _FakeRunRepoEmpty:
     def __init__(self, _session):
         self._run = None
 
-    def get_active_runs_for_config(self, _config_id):
+    def get_active_runs_for_experiment(self, _config_id):
         return []
 
     def get_next_run_number(self, _config_id):
@@ -55,10 +55,10 @@ class _FakeRunRepoEmpty:
     def create(self, run_data):
         self._run = SimpleNamespace(
             id=run_data["id"],
-            pipeline_config_id=run_data["pipeline_config_id"],
+            experiment_id=run_data["experiment_id"],
             run_number=run_data["run_number"],
             use_cache=run_data["use_cache"],
-            status=PipelineRunStatus.PENDING,
+            status=ExperimentRunStatus.PENDING,
             error_message=None,
             created_at=SimpleNamespace(isoformat=lambda: "2026-01-01T00:00:00"),
             started_at=None,
@@ -68,7 +68,7 @@ class _FakeRunRepoEmpty:
 
     def update_status(self, run_id, _status):
         if self._run and self._run.id == run_id:
-            self._run.status = PipelineRunStatus.RUNNING
+            self._run.status = ExperimentRunStatus.RUNNING
             self._run.started_at = SimpleNamespace(isoformat=lambda: "2026-01-01T00:01:00")
         return self._run
 
@@ -80,10 +80,10 @@ class _FakeRunRepoStop:
     def __init__(self, _session):
         self._run = SimpleNamespace(
             id="run_1",
-            pipeline_config_id="config_trades",
+            experiment_id="config_trades",
             run_number=1,
             use_cache=True,
-            status=PipelineRunStatus.RUNNING,
+            status=ExperimentRunStatus.RUNNING,
             error_message=None,
             created_at=SimpleNamespace(isoformat=lambda: "2026-01-01T00:00:00"),
             started_at=SimpleNamespace(isoformat=lambda: "2026-01-01T00:01:00"),
@@ -95,7 +95,7 @@ class _FakeRunRepoStop:
 
     def update_status(self, _run_id, status):
         self._run.status = status
-        if self._run.status == PipelineRunStatus.CANCELLED:
+        if self._run.status == ExperimentRunStatus.CANCELLED:
             self._run.completed_at = SimpleNamespace(isoformat=lambda: "2026-01-01T00:02:00")
         return self._run
 
@@ -161,7 +161,7 @@ class TestPipelineRunStart:
         )
         with patch("src.backend.config_discovery.get_config_by_id", return_value=cfg), patch(
             "src.db.session_scope", _fake_session_scope
-        ), patch("src.db.PipelineRunRepository", _FakeRunRepoConflict):
+        ), patch("src.db.ExperimentRunRepository", _FakeRunRepoConflict):
             response = client.post(
                 "/api/pipeline-configs/config_trades/runs",
                 json={"use_cache": True, "dry_run": False},
@@ -179,7 +179,7 @@ class TestPipelineRunStart:
         fake_repo = _FakeRunRepoEmpty(None)
         with patch("src.backend.config_discovery.get_config_by_id", return_value=cfg), patch(
             "src.db.session_scope", _fake_session_scope
-        ), patch("src.db.PipelineRunRepository", lambda _s: fake_repo), patch(
+        ), patch("src.db.ExperimentRunRepository", lambda _s: fake_repo), patch(
             "src.pipeline.config_loader.create_pipeline_from_config",
             return_value=_build_minimal_pipeline(),
         ):
@@ -189,7 +189,7 @@ class TestPipelineRunStart:
             )
         assert response.status_code == 200
         body = response.json()
-        assert body["pipeline_config_id"] == "config_trades"
+        assert body["experiment_id"] == "config_trades"
         assert body["status"] == "running"
         assert body["run_number"] == 1
 
@@ -203,23 +203,23 @@ class TestPipelineRunStopAndRestart:
             def get_by_id(self, _rid):
                 return SimpleNamespace(
                     id="run_1",
-                    pipeline_config_id="config_trades",
+                    experiment_id="config_trades",
                     run_number=1,
                     use_cache=True,
-                    status=PipelineRunStatus.COMPLETED,
+                    status=ExperimentRunStatus.COMPLETED,
                     error_message=None,
                     created_at=SimpleNamespace(isoformat=lambda: "2026-01-01T00:00:00"),
                     started_at=None,
                     completed_at=SimpleNamespace(isoformat=lambda: "2026-01-01T00:02:00"),
                 )
 
-        with patch("src.db.session_scope", _fake_session_scope), patch("src.db.PipelineRunRepository", _Repo):
+        with patch("src.db.session_scope", _fake_session_scope), patch("src.db.ExperimentRunRepository", _Repo):
             response = client.post("/api/pipeline-runs/run_1/stop")
         assert response.status_code == 400
         assert "cannot stop run" in response.json()["detail"].lower()
 
     def test_stop_run_running_transitions_to_cancelled(self, client, initialized_scheduler_for_run):
-        with patch("src.db.session_scope", _fake_session_scope), patch("src.db.PipelineRunRepository", _FakeRunRepoStop):
+        with patch("src.db.session_scope", _fake_session_scope), patch("src.db.ExperimentRunRepository", _FakeRunRepoStop):
             response = client.post("/api/pipeline-runs/run_1/stop")
         assert response.status_code == 200
         body = response.json()
@@ -234,11 +234,11 @@ class TestPipelineRunStopAndRestart:
             def get_by_id(self, _rid):
                 return SimpleNamespace(
                     id="run_1",
-                    pipeline_config_id="config_trades",
-                    status=PipelineRunStatus.RUNNING,
+                    experiment_id="config_trades",
+                    status=ExperimentRunStatus.RUNNING,
                 )
 
-        with patch("src.db.session_scope", _fake_session_scope), patch("src.db.PipelineRunRepository", _Repo):
+        with patch("src.db.session_scope", _fake_session_scope), patch("src.db.ExperimentRunRepository", _Repo):
             response = client.post("/api/pipeline-runs/run_1/restart", json={"use_cache": True})
         assert response.status_code == 400
         assert "active run" in response.json()["detail"].lower()

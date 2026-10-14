@@ -10,9 +10,11 @@ Verifies:
 
 import numpy as np
 import pytest
-import torch
+
+torch = pytest.importorskip("torch", reason="evaluator tests need torch: uv sync --group ml")
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
+pytest.importorskip("sklearn", reason="evaluator tests need scikit-learn: uv sync --group ml")
 from sklearn.metrics import roc_auc_score
 
 

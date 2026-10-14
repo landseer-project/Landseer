@@ -229,6 +229,8 @@ export interface PipelineConfigListResponse {
 export interface PipelineRun {
   id: string;
   pipeline_config_id: string;
+  /** Config id returned by the API. Same value as pipeline_config_id. */
+  experiment_id?: string;
   run_number: number;
   use_cache: boolean;
   /** Locked tool configuration snapshot set at run start. Stage → tool name list. */

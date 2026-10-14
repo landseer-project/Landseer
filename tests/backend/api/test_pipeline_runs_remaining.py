@@ -22,7 +22,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.backend.api import app, _scheduler_state
-from src.db import PipelineRunStatus
+from src.db import ExperimentRunStatus
 from src.pipeline.tasks import (
     Task,
     TaskType,
@@ -105,20 +105,21 @@ def _make_run(
     run_id="run_1",
     config_id="config_mini",
     run_number=1,
-    status=PipelineRunStatus.COMPLETED,
+    status=ExperimentRunStatus.COMPLETED,
     error_message=None,
 ):
     return SimpleNamespace(
         id=run_id,
-        pipeline_config_id=config_id,
+        experiment_id=config_id,
         run_number=run_number,
         use_cache=True,
+        tools_config=None,
         status=status,
         error_message=error_message,
         created_at=SimpleNamespace(isoformat=lambda: "2026-04-09T10:00:00"),
         started_at=SimpleNamespace(isoformat=lambda: "2026-04-09T10:00:01"),
         completed_at=SimpleNamespace(isoformat=lambda: "2026-04-09T11:00:00")
-        if status in (PipelineRunStatus.COMPLETED, PipelineRunStatus.CANCELLED)
+        if status in (ExperimentRunStatus.COMPLETED, ExperimentRunStatus.CANCELLED)
         else None,
     )
 
@@ -145,7 +146,7 @@ class TestGetSinglePipelineRun:
     """Tests for GET /api/pipeline-runs/{run_id}."""
 
     def test_200_returns_run(self, client):
-        run = _make_run("run_abc", "config_mini", 1, PipelineRunStatus.RUNNING)
+        run = _make_run("run_abc", "config_mini", 1, ExperimentRunStatus.RUNNING)
 
         class _Repo:
             def __init__(self, _s):
@@ -154,18 +155,18 @@ class TestGetSinglePipelineRun:
                 return run if run_id == "run_abc" else None
 
         with patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", _Repo):
+             patch("src.db.ExperimentRunRepository", _Repo):
             resp = client.get("/api/pipeline-runs/run_abc")
 
         assert resp.status_code == 200
         body = resp.json()
         assert body["id"] == "run_abc"
-        assert body["pipeline_config_id"] == "config_mini"
+        assert body["experiment_id"] == "config_mini"
         assert body["status"] == "running"
         assert body["run_number"] == 1
 
     def test_200_response_has_all_fields(self, client):
-        run = _make_run("run_xyz", "config_trades", 3, PipelineRunStatus.COMPLETED)
+        run = _make_run("run_xyz", "config_trades", 3, ExperimentRunStatus.COMPLETED)
 
         class _Repo:
             def __init__(self, _s):
@@ -174,11 +175,11 @@ class TestGetSinglePipelineRun:
                 return run
 
         with patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", _Repo):
+             patch("src.db.ExperimentRunRepository", _Repo):
             resp = client.get("/api/pipeline-runs/run_xyz")
 
         body = resp.json()
-        for field in ["id", "pipeline_config_id", "run_number", "use_cache",
+        for field in ["id", "experiment_id", "run_number", "use_cache",
                        "status", "error_message", "created_at", "started_at", "completed_at"]:
             assert field in body, f"Missing field: {field}"
 
@@ -190,7 +191,7 @@ class TestGetSinglePipelineRun:
                 return None
 
         with patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", _Repo):
+             patch("src.db.ExperimentRunRepository", _Repo):
             resp = client.get("/api/pipeline-runs/run_nonexistent")
 
         assert resp.status_code == 404
@@ -214,7 +215,7 @@ class TestGetSinglePipelineRun:
                 return run
 
         with patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", _Repo):
+             patch("src.db.ExperimentRunRepository", _Repo):
             resp = client.get("/api/pipeline-runs/run_1")
 
         assert resp.status_code == 200
@@ -245,10 +246,10 @@ class TestRestartPipelineRun:
             def create(self, data):
                 self._new_run = SimpleNamespace(
                     id=data["id"],
-                    pipeline_config_id=data["pipeline_config_id"],
+                    experiment_id=data["experiment_id"],
                     run_number=data["run_number"],
                     use_cache=data["use_cache"],
-                    status=PipelineRunStatus.PENDING,
+                    status=ExperimentRunStatus.PENDING,
                     error_message=None,
                     created_at=SimpleNamespace(isoformat=lambda: "2026-04-09T12:00:00"),
                     started_at=None,
@@ -259,7 +260,7 @@ class TestRestartPipelineRun:
             def update_status(self, run_id, status):
                 if self._new_run and self._new_run.id == run_id:
                     self._new_run.status = status
-                    if status == PipelineRunStatus.RUNNING:
+                    if status == ExperimentRunStatus.RUNNING:
                         self._new_run.started_at = SimpleNamespace(
                             isoformat=lambda: "2026-04-09T12:00:01"
                         )
@@ -267,12 +268,12 @@ class TestRestartPipelineRun:
         return _Repo
 
     def test_restart_happy_path(self, client):
-        old_run = _make_run("run_old", "config_mini", 1, PipelineRunStatus.COMPLETED)
+        old_run = _make_run("run_old", "config_mini", 1, ExperimentRunStatus.COMPLETED)
         cfg = _make_config("config_mini", "mini")
 
         with patch("src.backend.config_discovery.get_config_by_id", return_value=cfg), \
              patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", self._make_restart_repo(old_run)), \
+             patch("src.db.ExperimentRunRepository", self._make_restart_repo(old_run)), \
              patch("src.pipeline.config_loader.create_pipeline_from_config",
                    return_value=_build_pipeline()):
             resp = client.post(
@@ -282,17 +283,17 @@ class TestRestartPipelineRun:
 
         assert resp.status_code == 200
         body = resp.json()
-        assert body["pipeline_config_id"] == "config_mini"
+        assert body["experiment_id"] == "config_mini"
         assert body["run_number"] == 2
         assert body["id"] != "run_old"
 
     def test_restart_failed_run(self, client):
-        old_run = _make_run("run_fail", "config_mini", 1, PipelineRunStatus.FAILED)
+        old_run = _make_run("run_fail", "config_mini", 1, ExperimentRunStatus.FAILED)
         cfg = _make_config("config_mini", "mini")
 
         with patch("src.backend.config_discovery.get_config_by_id", return_value=cfg), \
              patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", self._make_restart_repo(old_run)), \
+             patch("src.db.ExperimentRunRepository", self._make_restart_repo(old_run)), \
              patch("src.pipeline.config_loader.create_pipeline_from_config",
                    return_value=_build_pipeline()):
             resp = client.post(
@@ -303,12 +304,12 @@ class TestRestartPipelineRun:
         assert resp.status_code == 200
 
     def test_restart_cancelled_run(self, client):
-        old_run = _make_run("run_cancel", "config_mini", 2, PipelineRunStatus.CANCELLED)
+        old_run = _make_run("run_cancel", "config_mini", 2, ExperimentRunStatus.CANCELLED)
         cfg = _make_config("config_mini", "mini")
 
         with patch("src.backend.config_discovery.get_config_by_id", return_value=cfg), \
              patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", self._make_restart_repo(old_run)), \
+             patch("src.db.ExperimentRunRepository", self._make_restart_repo(old_run)), \
              patch("src.pipeline.config_loader.create_pipeline_from_config",
                    return_value=_build_pipeline()):
             resp = client.post(
@@ -327,7 +328,7 @@ class TestRestartPipelineRun:
                 return None
 
         with patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", _Repo):
+             patch("src.db.ExperimentRunRepository", _Repo):
             resp = client.post(
                 "/api/pipeline-runs/run_nonexistent/restart",
                 json={"use_cache": True},
@@ -337,7 +338,7 @@ class TestRestartPipelineRun:
         assert "not found" in resp.json()["detail"].lower()
 
     def test_restart_404_config_not_found(self, client):
-        old_run = _make_run("run_old", "config_deleted", 1, PipelineRunStatus.COMPLETED)
+        old_run = _make_run("run_old", "config_deleted", 1, ExperimentRunStatus.COMPLETED)
 
         class _Repo:
             def __init__(self, _s):
@@ -347,7 +348,7 @@ class TestRestartPipelineRun:
 
         with patch("src.backend.config_discovery.get_config_by_id", return_value=None), \
              patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", _Repo):
+             patch("src.db.ExperimentRunRepository", _Repo):
             resp = client.post(
                 "/api/pipeline-runs/run_old/restart",
                 json={"use_cache": True},
@@ -357,7 +358,7 @@ class TestRestartPipelineRun:
         assert "config" in resp.json()["detail"].lower()
 
     def test_restart_400_pending_run(self, client):
-        old_run = _make_run("run_active", "config_mini", 1, PipelineRunStatus.PENDING)
+        old_run = _make_run("run_active", "config_mini", 1, ExperimentRunStatus.PENDING)
 
         class _Repo:
             def __init__(self, _s):
@@ -366,7 +367,7 @@ class TestRestartPipelineRun:
                 return old_run
 
         with patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", _Repo):
+             patch("src.db.ExperimentRunRepository", _Repo):
             resp = client.post(
                 "/api/pipeline-runs/run_active/restart",
                 json={"use_cache": True},
@@ -376,7 +377,7 @@ class TestRestartPipelineRun:
         assert "active" in resp.json()["detail"].lower()
 
     def test_restart_400_running_run(self, client):
-        old_run = _make_run("run_active", "config_mini", 1, PipelineRunStatus.RUNNING)
+        old_run = _make_run("run_active", "config_mini", 1, ExperimentRunStatus.RUNNING)
 
         class _Repo:
             def __init__(self, _s):
@@ -385,7 +386,7 @@ class TestRestartPipelineRun:
                 return old_run
 
         with patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", _Repo):
+             patch("src.db.ExperimentRunRepository", _Repo):
             resp = client.post(
                 "/api/pipeline-runs/run_active/restart",
                 json={"use_cache": True},
@@ -394,7 +395,7 @@ class TestRestartPipelineRun:
         assert resp.status_code == 400
 
     def test_restart_400_stopping_run(self, client):
-        old_run = _make_run("run_stopping", "config_mini", 1, PipelineRunStatus.STOPPING)
+        old_run = _make_run("run_stopping", "config_mini", 1, ExperimentRunStatus.STOPPING)
 
         class _Repo:
             def __init__(self, _s):
@@ -403,7 +404,7 @@ class TestRestartPipelineRun:
                 return old_run
 
         with patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", _Repo):
+             patch("src.db.ExperimentRunRepository", _Repo):
             resp = client.post(
                 "/api/pipeline-runs/run_stopping/restart",
                 json={"use_cache": True},
@@ -412,7 +413,7 @@ class TestRestartPipelineRun:
         assert resp.status_code == 400
 
     def test_restart_500_on_pipeline_load_failure(self, client):
-        old_run = _make_run("run_old", "config_mini", 1, PipelineRunStatus.COMPLETED)
+        old_run = _make_run("run_old", "config_mini", 1, ExperimentRunStatus.COMPLETED)
         cfg = _make_config("config_mini", "mini")
 
         class _Repo:
@@ -425,8 +426,8 @@ class TestRestartPipelineRun:
                 return 2
             def create(self, data):
                 return SimpleNamespace(
-                    id=data["id"], pipeline_config_id=data["pipeline_config_id"],
-                    run_number=2, use_cache=True, status=PipelineRunStatus.PENDING,
+                    id=data["id"], experiment_id=data["experiment_id"],
+                    run_number=2, use_cache=True, status=ExperimentRunStatus.PENDING,
                     error_message=None,
                     created_at=SimpleNamespace(isoformat=lambda: "2026-04-09T12:00:00"),
                     started_at=None, completed_at=None,
@@ -434,7 +435,7 @@ class TestRestartPipelineRun:
 
         with patch("src.backend.config_discovery.get_config_by_id", return_value=cfg), \
              patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", _Repo), \
+             patch("src.db.ExperimentRunRepository", _Repo), \
              patch("src.pipeline.config_loader.create_pipeline_from_config",
                    side_effect=ValueError("Invalid YAML")):
             resp = client.post(
@@ -466,21 +467,21 @@ class TestStopPipelineRunExtra:
         class _Repo:
             def __init__(self, _s):
                 self._run = _make_run("run_pending", "config_mini", 1,
-                                       PipelineRunStatus.PENDING)
+                                       ExperimentRunStatus.PENDING)
 
             def get_by_id(self, run_id):
                 return self._run
 
             def update_status(self, run_id, status):
                 self._run.status = status
-                if status == PipelineRunStatus.CANCELLED:
+                if status == ExperimentRunStatus.CANCELLED:
                     self._run.completed_at = SimpleNamespace(
                         isoformat=lambda: "2026-04-09T10:05:00"
                     )
                 return self._run
 
         with patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", _Repo):
+             patch("src.db.ExperimentRunRepository", _Repo):
             resp = client.post("/api/pipeline-runs/run_pending/stop")
 
         assert resp.status_code == 200
@@ -495,10 +496,10 @@ class TestStopPipelineRunExtra:
                 pass
             def get_by_id(self, _):
                 return _make_run("run_stopping", "config_mini", 1,
-                                  PipelineRunStatus.STOPPING)
+                                  ExperimentRunStatus.STOPPING)
 
         with patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", _Repo):
+             patch("src.db.ExperimentRunRepository", _Repo):
             resp = client.post("/api/pipeline-runs/run_stopping/stop")
 
         assert resp.status_code == 400
@@ -512,10 +513,10 @@ class TestStopPipelineRunExtra:
                 pass
             def get_by_id(self, _):
                 return _make_run("run_failed", "config_mini", 1,
-                                  PipelineRunStatus.FAILED)
+                                  ExperimentRunStatus.FAILED)
 
         with patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", _Repo):
+             patch("src.db.ExperimentRunRepository", _Repo):
             resp = client.post("/api/pipeline-runs/run_failed/stop")
 
         assert resp.status_code == 400
@@ -530,21 +531,21 @@ class TestStopPipelineRunExtra:
         class _Repo:
             def __init__(self, _s):
                 self._run = _make_run(run_id, "config_mini", 1,
-                                       PipelineRunStatus.RUNNING)
+                                       ExperimentRunStatus.RUNNING)
 
             def get_by_id(self, _):
                 return self._run
 
             def update_status(self, _, status):
                 self._run.status = status
-                if status == PipelineRunStatus.CANCELLED:
+                if status == ExperimentRunStatus.CANCELLED:
                     self._run.completed_at = SimpleNamespace(
                         isoformat=lambda: "2026-04-09T10:05:00"
                     )
                 return self._run
 
         with patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", _Repo):
+             patch("src.db.ExperimentRunRepository", _Repo):
             resp = client.post(f"/api/pipeline-runs/{run_id}/stop")
 
         assert resp.status_code == 200
@@ -558,21 +559,21 @@ class TestStopPipelineRunExtra:
         class _Repo:
             def __init__(self, _s):
                 self._run = _make_run("run_different", "config_mini", 1,
-                                       PipelineRunStatus.RUNNING)
+                                       ExperimentRunStatus.RUNNING)
 
             def get_by_id(self, _):
                 return self._run
 
             def update_status(self, _, status):
                 self._run.status = status
-                if status == PipelineRunStatus.CANCELLED:
+                if status == ExperimentRunStatus.CANCELLED:
                     self._run.completed_at = SimpleNamespace(
                         isoformat=lambda: "2026-04-09T10:05:00"
                     )
                 return self._run
 
         with patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", _Repo):
+             patch("src.db.ExperimentRunRepository", _Repo):
             resp = client.post("/api/pipeline-runs/run_different/stop")
 
         assert resp.status_code == 200
@@ -593,14 +594,14 @@ class TestStartRunExtra:
         class _Repo:
             def __init__(self, _s):
                 pass
-            def get_active_runs_for_config(self, _):
+            def get_active_runs_for_experiment(self, _):
                 return []
             def get_next_run_number(self, _):
                 return 1
             def create(self, data):
                 return SimpleNamespace(
-                    id=data["id"], pipeline_config_id=data["pipeline_config_id"],
-                    run_number=1, use_cache=True, status=PipelineRunStatus.PENDING,
+                    id=data["id"], experiment_id=data["experiment_id"],
+                    run_number=1, use_cache=True, status=ExperimentRunStatus.PENDING,
                     error_message=None,
                     created_at=SimpleNamespace(isoformat=lambda: "2026-04-09T10:00:00"),
                     started_at=None, completed_at=None,
@@ -608,16 +609,17 @@ class TestStartRunExtra:
 
         with patch("src.backend.config_discovery.get_config_by_id", return_value=cfg), \
              patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", _Repo), \
+             patch("src.db.ExperimentRunRepository", _Repo), \
+             patch("src.pipeline.config_loader.load_attack_config", return_value={}), \
              patch("src.pipeline.config_loader.create_pipeline_from_config",
-                   side_effect=FileNotFoundError("config.yaml not found")):
+                   side_effect=RuntimeError("config.yaml not found")):
             resp = client.post(
                 "/api/pipeline-configs/config_bad/runs",
                 json={"use_cache": True},
             )
 
-        assert resp.status_code == 500
-        assert "failed to start" in resp.json()["detail"].lower()
+        # Sync path succeeds and enqueues background init; load errors surface async.
+        assert resp.status_code == 200
 
     def test_attack_config_path_from_request(self, client):
         """When request provides attack_config_path, it overrides config's value."""
@@ -635,14 +637,14 @@ class TestStartRunExtra:
         class _Repo:
             def __init__(self, _s):
                 pass
-            def get_active_runs_for_config(self, _):
+            def get_active_runs_for_experiment(self, _):
                 return []
             def get_next_run_number(self, _):
                 return 1
             def create(self, data):
                 return SimpleNamespace(
-                    id=data["id"], pipeline_config_id=data["pipeline_config_id"],
-                    run_number=1, use_cache=True, status=PipelineRunStatus.PENDING,
+                    id=data["id"], experiment_id=data["experiment_id"],
+                    run_number=1, use_cache=True, status=ExperimentRunStatus.PENDING,
                     error_message=None,
                     created_at=SimpleNamespace(isoformat=lambda: "2026-04-09T10:00:00"),
                     started_at=None, completed_at=None,
@@ -652,7 +654,8 @@ class TestStartRunExtra:
 
         with patch("src.backend.config_discovery.get_config_by_id", return_value=cfg), \
              patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", _Repo), \
+             patch("src.db.ExperimentRunRepository", _Repo), \
+             patch("src.pipeline.config_loader.load_attack_config", return_value={}), \
              patch("src.pipeline.config_loader.create_pipeline_from_config",
                    return_value=_build_pipeline()) as mock_create:
             resp = client.post(
@@ -673,14 +676,14 @@ class TestStartRunExtra:
         class _Repo:
             def __init__(self, _s):
                 pass
-            def get_active_runs_for_config(self, _):
+            def get_active_runs_for_experiment(self, _):
                 return []
             def get_next_run_number(self, _):
                 return 1
             def create(self, data):
                 return SimpleNamespace(
-                    id=data["id"], pipeline_config_id=data["pipeline_config_id"],
-                    run_number=1, use_cache=True, status=PipelineRunStatus.PENDING,
+                    id=data["id"], experiment_id=data["experiment_id"],
+                    run_number=1, use_cache=True, status=ExperimentRunStatus.PENDING,
                     error_message=None,
                     created_at=SimpleNamespace(isoformat=lambda: "2026-04-09T10:00:00"),
                     started_at=None, completed_at=None,
@@ -690,7 +693,8 @@ class TestStartRunExtra:
 
         with patch("src.backend.config_discovery.get_config_by_id", return_value=cfg), \
              patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", _Repo), \
+             patch("src.db.ExperimentRunRepository", _Repo), \
+             patch("src.pipeline.config_loader.load_attack_config", return_value={}), \
              patch("src.pipeline.config_loader.create_pipeline_from_config",
                    return_value=_build_pipeline()):
             resp = client.post(

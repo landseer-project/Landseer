@@ -11,22 +11,22 @@
 ## Core commands
 
 ```bash
-poetry run pytest
-poetry run pytest tests/backend
-poetry run pytest tests/backend/api
-poetry run pytest tests/backend/scheduler
-poetry run pytest tests/pipeline
-poetry run pytest tests/worker
-poetry run pytest tests/evaluators
+uv run pytest
+uv run pytest tests/backend
+uv run pytest tests/backend/api
+uv run pytest tests/backend/scheduler
+uv run pytest tests/pipeline
+uv run pytest tests/worker
+uv run pytest tests/evaluators
 ```
 
 ## Marker-based commands
 
 ```bash
-poetry run pytest -m backend
-poetry run pytest -m "backend and api"
-poetry run pytest -m scheduler
-poetry run pytest -m db
-poetry run pytest -m integration
-poetry run pytest -m security
+uv run pytest -m backend
+uv run pytest -m "backend and api"
+uv run pytest -m scheduler
+uv run pytest -m db
+uv run pytest -m integration
+uv run pytest -m security
 ```

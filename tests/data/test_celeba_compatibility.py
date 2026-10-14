@@ -4,9 +4,8 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import yaml
 
-import src.data.manager as manager_module
-from src.data.loaders.celeba import CelebaLoader
 from src.data.manager import DatasetManager
 from src.data.types import DatasetInfo
 
@@ -26,67 +25,98 @@ def _write_celeba_filename_artifacts(output_dir: Path, train_count: int, test_co
     np.save(output_dir / "test_filenames.npy", np.asarray(test_names, dtype=str))
 
 
-def test_celeba_loader_requires_filename_arrays(tmp_path: Path):
-    output_dir = tmp_path / "celeba" / "clean"
+def _write_datasets_config(path: Path) -> None:
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "datasets": {
+                    "celeba": {
+                        "required_files": [
+                            "data.npy",
+                            "labels.npy",
+                            "test_data.npy",
+                            "test_labels.npy",
+                            "filenames.npy",
+                            "test_filenames.npy",
+                        ],
+                        "required_dirs": ["img_align_celeba"],
+                        "variants": {"clean": {"image": ""}},
+                    },
+                    "mnist": {
+                        "required_files": [
+                            "data.npy",
+                            "labels.npy",
+                            "test_data.npy",
+                            "test_labels.npy",
+                        ],
+                        "variants": {"clean": {"image": ""}},
+                    },
+                }
+            }
+        )
+    )
+
+
+def test_celeba_requires_filename_arrays(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    cfg = tmp_path / "datasets.yaml"
+    _write_datasets_config(cfg)
+    monkeypatch.setenv("LANDSEER_DATASETS_CONFIG", str(cfg))
+
+    base_dir = tmp_path / "data"
+    output_dir = base_dir / "celeba" / "clean"
     _write_core_celeba_artifacts(output_dir, train_count=4, test_count=2)
+    (output_dir / "img_align_celeba").mkdir()
 
-    loader = CelebaLoader()
+    manager = DatasetManager(base_dir)
     with pytest.raises(FileNotFoundError, match="filenames.npy"):
-        loader.prepare(output_dir=output_dir, variant="clean", params={})
+        manager.prepare_dataset(name="celeba", variant="clean")
 
 
-def test_celeba_loader_returns_dataset_info_with_complete_artifacts(tmp_path: Path):
-    output_dir = tmp_path / "celeba" / "clean"
+def test_celeba_returns_dataset_info_with_complete_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    cfg = tmp_path / "datasets.yaml"
+    _write_datasets_config(cfg)
+    monkeypatch.setenv("LANDSEER_DATASETS_CONFIG", str(cfg))
+
+    base_dir = tmp_path / "data"
+    output_dir = base_dir / "celeba" / "clean"
     _write_core_celeba_artifacts(output_dir, train_count=3, test_count=2)
     _write_celeba_filename_artifacts(output_dir, train_count=3, test_count=2)
+    (output_dir / "img_align_celeba").mkdir()
 
-    loader = CelebaLoader()
-    info = loader.prepare(output_dir=output_dir, variant="clean", params={})
+    manager = DatasetManager(base_dir)
+    info = manager.prepare_dataset(name="celeba", variant="clean")
 
+    assert isinstance(info, DatasetInfo)
     assert info.name == "celeba"
     assert info.train_samples == 3
     assert info.test_samples == 2
+    assert info.output_dir == str(output_dir)
 
 
-def test_dataset_manager_uses_default_full_celeba_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    monkeypatch.delenv("LANDSEER_CELEBA_DATA_PATH", raising=False)
-    expected_path = tmp_path / "full_celeba"
-    expected_path.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(manager_module, "DEFAULT_CELEBA_DATA_PATH", str(expected_path))
+def test_dataset_manager_resolves_celeba_under_base_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    cfg = tmp_path / "datasets.yaml"
+    _write_datasets_config(cfg)
+    monkeypatch.setenv("LANDSEER_DATASETS_CONFIG", str(cfg))
 
-    manager = DatasetManager(tmp_path / "data")
+    base_dir = tmp_path / "data"
+    manager = DatasetManager(base_dir)
+    assert manager._resolve_output_dir("celeba", "clean") == base_dir / "celeba" / "clean"
 
-    assert manager._resolve_output_dir("celeba", "clean") == expected_path
 
-
-def test_dataset_manager_enforces_legacy_celeba_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("LANDSEER_CELEBA_DATA_PATH", str(tmp_path / "celeba"))
+def test_dataset_manager_enforces_celeba_filename_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    cfg = tmp_path / "datasets.yaml"
+    _write_datasets_config(cfg)
+    monkeypatch.setenv("LANDSEER_DATASETS_CONFIG", str(cfg))
 
     base_dir = tmp_path / "data"
     output_dir = base_dir / "celeba" / "clean"
     _write_core_celeba_artifacts(output_dir, train_count=3, test_count=1)
-
-    class MinimalCelebaLoader:
-        REQUIRED = ("data.npy", "labels.npy", "test_data.npy", "test_labels.npy")
-
-        def prepare(self, output_dir: Path, variant: str, params):
-            return DatasetInfo(
-                name="celeba",
-                variant=variant,
-                output_dir=str(output_dir),
-                train_samples=3,
-                test_samples=1,
-            )
+    (output_dir / "img_align_celeba").mkdir()
 
     manager = DatasetManager(base_dir)
-    manager._loaders["celeba"] = MinimalCelebaLoader()
-    manager._resolve_dataset_runtime_config = lambda key, variant: {
-        "image": None,
-        "labels": {},
-        "source_artifacts_dir": None,
-        "min_total_samples": 0,
-        "require_image_dir": False,
-    }
-
     with pytest.raises(FileNotFoundError, match="filenames.npy"):
         manager.prepare_dataset(name="celeba", variant="clean")

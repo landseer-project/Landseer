@@ -24,7 +24,7 @@ from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 
 from src.backend.api import app, _scheduler_state
-from src.db import PipelineRunStatus
+from src.db import ExperimentRunStatus
 from src.pipeline.tasks import (
     TaskType,
     TaskStatus,
@@ -172,7 +172,7 @@ class _FakeRunRepo:
     def __init__(self, _session):
         self._run = None
 
-    def get_active_runs_for_config(self, _config_id):
+    def get_active_runs_for_experiment(self, _config_id):
         return []
 
     def get_next_run_number(self, _config_id):
@@ -181,10 +181,10 @@ class _FakeRunRepo:
     def create(self, run_data):
         self._run = SimpleNamespace(
             id=run_data["id"],
-            pipeline_config_id=run_data["pipeline_config_id"],
+            experiment_id=run_data["experiment_id"],
             run_number=run_data["run_number"],
             use_cache=run_data["use_cache"],
-            status=PipelineRunStatus.PENDING,
+            status=ExperimentRunStatus.PENDING,
             error_message=None,
             created_at=SimpleNamespace(isoformat=lambda: "2026-01-01T00:00:00"),
             started_at=None,
@@ -194,7 +194,7 @@ class _FakeRunRepo:
 
     def update_status(self, run_id, _status):
         if self._run and self._run.id == run_id:
-            self._run.status = PipelineRunStatus.RUNNING
+            self._run.status = ExperimentRunStatus.RUNNING
             self._run.started_at = SimpleNamespace(isoformat=lambda: "2026-01-01T00:01:00")
         return self._run
 
@@ -213,7 +213,7 @@ class TestHeadlessToActiveTransition:
         )
         with patch("src.backend.config_discovery.get_config_by_id", return_value=cfg), \
              patch("src.db.session_scope", _FakeSessionScope), \
-             patch("src.db.PipelineRunRepository", _FakeRunRepo), \
+             patch("src.db.ExperimentRunRepository", _FakeRunRepo), \
              patch("src.pipeline.config_loader.create_pipeline_from_config",
                    return_value=_build_minimal_pipeline()):
             resp = client.post(
@@ -232,7 +232,7 @@ class TestHeadlessToActiveTransition:
         )
         with patch("src.backend.config_discovery.get_config_by_id", return_value=cfg), \
              patch("src.db.session_scope", _FakeSessionScope), \
-             patch("src.db.PipelineRunRepository", _FakeRunRepo), \
+             patch("src.db.ExperimentRunRepository", _FakeRunRepo), \
              patch("src.pipeline.config_loader.create_pipeline_from_config",
                    return_value=_build_minimal_pipeline()):
             client.post("/api/pipeline-configs/config_mini/runs", json={"use_cache": True})
@@ -247,7 +247,7 @@ class TestHeadlessToActiveTransition:
         )
         with patch("src.backend.config_discovery.get_config_by_id", return_value=cfg), \
              patch("src.db.session_scope", _FakeSessionScope), \
-             patch("src.db.PipelineRunRepository", _FakeRunRepo), \
+             patch("src.db.ExperimentRunRepository", _FakeRunRepo), \
              patch("src.pipeline.config_loader.create_pipeline_from_config",
                    return_value=_build_minimal_pipeline()):
             client.post("/api/pipeline-configs/config_mini/runs", json={"use_cache": True})
@@ -265,7 +265,7 @@ class TestHeadlessToActiveTransition:
         )
         with patch("src.backend.config_discovery.get_config_by_id", return_value=cfg), \
              patch("src.db.session_scope", _FakeSessionScope), \
-             patch("src.db.PipelineRunRepository", _FakeRunRepo), \
+             patch("src.db.ExperimentRunRepository", _FakeRunRepo), \
              patch("src.pipeline.config_loader.create_pipeline_from_config",
                    return_value=_build_minimal_pipeline()):
             client.post("/api/pipeline-configs/config_mini/runs", json={"use_cache": True})

@@ -8,12 +8,11 @@ its direct parent), using hard links for zero data duplication.
 import os
 import stat
 import pytest
-import torch
-import torch.nn as nn
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from src.worker.runner import TaskRunner, _link_or_copy
+from src.common.fsutil import link_or_copy
+from src.worker.runner import TaskRunner
 from src.worker.client import TaskInfo
 
 
@@ -108,7 +107,11 @@ class TestGrandparentArtifactsReachGrandchild:
 
 class TestHardLinksNoDataDuplication:
     """Files should be hard-linked (same st_ino), not copied, when on the
-    same filesystem."""
+    same filesystem and LANDSEER_HARDLINK_MACRO is enabled."""
+
+    @pytest.fixture(autouse=True)
+    def _enable_hardlink_macro(self, monkeypatch):
+        monkeypatch.setenv("LANDSEER_HARDLINK_MACRO", "1")
 
     def test_hard_link_same_inode(self, workspace):
         runner = TaskRunner(workspace_dir=workspace)
@@ -133,7 +136,7 @@ class TestHardLinksNoDataDuplication:
         src.write_bytes(b"data")
         dst = tmp_path / "dst.bin"
 
-        _link_or_copy(src, dst)
+        link_or_copy(src, dst)
 
         assert dst.exists()
         assert dst.stat().st_ino == src.stat().st_ino
@@ -245,15 +248,20 @@ class TestWorkerAncestryIntegration:
 
         call_kwargs = mock_run.call_args[1]
         ancestor_dirs_c = call_kwargs.get("ancestor_dirs", [])
-        # task_c should see both a_out (grandparent) and cached_b (parent)
+        # task_c should see both a_out (grandparent) and task_b's output. A cache hit
+        # is copied into task_b's workspace so the shared cache dir can be freed.
+        b_out = workspace / "task_b" / "output"
         assert a_out in ancestor_dirs_c, "grandparent a_out must reach task_c"
-        assert cached_b in ancestor_dirs_c, "cached parent b_out must reach task_c"
+        assert b_out in ancestor_dirs_c, "cached parent output must reach task_c"
+        assert (b_out / "finetuned.pt").read_bytes() == b"cached"
 
 
 class TestMergedModelCheckpointIntegrity:
     """Regression: merged model.pt must remain loadable by evaluators (torch.load)."""
 
     def test_merged_model_pt_loads_as_module(self, workspace):
+        torch = pytest.importorskip("torch")
+        nn = torch.nn
         runner = TaskRunner(workspace_dir=workspace)
         mock_container_success(runner)
 
@@ -280,10 +288,7 @@ class TestRemoteDependencyOutputResolution:
 
         remote_out = workspace / "other_worker" / "task_100" / "output"
         remote_out.mkdir(parents=True)
-        torch.save(
-            nn.Sequential(nn.Flatten(), nn.Linear(3072, 10)),
-            remote_out / "model.pt",
-        )
+        (remote_out / "model.pt").write_bytes(b"remote model")
 
         worker = Worker(backend_url="http://localhost:8000", workspace_dir=workspace, gpu_id=None)
         worker._init_components()

@@ -22,6 +22,11 @@ def load_evaluator_module(evaluator_name: str):
         Loaded module
     """
     containers_dir = Path(__file__).parents[2] / "containers" / "evals"
+    # Evaluators import the shared loader as a top-level module (`from model_loader import ...`),
+    # matching how the container image lays out /app.
+    common_dir = str(containers_dir / "common")
+    if common_dir not in sys.path:
+        sys.path.insert(0, common_dir)
     eval_path = containers_dir / evaluator_name / "evaluate.py"
     
     if not eval_path.exists():

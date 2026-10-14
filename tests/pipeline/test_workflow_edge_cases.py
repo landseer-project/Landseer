@@ -77,9 +77,10 @@ class TestExtremeScenarios:
         """Pipeline with many tools in pre_training should handle correctly."""
         generator = WorkflowGenerator(pipeline_id="test")
         
-        # Create 10 tools
+        # Every ordered subset of the tools becomes a workflow, so the count grows
+        # factorially (10 tools would be ~9.9M workflows). 5 tools gives 326.
         many_tools = []
-        for i in range(10):
+        for i in range(5):
             tool = ToolDefinition(
                 name=f"tool_{i}",
                 container=ContainerConfig(image=f"test/tool{i}:v1", command="python run.py"),
@@ -94,8 +95,8 @@ class TestExtremeScenarios:
         
         workflows = generator.generate_all_workflows()
         
-        # Should generate many workflows (permutations of 10 tools)
-        assert len(workflows) > 0, "Should generate workflows"
+        # Ordered subsets of 5 tools: sum of 5!/(5-k)! for k = 0..5
+        assert len(workflows) == 326
         
         # Check that workflows have correct structure
         for wf in workflows:

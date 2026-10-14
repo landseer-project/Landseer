@@ -10,6 +10,8 @@ These tests verify:
 6. Task status reporting accuracy
 """
 
+import itertools
+import json
 import os
 import pytest
 import tempfile
@@ -429,7 +431,7 @@ class TestEnvironmentVariableHandling:
             assert "PYTHONPATH" in env
             assert "/input" in env["PYTHONPATH"]
     
-    def test_task_config_added_to_env(self, task_runner, temp_workspace):
+    def test_task_config_written_to_input(self, task_runner, temp_workspace):
         """Task config should be added to environment variables."""
         task = TaskInfo(
             id="task_1",
@@ -454,13 +456,10 @@ class TestEnvironmentVariableHandling:
             
             result = task_runner.run_task(task)
             
-            # Check that config was added to env
-            call_kwargs = mock_runner.run.call_args
-            env = call_kwargs.kwargs.get('env', {})
-            
-            # Config values should be in env (as strings)
-            assert env.get("param1") == "value1"
-            assert env.get("param2") == "value2"
+            # Task config is passed to the tool as input/config.json
+            input_dir = mock_runner.run.call_args.kwargs["input_dir"]
+            config = json.loads((Path(input_dir) / "config.json").read_text())
+            assert config == {"param1": "value1", "param2": "value2"}
     
     def test_custom_env_vars_preserved(self, task_runner, temp_workspace):
         """Custom environment variables should be preserved."""
@@ -685,7 +684,7 @@ class TestExecutionResultAccuracy:
         )
         
         with patch.object(task_runner, '_container_runner') as mock_runner, \
-             patch('src.worker.runner.time.time', side_effect=[1000.0, 1001.5]):  # Simulate 1.5 seconds elapsed
+             patch('src.worker.runner.time.time', side_effect=itertools.count(1000.0, 1.5)):
             mock_runner.pull_image.return_value = True
             mock_runner.run.return_value = (0, "Success output")
             

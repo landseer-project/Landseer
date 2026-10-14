@@ -17,7 +17,7 @@ class _FakeRunRepoEmpty:
     def __init__(self, _session):
         pass
 
-    def get_active_runs_for_config(self, _config_id):
+    def get_active_runs_for_experiment(self, _config_id):
         return []
 
     def get_next_run_number(self, _config_id):
@@ -26,7 +26,7 @@ class _FakeRunRepoEmpty:
     def create(self, run_data):
         return SimpleNamespace(
             id=run_data["id"],
-            pipeline_config_id=run_data["pipeline_config_id"],
+            experiment_id=run_data["experiment_id"],
             run_number=run_data["run_number"],
             use_cache=run_data["use_cache"],
             status=SimpleNamespace(value="pending"),
@@ -60,7 +60,7 @@ def test_start_run_rejects_incompatible_tool_dataset(tmp_path: Path):
     )
     with patch("src.backend.config_discovery.get_config_by_id", return_value=cfg), patch(
         "src.db.session_scope", _fake_session_scope
-    ), patch("src.db.PipelineRunRepository", _FakeRunRepoEmpty), patch(
+    ), patch("src.db.ExperimentRunRepository", _FakeRunRepoEmpty), patch(
         "src.pipeline.config_loader.load_pipeline_config", return_value=fake_loaded
     ), patch(
         "src.pipeline.stage_validation.load_tools_and_validate_pipeline_stages",

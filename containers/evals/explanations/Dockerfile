@@ -1,8 +1,22 @@
 FROM python:3.11-slim
 
-LABEL org.opencontainers.image.title="Explanations Evaluator"
-LABEL org.landseer.type="evaluator"
-LABEL org.landseer.metrics="drop10_score"
+LABEL org.opencontainers.image.title="Explanations Evaluator" \
+      org.opencontainers.image.description="Scores explanation faithfulness as mean SHAP Drop@10" \
+      org.opencontainers.image.vendor="Landseer Project" \
+      org.opencontainers.image.source="https://github.com/landseer-project/landseer" \
+      org.opencontainers.image.base.name="python:3.11-slim" \
+      org.landseer.schema="1" \
+      org.landseer.type="evaluator" \
+      org.landseer.name="explanations" \
+      org.landseer.datasets="cifar10,celeba" \
+      org.landseer.modality="image" \
+      org.landseer.framework="numpy==1.24.0" \
+      org.landseer.python="3.11" \
+      org.landseer.accelerator="cpu" \
+      org.landseer.metrics="drop10_score" \
+      org.landseer.required_artifacts="" \
+      org.landseer.defense_types="explainability" \
+      org.landseer.dependencies="numpy==1.24.0"
 
 WORKDIR /app
 

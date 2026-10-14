@@ -104,6 +104,20 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=raw,value=v1
 
+      # metadata-action stamps version/revision/created/source, but it also sets
+      # title/description from the GitHub repo, which would overwrite the
+      # per-image values declared in each Dockerfile.
+      - name: Keep Dockerfile title and description
+        id: labels
+        env:
+          META_LABELS: ${{ steps.meta.outputs.labels }}
+        run: |
+          {
+            echo 'labels<<EOF'
+            printf '%s\n' "$META_LABELS" | grep -vE '^org\.opencontainers\.image\.(title|description)=' || true
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
@@ -111,9 +125,15 @@ jobs:
           file: containers/datasets/${{ matrix.dataset }}/Dockerfile
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          labels: ${{ steps.labels.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Verify published image labels
+        if: github.event_name != 'pull_request'
+        run: |
+          pip install --quiet httpx
+          python src/pipeline/image_labels.py audit --type dataset "$(echo '${{ steps.meta.outputs.tags }}' | head -n1)"
 
       - name: Output image info
         run: |

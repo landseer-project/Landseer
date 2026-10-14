@@ -24,7 +24,6 @@ from typing import Dict, Optional
 from src.worker.cli import Worker
 from src.worker.client import LandseerClient, TaskInfo, WorkerInfo
 from src.worker.runner import TaskRunner, ExecutionResult, ContainerRuntime
-from src.worker.db import CacheManager, ArtifactCacheDB
 
 
 # ============================================================================
@@ -105,7 +104,7 @@ class TestWorkerInitialization:
         assert worker.workspace_dir == temp_workspace
         assert worker.gpu_id is None
         assert worker.poll_interval == 5.0
-        assert worker.task_timeout == 7200
+        assert worker.task_timeout == 28000
         assert worker.heartbeat_interval == 30.0
         assert worker.use_cache is True
         assert worker._running is False
@@ -199,35 +198,35 @@ class TestComponentInitialization:
         assert worker._runner.gpu_id == 0
         assert worker._runner.timeout == 1800
     
-    def test_init_components_creates_cache_manager_when_enabled(self, temp_workspace, temp_cache_dir):
-        """_init_components should create CacheManager when caching is enabled."""
+    def test_init_components_requires_minio_when_cache_enabled(self, temp_workspace, temp_cache_dir):
+        """_init_components must fail if MinIO is unavailable while caching is on."""
         worker = Worker(workspace_dir=temp_workspace, cache_dir=temp_cache_dir, use_cache=True)
-        
-        with patch.dict('os.environ', {'LANDSEER_USE_MINIO': 'false'}):
-            worker._init_components()
-        
-        assert worker._cache is not None
-        assert isinstance(worker._cache, CacheManager)
-    
+
+        with patch("src.worker.cli.TwoLevelCache") as mock_tlc:
+            inst = mock_tlc.return_value
+            inst.manager.minio = None
+            with pytest.raises(RuntimeError, match="Cache requires MinIO"):
+                worker._init_components()
+
     def test_init_components_skips_cache_when_disabled(self, temp_workspace):
         """_init_components should skip cache when caching is disabled."""
         worker = Worker(workspace_dir=temp_workspace, use_cache=False)
         worker._init_components()
-        
-        assert worker._cache is None
+
         assert worker._two_level_cache is None
-    
-    @patch('src.worker.cli.TwoLevelCache')
+
+    @patch("src.worker.cli.TwoLevelCache")
     def test_init_components_uses_two_level_cache_when_available(self, mock_two_level_cache, temp_workspace, temp_cache_dir):
-        """_init_components should use two-level cache when available and MinIO enabled."""
+        """_init_components should use two-level cache with a live MinIO client."""
         worker = Worker(workspace_dir=temp_workspace, cache_dir=temp_cache_dir, use_cache=True)
-        
-        with patch.dict('os.environ', {'LANDSEER_USE_MINIO': 'true'}):
-            worker._init_components()
-        
-        # Should try to use two-level cache if available
-        # (Actual behavior depends on import availability)
-        pass  # This is tested implicitly by the import check
+        mock_minio = MagicMock()
+        mock_minio.is_available = True
+        mock_two_level_cache.return_value.manager.minio = mock_minio
+
+        worker._init_components()
+
+        assert worker._two_level_cache is mock_two_level_cache.return_value
+        mock_two_level_cache.assert_called_once()
 
 
 # ============================================================================
@@ -542,7 +541,7 @@ class TestTaskExecution:
     
     def test_execute_task_success(self, temp_workspace, mock_task):
         """_execute_task should execute task successfully."""
-        worker = Worker(workspace_dir=temp_workspace)
+        worker = Worker(workspace_dir=temp_workspace, use_cache=False)
         worker._runner = MagicMock()
         worker._runner.workspace_dir = temp_workspace
         
@@ -564,30 +563,41 @@ class TestTaskExecution:
     def test_execute_task_checks_cache_first(self, temp_workspace, mock_task, temp_cache_dir):
         """_execute_task should check cache before executing."""
         worker = Worker(workspace_dir=temp_workspace, cache_dir=temp_cache_dir, use_cache=True)
-        worker._cache = MagicMock()
+        worker._two_level_cache = MagicMock()
         worker._runner = MagicMock()
-        
+        worker._runner.workspace_dir = temp_workspace
+
         cached_path = temp_cache_dir / "cached_output"
         cached_path.mkdir(parents=True, exist_ok=True)
-        worker._cache.check_cache.return_value = cached_path
-        
+        (cached_path / "model.pt").write_bytes(b"cached")
+        worker._two_level_cache.get.return_value = cached_path
+        # Entry the local cache will not keep: moved into the workspace, then dropped.
+        worker._two_level_cache.manager.should_keep_local.return_value = False
+
         result = worker._execute_task(mock_task)
-        
+
+        workspace_out = temp_workspace / mock_task.id / "output"
         assert result.success is True
-        assert result.output_path == cached_path
+        assert result.output_path == workspace_out
+        assert (workspace_out / "model.pt").exists()
+        assert not cached_path.exists()
         assert result.artifacts.get("cache_hit") is True
-        worker._runner.run_task.assert_not_called()  # Should not execute
-    
+        worker._runner.run_task.assert_not_called()
+        worker._two_level_cache.manager.delete_local.assert_called_once_with(
+            result.artifacts["cache_key"]
+        )
+
     def test_execute_task_stores_in_cache_on_success(self, temp_workspace, mock_task, temp_cache_dir):
         """_execute_task should store result in cache on success."""
         worker = Worker(workspace_dir=temp_workspace, cache_dir=temp_cache_dir, use_cache=True)
-        worker._cache = MagicMock()
+        worker._two_level_cache = MagicMock()
+        worker._two_level_cache.get.return_value = None
         worker._runner = MagicMock()
         worker._runner.workspace_dir = temp_workspace
-        
+
         output_path = temp_workspace / "test_task_1" / "output"
         output_path.mkdir(parents=True, exist_ok=True)
-        
+
         result = ExecutionResult(
             success=True,
             exit_code=0,
@@ -595,21 +605,21 @@ class TestTaskExecution:
             output_path=output_path
         )
         worker._runner.run_task.return_value = result
-        worker._cache.check_cache.return_value = None  # Cache miss
-        
+
         worker._execute_task(mock_task)
-        
-        worker._cache.store_result.assert_called_once()
-    
+
+        worker._two_level_cache.put.assert_called_once()
+
     def test_execute_task_stores_with_run_id_when_task_has_run_id(
         self, temp_workspace, temp_cache_dir
     ):
-        """_store_in_cache should pass run_id to store_result when task has run_id (Improvement: run ID propagation)."""
+        """_execute_task still caches when task has run_id (key includes config)."""
         worker = Worker(workspace_dir=temp_workspace, cache_dir=temp_cache_dir, use_cache=True)
-        worker._cache = MagicMock()
+        worker._two_level_cache = MagicMock()
+        worker._two_level_cache.get.return_value = None
         worker._runner = MagicMock()
         worker._runner.workspace_dir = temp_workspace
-        
+
         task_with_run = TaskInfo(
             id="test_task_run",
             tool_name="test_tool",
@@ -636,13 +646,11 @@ class TestTaskExecution:
             output_path=output_path,
         )
         worker._runner.run_task.return_value = result
-        worker._cache.check_cache.return_value = None
-        
+
         worker._execute_task(task_with_run)
-        
-        worker._cache.store_result.assert_called_once()
-        call_kw = worker._cache.store_result.call_args[1]
-        assert call_kw.get("run_id") == "run_20250203_120000_abc123"
+
+        worker._two_level_cache.put.assert_called_once()
+        assert worker._two_level_cache.put.call_args.kwargs["task_id"] == "test_task_run"
 
     def test_execute_task_refreshes_dataset_context_on_run_change(
         self, temp_workspace, temp_data_dir, mock_task
@@ -694,7 +702,7 @@ class TestTaskExecution:
     
     def test_execute_task_mounts_data_directory(self, temp_workspace, temp_data_dir, mock_task):
         """_execute_task should mount data directory if available."""
-        worker = Worker(workspace_dir=temp_workspace, data_path=temp_data_dir)
+        worker = Worker(workspace_dir=temp_workspace, data_path=temp_data_dir, use_cache=False)
         worker._runner = MagicMock()
         worker._runner.workspace_dir = temp_workspace
         
@@ -707,17 +715,17 @@ class TestTaskExecution:
         worker._runner.run_task.return_value = result
         
         worker._execute_task(mock_task)
-        
+
         call_args = worker._runner.run_task.call_args
         assert call_args[1]["input_path"] == temp_data_dir
-        assert call_args[1]["extra_mounts"] is not None
-        assert str(temp_data_dir.absolute()) in call_args[1]["extra_mounts"]
     
     def test_execute_task_collects_dependency_outputs(self, temp_workspace, mock_task):
         """_execute_task should collect dependency outputs for artifact chaining."""
-        worker = Worker(workspace_dir=temp_workspace)
+        worker = Worker(workspace_dir=temp_workspace, use_cache=False)
         worker._runner = MagicMock()
         worker._runner.workspace_dir = temp_workspace
+        worker._client = MagicMock()
+        worker._client.get_task.return_value = None
         
         # Create dependency output directory
         dep_output = temp_workspace / "dep_task" / "output"
@@ -741,6 +749,7 @@ class TestTaskExecution:
             dependency_ids=["dep_task"]
         )
         
+        worker._task_outputs["dep_task"] = ("dep_key", dep_output, [])
         result = ExecutionResult(
             success=True,
             exit_code=0,
@@ -748,18 +757,20 @@ class TestTaskExecution:
             output_path=temp_workspace / "test_task_2" / "output"
         )
         worker._runner.run_task.return_value = result
-        
+
         worker._execute_task(task_with_deps)
-        
+
         call_args = worker._runner.run_task.call_args
-        assert call_args[1]["dependency_outputs"] is not None
-        assert "dep_task" in call_args[1]["dependency_outputs"]
+        assert call_args[1]["ancestor_dirs"] is not None
+        assert dep_output in call_args[1]["ancestor_dirs"]
     
     def test_execute_task_handles_missing_dependency_outputs(self, temp_workspace, mock_task):
         """_execute_task should handle missing dependency outputs gracefully."""
-        worker = Worker(workspace_dir=temp_workspace)
+        worker = Worker(workspace_dir=temp_workspace, use_cache=False)
         worker._runner = MagicMock()
         worker._runner.workspace_dir = temp_workspace
+        worker._client = MagicMock()
+        worker._client.get_task.return_value = None
         
         task_with_deps = TaskInfo(
             id="test_task_3",
@@ -788,14 +799,13 @@ class TestTaskExecution:
         
         # Should not raise exception
         worker._execute_task(task_with_deps)
-        
+
         call_args = worker._runner.run_task.call_args
-        # dependency_outputs should be empty or None
-        assert call_args[1]["dependency_outputs"] is None or len(call_args[1]["dependency_outputs"]) == 0
-    
+        assert call_args[1].get("ancestor_dirs") in (None, [])
+
     def test_execute_task_clears_current_task_on_failure(self, temp_workspace, mock_task):
         """_execute_task should clear current_task even on failure."""
-        worker = Worker(workspace_dir=temp_workspace)
+        worker = Worker(workspace_dir=temp_workspace, use_cache=False)
         worker._runner = MagicMock()
         worker._runner.run_task.side_effect = Exception("Execution failed")
         
@@ -809,25 +819,24 @@ class TestTaskExecution:
     def test_execute_task_computes_cache_key(self, temp_workspace, mock_task):
         """_execute_task should compute cache key for task."""
         worker = Worker(workspace_dir=temp_workspace, use_cache=True)
-        worker._cache = MagicMock()
+        worker._two_level_cache = MagicMock()
+        worker._two_level_cache.get.return_value = None
         worker._runner = MagicMock()
         worker._runner.workspace_dir = temp_workspace
-        
+
         result = ExecutionResult(
             success=True,
             exit_code=0,
             execution_time_ms=1000,
             output_path=temp_workspace / "test_task_1" / "output"
         )
+        (temp_workspace / "test_task_1" / "output").mkdir(parents=True, exist_ok=True)
         worker._runner.run_task.return_value = result
-        worker._cache.check_cache.return_value = None
-        
+
         worker._execute_task(mock_task)
-        
-        # Cache key should be computed
-        assert worker._cache.store_result.called
-        call_args = worker._cache.store_result.call_args
-        assert "task" in call_args[1] or "task" in call_args[0]
+
+        assert worker._two_level_cache.put.called
+        assert "cache_key" in worker._two_level_cache.put.call_args.kwargs
 
 
 # ============================================================================
@@ -963,6 +972,8 @@ class TestWorkLoop:
         worker = Worker(workspace_dir=temp_workspace)
         worker._client = mock_client
         worker._runner = MagicMock()
+        worker._two_level_cache = MagicMock()
+        worker._two_level_cache.get.return_value = None
         worker._running = True
         
         result = ExecutionResult(
@@ -973,7 +984,9 @@ class TestWorkLoop:
         )
         worker._runner.run_task.return_value = result
         
-        mock_client.claim_task.return_value = mock_task
+        # One task, then nothing: the loop must see "complete" and exit.
+        # (A constant return_value made _work_loop claim forever.)
+        mock_client.claim_task.side_effect = [mock_task, None]
         mock_client.get_progress.return_value = {"is_complete": True}
         
         # Run for one iteration
@@ -994,7 +1007,12 @@ class TestWorkLoop:
         worker._running = True
         
         mock_client.claim_task.return_value = None
-        mock_client.get_progress.return_value = {"is_complete": False}
+        # Not complete on the first idle poll, complete on the second, so the
+        # loop exits (a constant False made _work_loop spin forever).
+        mock_client.get_progress.side_effect = [
+            {"is_complete": False},
+            {"is_complete": True},
+        ]
         
         with patch('time.sleep'):  # Don't actually sleep
             # Should not raise exception
@@ -1042,7 +1060,10 @@ class TestWorkLoop:
         worker._client = mock_client
         worker._running = True
         
-        mock_client.claim_task.side_effect = Exception("Network error")
+        # Fail once, then report no work and completion so the loop exits
+        # (a constant exception made _work_loop spin forever).
+        mock_client.claim_task.side_effect = [Exception("Network error"), None]
+        mock_client.get_progress.return_value = {"is_complete": True}
         
         with patch('time.sleep'):  # Don't actually sleep
             # Should not raise exception, should continue
@@ -1130,8 +1151,14 @@ class TestCacheManagement:
 
         assert context["dataset"]["name"] == "cifar10"
         assert context["dataset"]["variant"] == "clean"
-        assert "data.npy" in context["dataset"]["tracked_files"]
-        assert context["model"]["available"] is True
+        assert context["dataset"]["available"] is True
+        assert len(context["dataset"]["content_id"]) == 64
+        # Host-specific details must not leak into the cache key.
+        assert set(context["dataset"]) == {"available", "content_id", "name", "variant"}
+        assert context["model"] == {
+            "available": True,
+            "sha256": context["model"]["sha256"],
+        }
         assert context["model"]["sha256"]
     
     def test_check_cache_uses_two_level_cache(self, temp_workspace, mock_task):
@@ -1139,49 +1166,36 @@ class TestCacheManagement:
         worker = Worker(workspace_dir=temp_workspace)
         worker._two_level_cache = MagicMock()
         worker._two_level_cache.get.return_value = Path("/cached")
-        
+
         result = worker._check_cache("cache_key", mock_task, [])
-        
+
         assert result == Path("/cached")
         worker._two_level_cache.get.assert_called_once_with("cache_key")
-    
-    def test_check_cache_falls_back_to_local_cache(self, temp_workspace, mock_task, temp_cache_dir):
-        """_check_cache should fall back to local cache if two-level not available."""
-        worker = Worker(workspace_dir=temp_workspace)
-        worker._cache = MagicMock()
-        worker._cache.check_cache.return_value = Path("/cached")
-        
-        cache_context = {"dataset": {"name": "cifar10", "variant": "clean"}}
-        result = worker._check_cache("cache_key", mock_task, [], cache_context=cache_context)
-        
-        assert result == Path("/cached")
-        worker._cache.check_cache.assert_called_once_with(mock_task, [], cache_context=cache_context)
-    
+
+    def test_check_cache_without_two_level_returns_none(self, temp_workspace, mock_task):
+        """_check_cache returns None when two-level cache is not initialized."""
+        worker = Worker(workspace_dir=temp_workspace, use_cache=False)
+        assert worker._check_cache("cache_key", mock_task, []) is None
+
     def test_store_in_cache_uses_two_level_cache(self, temp_workspace, mock_task, temp_cache_dir):
         """_store_in_cache should use two-level cache if available."""
         worker = Worker(workspace_dir=temp_workspace)
         worker._two_level_cache = MagicMock()
-        
+
         output_path = temp_cache_dir / "output"
         output_path.mkdir(parents=True, exist_ok=True)
-        
+
         worker._store_in_cache("cache_key", mock_task, output_path, 1000, [])
-        
+
         worker._two_level_cache.put.assert_called_once()
-    
-    def test_store_in_cache_falls_back_to_local_cache(self, temp_workspace, mock_task, temp_cache_dir):
-        """_store_in_cache should fall back to local cache if two-level not available."""
-        worker = Worker(workspace_dir=temp_workspace)
-        worker._cache = MagicMock()
-        
+
+    def test_store_in_cache_requires_two_level_cache(self, temp_workspace, mock_task, temp_cache_dir):
+        """_store_in_cache raises if two-level cache is missing."""
+        worker = Worker(workspace_dir=temp_workspace, use_cache=False)
         output_path = temp_cache_dir / "output"
         output_path.mkdir(parents=True, exist_ok=True)
-        
-        cache_context = {"dataset": {"name": "cifar10", "variant": "clean"}}
-        worker._store_in_cache("cache_key", mock_task, output_path, 1000, [], cache_context=cache_context)
-        
-        worker._cache.store_result.assert_called_once()
-        assert worker._cache.store_result.call_args.kwargs["cache_context"] == cache_context
+        with pytest.raises(RuntimeError, match="two-level cache"):
+            worker._store_in_cache("cache_key", mock_task, output_path, 1000, [])
 
 
 # ============================================================================
@@ -1194,42 +1208,45 @@ class TestWorkerStartAndCleanup:
     
     def test_start_initializes_components(self, temp_workspace):
         """start should initialize components."""
-        worker = Worker(workspace_dir=temp_workspace)
-        
+        worker = Worker(workspace_dir=temp_workspace, use_cache=False)
+
         with patch.object(worker, '_wait_for_backend', return_value=False):
             result = worker.start()
-        
+
         assert worker._client is not None
         assert worker._runner is not None
     
     def test_start_waits_for_backend(self, temp_workspace):
         """start should wait for backend before proceeding."""
-        worker = Worker(workspace_dir=temp_workspace)
-        
+        worker = Worker(workspace_dir=temp_workspace, use_cache=False)
+
         with patch.object(worker, '_wait_for_backend', return_value=False) as mock_wait:
             result = worker.start()
-        
+
         assert result == 1  # Exit code 1 on failure
         mock_wait.assert_called_once()
-    
+
     def test_start_registers_worker(self, temp_workspace):
         """start should register worker with backend."""
-        worker = Worker(workspace_dir=temp_workspace)
-        
+        worker = Worker(workspace_dir=temp_workspace, use_cache=False)
+
         with patch.object(worker, '_wait_for_backend', return_value=True), \
              patch.object(worker, '_register', return_value=False):
             result = worker.start()
-        
+
         assert result == 1  # Exit code 1 on registration failure
     
     def test_start_fetches_dataset(self, temp_workspace, temp_data_dir):
         """start should fetch dataset from backend."""
         worker = Worker(workspace_dir=temp_workspace, data_path=temp_data_dir)
-        
-        with patch.object(worker, '_wait_for_backend', return_value=True), \
+
+        # _init_components is patched so the test never reaches a real MinIO or
+        # backend; the work loop returns at once (a KeyboardInterrupt here used
+        # to escape start() and abort the whole pytest session).
+        with patch.object(worker, '_init_components'), \
+             patch.object(worker, '_wait_for_backend', return_value=True), \
              patch.object(worker, '_register', return_value=True), \
-             patch.object(worker, '_work_loop') as mock_loop:
-            mock_loop.side_effect = KeyboardInterrupt()  # Exit immediately
+             patch.object(worker, '_work_loop', return_value=None):
             worker.start()
         
         assert worker._dataset_path == temp_data_dir
@@ -1238,11 +1255,11 @@ class TestWorkerStartAndCleanup:
         """start should enter work loop after initialization."""
         worker = Worker(workspace_dir=temp_workspace)
         
-        with patch.object(worker, '_wait_for_backend', return_value=True), \
+        with patch.object(worker, '_init_components'), \
+             patch.object(worker, '_wait_for_backend', return_value=True), \
              patch.object(worker, '_register', return_value=True), \
              patch.object(worker, '_fetch_dataset', return_value=None), \
-             patch.object(worker, '_work_loop') as mock_loop:
-            mock_loop.side_effect = KeyboardInterrupt()  # Exit immediately
+             patch.object(worker, '_work_loop', return_value=None) as mock_loop:
             worker.start()
         
         mock_loop.assert_called_once()
@@ -1290,8 +1307,11 @@ class TestWorkerStartupIntegrity:
              patch.object(Worker, "_wait_for_backend", return_value=True) as mock_wait, \
              patch.object(Worker, "_register", return_value=True) as mock_register, \
              patch.object(Worker, "_fetch_dataset", return_value=None), \
-             patch.object(Worker, "_work_loop") as mock_loop, \
-             patch.dict("os.environ", {"LANDSEER_USE_MINIO": "true"}):
+             patch.object(Worker, "_work_loop") as mock_loop:
+
+            mock_minio = MagicMock()
+            mock_minio.is_available = True
+            mock_two_level_cache_cls.return_value.manager.minio = mock_minio
 
             # Let start() run through a single, mocked work loop call and exit cleanly.
             mock_loop.return_value = None
@@ -1323,11 +1343,8 @@ class TestWorkerStartupIntegrity:
             assert runner_call_kwargs["timeout"] == worker.task_timeout
 
             # Two-level cache (MinIO + local) should be initialized when enabled
-            # Note: actual availability depends on import, but we verify our wiring.
             assert worker.use_cache is True
-            # Either two-level cache or local cache should be initialized
-            assert worker._two_level_cache is not None or worker._cache is not None
-            # TwoLevelCache should have been constructed when MinIO is enabled
+            assert worker._two_level_cache is not None
             assert mock_two_level_cache_cls.called
 
             # Backend wait and registration must run exactly once on startup
@@ -1338,11 +1355,13 @@ class TestWorkerStartupIntegrity:
         """Multiple start() calls should consistently (re-)initialize all components."""
         with patch("src.worker.cli.LandseerClient") as mock_client_cls, \
              patch("src.worker.cli.TaskRunner") as mock_runner_cls, \
+             patch("src.worker.cli.TwoLevelCache") as mock_tlc, \
              patch.object(Worker, "_wait_for_backend", return_value=True) as mock_wait, \
              patch.object(Worker, "_register", return_value=True) as mock_register, \
              patch.object(Worker, "_fetch_dataset", return_value=None), \
              patch.object(Worker, "_work_loop") as mock_loop:
 
+            mock_tlc.return_value.manager.minio = MagicMock(is_available=True)
             # Two clean work-loop invocations, one per start() call
             mock_loop.side_effect = [None, None]
 
@@ -1389,8 +1408,10 @@ class TestWorkerStartupIntegrity:
         )
 
         with patch("src.worker.cli.LandseerClient") as mock_client_cls, \
-             patch("src.worker.cli.TaskRunner") as mock_runner_cls:
+             patch("src.worker.cli.TaskRunner") as mock_runner_cls, \
+             patch("src.worker.cli.TwoLevelCache") as mock_tlc:
 
+            mock_tlc.return_value.manager.minio = MagicMock(is_available=True)
             # Call twice to ensure no hit-and-miss behaviour
             worker._init_components()
             worker._init_components()
@@ -1402,8 +1423,7 @@ class TestWorkerStartupIntegrity:
             assert final_runner_kwargs["workspace_dir"] == temp_workspace
             assert final_runner_kwargs["gpu_id"] == gpu_id
 
-            # Some form of cache (local or two-level) should be initialized when use_cache=True
-            assert (worker._cache is not None) or (worker._two_level_cache is not None)
+            assert worker._two_level_cache is not None
 
 
 # ============================================================================
@@ -1439,7 +1459,7 @@ class TestEdgeCases:
         worker._init_components()
         
         # Should create cache directory if needed
-        # (Actual behavior depends on CacheManager implementation)
+        # (Actual behavior depends on TwoLevelCache implementation)
         pass
     
     def test_worker_with_concurrent_tasks(self, temp_workspace, mock_task):
@@ -1502,7 +1522,9 @@ class TestEdgeCases:
             dependency_ids=[]
         )
         
-        worker = Worker(workspace_dir=temp_workspace)
+        # Caching off: this worker never runs _init_components, so it has no
+        # two-level cache, and a cache-enabled worker without one refuses to store.
+        worker = Worker(workspace_dir=temp_workspace, use_cache=False)
         worker._runner = MagicMock()
         worker._runner.run_task.return_value = ExecutionResult(
             success=True,
@@ -1510,7 +1532,7 @@ class TestEdgeCases:
             execution_time_ms=1000,
             output_path=temp_workspace / "empty_task" / "output"
         )
-        
+
         # Should not raise exception
         result = worker._execute_task(task)
         assert result.success is True

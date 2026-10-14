@@ -39,15 +39,18 @@ def _make_task(sample_tool, name: str):
     )
 
 
-def test_pipeline_post_init_sets_pipeline_id_on_existing_workflow_tasks(sample_tool):
+def test_pipeline_post_init_sets_pipeline_id_on_workflows_only(sample_tool):
     t1 = _make_task(sample_tool, "t1")
     wf = WorkflowFactory.create_workflow(name="wf_1", tasks=[t1])
 
     pipeline = DefenseEvaluationPipeline(name="p", workflows=[wf])
 
     assert wf.pipeline_id == pipeline.id
-    assert t1.pipeline_id == pipeline.id
-    assert wf.id in t1.workflows
+    # Task membership and usage counters come only from explicit registration
+    # (Workflow.add_task / Task.add_to_workflow), never from the constructor.
+    assert t1.pipeline_id == ""
+    assert t1.workflows == set()
+    assert t1.counter == 0
 
 
 def test_add_workflow_sets_workflow_pipeline_id(sample_tool):
@@ -132,10 +135,11 @@ def test_pipeline_factory_rejects_unknown_type():
 def test_shared_task_across_workflows_registered_once_with_both_workflow_ids(sample_tool):
     # Use same task object in two workflows for same pipeline
     shared = _make_task(sample_tool, "shared")
-    wf1 = WorkflowFactory.create_workflow(name="wf_1", tasks=[shared])
-    wf2 = WorkflowFactory.create_workflow(name="wf_2", tasks=[shared])
-
-    pipeline = DefenseEvaluationPipeline(name="p", workflows=[wf1, wf2])
+    pipeline = DefenseEvaluationPipeline(name="p", workflows=[])
+    wf1 = WorkflowFactory.create_workflow(name="wf_1", tasks=[shared], pipeline_id=pipeline.id)
+    wf2 = WorkflowFactory.create_workflow(name="wf_2", tasks=[shared], pipeline_id=pipeline.id)
+    pipeline.add_workflow(wf1)
+    pipeline.add_workflow(wf2)
 
     # task should still belong to one pipeline, but be linked to both workflows
     assert shared.pipeline_id == pipeline.id

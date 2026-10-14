@@ -1,5 +1,9 @@
 # Landseer Pipeline Run Guide
 
+> Prefer **uv** and the short [CLI reference](reference/cli.md).  
+> Also: [Quickstart](getting-started/quickstart.md) · [Run a pipeline](how-to/run-a-pipeline.md).  
+> Examples below that use `PYTHONPATH=… python -m …` are legacy; use `uv run landseer-*` / `uv run landseer …`.
+
 This guide explains how to run a complete ML defense pipeline using Landseer, from system setup through execution to result interpretation.
 
 ## Table of Contents
@@ -35,37 +39,15 @@ Before running a pipeline, ensure you have:
 
 ### Step 1: Install Dependencies
 
-**Recommended: Using pip in a writable virtualenv**
-
-(Note: Poetry installation may encounter library compatibility issues on some systems. This guide uses pip, which is tested and works reliably.)
+**Recommended: uv**
 
 ```bash
-# Create a virtualenv in a writable location
-python3 -m venv ~/landseer-env
-source ~/landseer-env/bin/activate
-
-# Navigate to Landseer directory
 cd /path/to/Landseer
-
-# Install Landseer (editable install includes all dependencies)
-pip install -e .
+uv sync --all-groups
 
 # Verify installation
-python -c "from src.backend import cli; print('✓ Backend module available')"
-python -c "from src.worker import cli; print('✓ Worker module available')"
-```
-
-**Alternative: Using Poetry (if available on your system)**
-
-If Poetry is installed and compatible:
-
-```bash
-# Install dependencies with Poetry
-poetry install
-
-# Activate Poetry environment
-poetry shell
-# OR prefix commands with: poetry run
+uv run python -c "from src.backend import cli; print('✓ Backend module available')"
+uv run python -c "from src.worker import cli; print('✓ Worker module available')"
 ```
 
 ### Step 2: Start the Backend Server
@@ -85,8 +67,8 @@ PYTHONPATH=./src:. python -m src.backend.cli \
   --port 8000 \
   --config configs/pipeline/trades.yaml
 
-# Alternative with Poetry
-poetry run landseer-backend \
+# Preferred: uv entry point
+uv run landseer-backend \
   --host 0.0.0.0 \
   --port 8000 \
   --config configs/pipeline/trades.yaml
@@ -139,8 +121,8 @@ PYTHONPATH=./src:. python -m src.worker.cli \
   --workspace /data/landseer/workers/worker_cpu \
   --no-cache
 
-# Alternative with Poetry
-poetry run landseer-worker \
+# Preferred: uv entry point
+uv run landseer-worker \
   --backend-url http://localhost:8000 \
   --workspace /data/landseer/workers/worker_1 \
   --gpu 0
@@ -603,15 +585,13 @@ PYTHONPATH=./src:. python -m src.backend.cli --debug
 source ~/landseer-env/bin/activate
 ```
 
-### Poetry won't install (libpython error)
-
-If Poetry fails with "libpython3.X.so.1.0: cannot open shared object file", use **pip instead**:
+### uv sync fails
 
 ```bash
-# Use pip in a virtualenv (works reliably)
-python3 -m venv ~/landseer-env
-source ~/landseer-env/bin/activate
-pip install -e /path/to/Landseer
+# Ensure uv is installed and on PATH
+curl -LsSf https://astral.sh/uv/install.sh | sh
+cd /path/to/Landseer
+uv sync --all-groups
 ```
 
 ### Workers can't connect to backend

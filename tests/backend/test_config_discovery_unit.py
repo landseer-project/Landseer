@@ -303,7 +303,7 @@ class TestSyncConfigsToDb:
                 pass
 
         with patch("src.backend.config_discovery.session_scope", _FakeSession), \
-             patch("src.backend.config_discovery.PipelineConfigRepository", _FakeRepo):
+             patch("src.backend.config_discovery.ExperimentRepository", _FakeRepo):
             result = sync_configs_to_db(
                 pipeline_dir=str(pdir),
                 attack_dir=str(tmp_path / "attacks"),
@@ -336,7 +336,7 @@ class TestSyncConfigsToDb:
                 pass
 
         with patch("src.backend.config_discovery.session_scope", _FakeSession), \
-             patch("src.backend.config_discovery.PipelineConfigRepository", _FakeRepo):
+             patch("src.backend.config_discovery.ExperimentRepository", _FakeRepo):
             sync_configs_to_db(
                 pipeline_dir=str(pdir),
                 attack_dir=str(tmp_path / "attacks"),
@@ -363,7 +363,7 @@ class TestSyncConfigsToDb:
                 pass
 
         with patch("src.backend.config_discovery.session_scope", _FakeSession), \
-             patch("src.backend.config_discovery.PipelineConfigRepository", _FakeRepo):
+             patch("src.backend.config_discovery.ExperimentRepository", _FakeRepo):
             result = sync_configs_to_db(
                 pipeline_dir=str(pdir),
                 attack_dir=str(tmp_path / "attacks"),
@@ -383,7 +383,7 @@ class TestSyncConfigsToDb:
                 pass
 
         with patch("src.backend.config_discovery.session_scope", _FakeSession), \
-             patch("src.backend.config_discovery.PipelineConfigRepository", _FakeRepo):
+             patch("src.backend.config_discovery.ExperimentRepository", _FakeRepo):
             result = sync_configs_to_db(
                 pipeline_dir=str(tmp_path / "nonexistent"),
                 attack_dir=str(tmp_path / "attacks"),
@@ -416,7 +416,7 @@ class TestGetAllConfigs:
                 return fake_configs
 
         with patch("src.backend.config_discovery.session_scope", _FakeSession), \
-             patch("src.backend.config_discovery.PipelineConfigRepository", _FakeRepo):
+             patch("src.backend.config_discovery.ExperimentRepository", _FakeRepo):
             result = get_all_configs()
 
         assert len(result) == 2
@@ -437,7 +437,7 @@ class TestGetAllConfigs:
                 return []
 
         with patch("src.backend.config_discovery.session_scope", _FakeSession), \
-             patch("src.backend.config_discovery.PipelineConfigRepository", _FakeRepo):
+             patch("src.backend.config_discovery.ExperimentRepository", _FakeRepo):
             result = get_all_configs()
 
         assert result == []
@@ -457,7 +457,7 @@ class TestGetAllConfigs:
 
         with pytest.raises(RuntimeError, match="DB unavailable"):
             with patch("src.backend.config_discovery.session_scope", _FakeSession), \
-                 patch("src.backend.config_discovery.PipelineConfigRepository", _FakeRepo):
+                 patch("src.backend.config_discovery.ExperimentRepository", _FakeRepo):
                 get_all_configs()
 
 
@@ -485,7 +485,7 @@ class TestGetConfigById:
                 return fake_config if config_id == "config_trades" else None
 
         with patch("src.backend.config_discovery.session_scope", _FakeSession), \
-             patch("src.backend.config_discovery.PipelineConfigRepository", _FakeRepo):
+             patch("src.backend.config_discovery.ExperimentRepository", _FakeRepo):
             result = get_config_by_id("config_trades")
 
         assert result is not None
@@ -505,7 +505,7 @@ class TestGetConfigById:
                 return None
 
         with patch("src.backend.config_discovery.session_scope", _FakeSession), \
-             patch("src.backend.config_discovery.PipelineConfigRepository", _FakeRepo):
+             patch("src.backend.config_discovery.ExperimentRepository", _FakeRepo):
             result = get_config_by_id("config_nonexistent")
 
         assert result is None
@@ -525,5 +525,5 @@ class TestGetConfigById:
 
         with pytest.raises(RuntimeError, match="connection refused"):
             with patch("src.backend.config_discovery.session_scope", _FakeSession), \
-                 patch("src.backend.config_discovery.PipelineConfigRepository", _FakeRepo):
+                 patch("src.backend.config_discovery.ExperimentRepository", _FakeRepo):
                 get_config_by_id("config_any")

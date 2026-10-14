@@ -19,7 +19,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.backend.api import app, _scheduler_state
-from src.db import PipelineRunStatus
+from src.db import ExperimentRunStatus
 from src.pipeline.tasks import clear_task_registry
 import src.pipeline.tasks as tasks_module
 
@@ -62,13 +62,14 @@ def _make_run(
     run_id: str,
     config_id: str,
     run_number: int,
-    status: PipelineRunStatus = PipelineRunStatus.COMPLETED,
+    status: ExperimentRunStatus = ExperimentRunStatus.COMPLETED,
 ):
     return SimpleNamespace(
         id=run_id,
-        pipeline_config_id=config_id,
+        experiment_id=config_id,
         run_number=run_number,
         use_cache=True,
+        tools_config=None,
         status=status,
         error_message=None,
         created_at=SimpleNamespace(isoformat=lambda: f"2026-01-0{run_number}T00:00:00"),
@@ -89,11 +90,11 @@ class TestListPipelineRunsEmpty:
         class _EmptyRepo:
             def __init__(self, _s):
                 pass
-            def get_all(self, config_id=None):
+            def get_all(self, experiment_id=None):
                 return []
 
         with patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", _EmptyRepo):
+             patch("src.db.ExperimentRunRepository", _EmptyRepo):
             resp = client.get("/api/pipeline-runs")
 
         assert resp.status_code == 200
@@ -109,9 +110,9 @@ class TestListPipelineRunsMultiConfig:
         class _Repo:
             def __init__(self, _s):
                 pass
-            def get_all(self, config_id=None):
-                if config_id:
-                    return [r for r in runs if r.pipeline_config_id == config_id]
+            def get_all(self, experiment_id=None):
+                if experiment_id:
+                    return [r for r in runs if r.experiment_id == experiment_id]
                 return runs
         return _Repo
 
@@ -122,7 +123,7 @@ class TestListPipelineRunsMultiConfig:
             _make_run("run_3", "config_trades", 1),
         ]
         with patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", self._make_repo(runs)):
+             patch("src.db.ExperimentRunRepository", self._make_repo(runs)):
             resp = client.get("/api/pipeline-runs")
 
         assert resp.status_code == 200
@@ -137,17 +138,17 @@ class TestListPipelineRunsMultiConfig:
             _make_run("run_3", "config_trades", 1),
         ]
         with patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", self._make_repo(runs)):
+             patch("src.db.ExperimentRunRepository", self._make_repo(runs)):
             resp = client.get("/api/pipeline-runs?config_id=config_mini")
 
         body = resp.json()
         assert body["total"] == 2
-        assert all(r["pipeline_config_id"] == "config_mini" for r in body["runs"])
+        assert all(r["experiment_id"] == "config_mini" for r in body["runs"])
 
     def test_filter_by_nonexistent_config_returns_empty(self, client):
         runs = [_make_run("run_1", "config_mini", 1)]
         with patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", self._make_repo(runs)):
+             patch("src.db.ExperimentRunRepository", self._make_repo(runs)):
             resp = client.get("/api/pipeline-runs?config_id=config_nonexistent")
 
         body = resp.json()
@@ -159,21 +160,21 @@ class TestListPipelineRunsResponseSchema:
     """Response format validation for GET /api/pipeline-runs."""
 
     def test_run_fields_present(self, client):
-        runs = [_make_run("run_abc", "config_mini", 1, PipelineRunStatus.RUNNING)]
+        runs = [_make_run("run_abc", "config_mini", 1, ExperimentRunStatus.RUNNING)]
 
         class _Repo:
             def __init__(self, _s):
                 pass
-            def get_all(self, config_id=None):
+            def get_all(self, experiment_id=None):
                 return runs
 
         with patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", _Repo):
+             patch("src.db.ExperimentRunRepository", _Repo):
             resp = client.get("/api/pipeline-runs")
 
         run = resp.json()["runs"][0]
         assert run["id"] == "run_abc"
-        assert run["pipeline_config_id"] == "config_mini"
+        assert run["experiment_id"] == "config_mini"
         assert run["run_number"] == 1
         assert run["use_cache"] is True
         assert run["status"] == "running"
@@ -183,16 +184,16 @@ class TestListPipelineRunsResponseSchema:
         assert "completed_at" in run
 
     def test_completed_run_has_completed_at(self, client):
-        runs = [_make_run("run_1", "config_mini", 1, PipelineRunStatus.COMPLETED)]
+        runs = [_make_run("run_1", "config_mini", 1, ExperimentRunStatus.COMPLETED)]
 
         class _Repo:
             def __init__(self, _s):
                 pass
-            def get_all(self, config_id=None):
+            def get_all(self, experiment_id=None):
                 return runs
 
         with patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", _Repo):
+             patch("src.db.ExperimentRunRepository", _Repo):
             resp = client.get("/api/pipeline-runs")
 
         run = resp.json()["runs"][0]
@@ -208,11 +209,11 @@ class TestListPipelineRunsHeadlessSafe:
         class _Repo:
             def __init__(self, _s):
                 pass
-            def get_all(self, config_id=None):
+            def get_all(self, experiment_id=None):
                 return [_make_run("run_1", "config_mini", 1)]
 
         with patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", _Repo):
+             patch("src.db.ExperimentRunRepository", _Repo):
             resp = client.get("/api/pipeline-runs")
 
         assert resp.status_code == 200

@@ -24,7 +24,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.backend.api import app, _scheduler_state
-from src.db import PipelineRunStatus
+from src.db import ExperimentRunStatus
 from src.pipeline.tasks import (
     TaskType,
     TaskFactory,
@@ -85,18 +85,19 @@ def _make_config(config_id, name, path="/tmp/test.yaml"):
     )
 
 
-def _make_run(run_id, config_id, run_number, status=PipelineRunStatus.COMPLETED):
+def _make_run(run_id, config_id, run_number, status=ExperimentRunStatus.COMPLETED):
     return SimpleNamespace(
         id=run_id,
-        pipeline_config_id=config_id,
+        experiment_id=config_id,
         run_number=run_number,
         use_cache=True,
+        tools_config=None,
         status=status,
         error_message=None,
         created_at=SimpleNamespace(isoformat=lambda: "2026-04-01T10:00:00"),
         started_at=SimpleNamespace(isoformat=lambda: "2026-04-01T10:00:01"),
         completed_at=SimpleNamespace(isoformat=lambda: "2026-04-01T11:00:00")
-        if status == PipelineRunStatus.COMPLETED
+        if status == ExperimentRunStatus.COMPLETED
         else None,
     )
 
@@ -222,18 +223,18 @@ class TestGetConfigRuns:
 
     def test_returns_runs_for_config(self, client):
         runs = [
-            _make_run("run_1", "config_mini", 1, PipelineRunStatus.COMPLETED),
-            _make_run("run_2", "config_mini", 2, PipelineRunStatus.RUNNING),
+            _make_run("run_1", "config_mini", 1, ExperimentRunStatus.COMPLETED),
+            _make_run("run_2", "config_mini", 2, ExperimentRunStatus.RUNNING),
         ]
 
         class _Repo:
             def __init__(self, _s):
                 pass
-            def get_by_config_id(self, config_id):
-                return [r for r in runs if r.pipeline_config_id == config_id]
+            def get_by_experiment_id(self, config_id):
+                return [r for r in runs if r.experiment_id == config_id]
 
         with patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", _Repo):
+             patch("src.db.ExperimentRunRepository", _Repo):
             resp = client.get("/api/pipeline-configs/config_mini/runs")
 
         assert resp.status_code == 200
@@ -244,11 +245,11 @@ class TestGetConfigRuns:
         class _Repo:
             def __init__(self, _s):
                 pass
-            def get_by_config_id(self, config_id):
+            def get_by_experiment_id(self, config_id):
                 return []
 
         with patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", _Repo):
+             patch("src.db.ExperimentRunRepository", _Repo):
             resp = client.get("/api/pipeline-configs/config_trades/runs")
 
         assert resp.status_code == 200
@@ -262,16 +263,16 @@ class TestGetConfigRuns:
         class _Repo:
             def __init__(self, _s):
                 pass
-            def get_by_config_id(self, config_id):
+            def get_by_experiment_id(self, config_id):
                 return runs
 
         with patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", _Repo):
+             patch("src.db.ExperimentRunRepository", _Repo):
             resp = client.get("/api/pipeline-configs/config_mini/runs")
 
         run = resp.json()["runs"][0]
         assert run["id"] == "run_abc"
-        assert run["pipeline_config_id"] == "config_mini"
+        assert run["experiment_id"] == "config_mini"
         assert run["run_number"] == 1
         assert run["status"] == "completed"
         assert "created_at" in run
@@ -300,12 +301,12 @@ class TestStartRunErrors:
         class _Repo:
             def __init__(self, _s):
                 pass
-            def get_active_runs_for_config(self, config_id):
+            def get_active_runs_for_experiment(self, config_id):
                 return [SimpleNamespace(id="run_existing")]
 
         with patch("src.backend.config_discovery.get_config_by_id", return_value=cfg), \
              patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", _Repo):
+             patch("src.db.ExperimentRunRepository", _Repo):
             resp = client.post(
                 "/api/pipeline-configs/config_mini/runs",
                 json={"use_cache": True},
@@ -345,7 +346,7 @@ class TestStopRunErrors:
                 return None
 
         with patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", _Repo):
+             patch("src.db.ExperimentRunRepository", _Repo):
             resp = client.post("/api/pipeline-runs/run_nonexistent/stop")
 
         assert resp.status_code == 404
@@ -359,12 +360,12 @@ class TestStopRunErrors:
             def get_by_id(self, run_id):
                 return SimpleNamespace(
                     id=run_id,
-                    pipeline_config_id="config_mini",
-                    status=PipelineRunStatus.COMPLETED,
+                    experiment_id="config_mini",
+                    status=ExperimentRunStatus.COMPLETED,
                 )
 
         with patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", _Repo):
+             patch("src.db.ExperimentRunRepository", _Repo):
             resp = client.post("/api/pipeline-runs/run_1/stop")
 
         assert resp.status_code == 400
@@ -379,12 +380,12 @@ class TestStopRunErrors:
             def get_by_id(self, run_id):
                 return SimpleNamespace(
                     id=run_id,
-                    pipeline_config_id="config_mini",
-                    status=PipelineRunStatus.CANCELLED,
+                    experiment_id="config_mini",
+                    status=ExperimentRunStatus.CANCELLED,
                 )
 
         with patch("src.db.session_scope", _fake_session_scope), \
-             patch("src.db.PipelineRunRepository", _Repo):
+             patch("src.db.ExperimentRunRepository", _Repo):
             resp = client.post("/api/pipeline-runs/run_1/stop")
 
         assert resp.status_code == 400

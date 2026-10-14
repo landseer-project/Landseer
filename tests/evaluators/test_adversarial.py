@@ -10,7 +10,8 @@ Verifies:
 
 import numpy as np
 import pytest
-import torch
+
+torch = pytest.importorskip("torch", reason="evaluator tests need torch: uv sync --group ml")
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 

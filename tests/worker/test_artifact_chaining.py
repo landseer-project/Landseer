@@ -390,6 +390,9 @@ class TestWorkerDependencyHandling:
         # Initialize components (this sets up _runner)
         worker._init_components()
         worker.use_cache = False
+        worker._client = MagicMock()
+        # The dependency ran earlier on this worker, which records its output.
+        worker._task_outputs[dep_id] = ("", dep_output_dir, [])
         
         # Create a task with dependency
         task = TaskInfo(

@@ -664,7 +664,8 @@ class TestEndToEndFlow:
         call_kw = mock_db.save_evaluation_result.call_args[1]
         # Workflow ID is auto-generated, so just verify it's set
         assert "workflow_id" in call_kw
-        assert call_kw["evaluator_name"] == "adversarial-evaluator"
+        # The evaluator is identified through the evaluation task's tool.
+        assert call_kw["evaluation_task_id"] == "task_eval_adv_1"
         assert call_kw["result_data"] == eval_result
         
         # Step 3: Verify task status is updated

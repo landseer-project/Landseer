@@ -12,6 +12,7 @@ dependencies = [
     "numpy>=1.26.0,<3.0.0",
     "pydantic>=2.11.5,<3.0.0",
     "colorlog>=6.9.0,<7.0.0",
+    "click>=8.1.0,<9.0.0",
     "fastapi>=0.111.0,<1.0.0",
     "uvicorn[standard]>=0.30.0,<1.0.0",
     "sqlalchemy>=2.0.0,<3.0.0",
@@ -23,54 +24,28 @@ dependencies = [
 ]
 
 [project.scripts]
-landseer-backend = "src.backend.cli:main"
-landseer-frontend = "src.frontend.cli:main"
-landseer-worker = "src.worker.cli:main"
-
-[tool.poetry]
-name = "landseer"
-version = "0.1.0"
-description = "Landseer is a framework for combining and analysing multiple trustworthy ML tools"
-authors = ["Rosemary Agbozo <agbozorosemary217@gmail.com>"]
-readme = "README.md"
-packages = [
-    { include = "backend", from = "src" },
-    { include = "frontend", from = "src" },
-    { include = "worker", from = "src" },
-    { include = "common", from = "src" },
-    { include = "data", from = "src" },
-    { include = "pipeline", from = "src" },
-    { include = "db", from = "src" },
-    { include = "store", from = "src" }
-]
-
-[tool.poetry.dependencies]
-python = ">=3.11,<3.15"
-pyyaml = ">=6.0.2,<7.0.0"
-numpy = ">=1.26.0,<3.0.0"
-pydantic = ">=2.11.5,<3.0.0"
-colorlog = ">=6.9.0,<7.0.0"
-fastapi = "^0.111.0"
-uvicorn = { version = "^0.30.0", extras = ["standard"] }
-# Database dependencies
-sqlalchemy = ">=2.0.0,<3.0.0"
-mysql-connector-python = ">=8.0.0,<9.0.0"
-python-dotenv = ">=1.0.0,<2.0.0"
-httpx = ">=0.27.0,<1.0.0"
-# MinIO client for artifact storage
-minio = ">=7.2.0,<8.0.0"
-sentry-sdk = ">=2.28.0,<3.0.0"
-
-[tool.poetry.scripts]
+landseer = "src.cli.main:main"
 landseer-backend = "src.backend.cli:main"
 landseer-frontend = "src.frontend.cli:main"
 landseer-worker = "src.worker.cli:main"
 
 [build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
 
 [dependency-groups]
 dev = [
-    "pytest (>=9.0.2,<10.0.0)"
+    "pytest>=9.0.2,<10.0.0",
 ]
+# Evaluator unit tests load the evaluator modules, which need torch.
+ml = [
+    "torch>=2.2",
+    "torchvision>=0.17",
+    "scikit-learn>=1.4",
+]
+
+[tool.uv]
+package = true

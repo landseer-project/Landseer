@@ -1,58 +1,47 @@
 # Quickstart
 
-This path gets a new engineer from clone to first run with backend and worker.
-
 ## Prerequisites
 
 - Python 3.11+
-- Poetry
-- Docker (or another supported runtime such as Apptainer/Singularity)
+- [uv](https://docs.astral.sh/uv/)
+- Docker (or Apptainer/Singularity)
 
 ## Install
 
 ```bash
 git clone <repo-url>
 cd Landseer
-poetry install
+uv sync --all-groups
+cp .env.example .env.db   # fill DB + MinIO secrets
 ```
 
-## Start backend
+## Start processes
 
 ```bash
-poetry run landseer-backend --config configs/pipeline/trades.yaml
+# Terminal 1 — headless backend (recommended)
+uv run landseer-backend
+
+# Terminal 2 — worker(s)
+uv run landseer-worker --gpu 0
 ```
 
-By default, backend serves on `http://localhost:8000`.
+Or all-in-one: `bash .cursor/skills/landseer-tmux-run/scripts/landseer-tmux.sh`
 
-## Start a worker
-
-In another terminal:
+## Run a pipeline
 
 ```bash
-poetry run landseer-worker --backend-url http://localhost:8000 --gpu 0
+uv run landseer run start configs/pipeline/trades.yaml
+uv run landseer progress --run-id <run_id>
+uv run landseer task list <run_id>
+uv run landseer run list
 ```
 
-For CPU-only mode, omit `--gpu`.
-
-## Trigger a pipeline run
+## Useful checks
 
 ```bash
-curl -X POST http://localhost:8000/api/pipeline-configs/trades/runs \
-  -H "Content-Type: application/json" \
-  -d '{"use_cache": true}'
+uv run landseer health
+uv run landseer status
+uv run landseer worker list
 ```
 
-## Monitor progress
-
-```bash
-curl http://localhost:8000/progress
-curl http://localhost:8000/api/pipeline-runs
-```
-
-## Smoke-test endpoints
-
-```bash
-curl http://localhost:8000/health
-curl http://localhost:8000/info/pipeline
-curl http://localhost:8000/workers
-```
+Full command list: [CLI reference](../reference/cli.md)

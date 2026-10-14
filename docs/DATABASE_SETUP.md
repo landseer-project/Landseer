@@ -90,7 +90,10 @@ export LANDSEER_DB_PASSWORD=landseer
 
 ```bash
 source .env.db
-poetry run landseer -c configs/pipeline/your_config.yaml -a configs/attack/test_config_1.yaml
+uv run landseer-backend --config configs/pipeline/your_config.yaml
+# Or headless + submit:
+# uv run landseer-backend
+# uv run landseer run start configs/pipeline/your_config.yaml
 ```
 
 Results will be stored in **both** CSV files and MySQL database.

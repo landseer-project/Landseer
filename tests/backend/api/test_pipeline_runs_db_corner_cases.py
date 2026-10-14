@@ -19,18 +19,16 @@ from src.db import (
     get_database,
     init_database,
     session_scope,
-    PipelineConfigRepository,
-    PipelineRunRepository,
-    PipelineRepository,
+    ExperimentRepository,
+    ExperimentRunRepository,
     TaskRepository,
-    WorkflowRepository,
     ArtifactRepository,
-    PipelineRunStatus,
+    ExperimentRunStatus,
 )
 from src.db.models import (
     TaskStatus as DBTaskStatus,
-    PipelineRunModel,
-    PipelineConfigModel,
+    ExperimentRunModel,
+    ExperimentModel,
     EvaluationResultModel,
 )
 
@@ -44,7 +42,7 @@ def temp_db(tmp_path):
 
 
 def _create_config(session, config_id: str = "config_trades"):
-    return PipelineConfigRepository(session).create(
+    return ExperimentRepository(session).create(
         {
             "id": config_id,
             "name": config_id,
@@ -56,11 +54,11 @@ def _create_config(session, config_id: str = "config_trades"):
     )
 
 
-def _create_run(session, config_id: str, run_id: str, run_number: int, status=PipelineRunStatus.PENDING):
-    return PipelineRunRepository(session).create(
+def _create_run(session, config_id: str, run_id: str, run_number: int, status=ExperimentRunStatus.PENDING):
+    return ExperimentRunRepository(session).create(
         {
             "id": run_id,
-            "pipeline_config_id": config_id,
+            "experiment_id": config_id,
             "run_number": run_number,
             "use_cache": True,
             "status": status,
@@ -72,7 +70,7 @@ def test_next_run_number_is_per_config():
     with session_scope() as session:
         _create_config(session, "config_a")
         _create_config(session, "config_b")
-        repo = PipelineRunRepository(session)
+        repo = ExperimentRunRepository(session)
         _create_run(session, "config_a", "run_a1", 1)
         _create_run(session, "config_a", "run_a2", 2)
         _create_run(session, "config_b", "run_b1", 1)
@@ -85,30 +83,30 @@ def test_next_run_number_is_per_config():
 def test_active_run_filter_only_returns_pending_running_stopping():
     with session_scope() as session:
         _create_config(session, "config_x")
-        repo = PipelineRunRepository(session)
-        _create_run(session, "config_x", "r_pending", 1, PipelineRunStatus.PENDING)
-        _create_run(session, "config_x", "r_running", 2, PipelineRunStatus.RUNNING)
-        _create_run(session, "config_x", "r_stopping", 3, PipelineRunStatus.STOPPING)
-        _create_run(session, "config_x", "r_completed", 4, PipelineRunStatus.COMPLETED)
-        _create_run(session, "config_x", "r_failed", 5, PipelineRunStatus.FAILED)
-        _create_run(session, "config_x", "r_cancelled", 6, PipelineRunStatus.CANCELLED)
+        repo = ExperimentRunRepository(session)
+        _create_run(session, "config_x", "r_pending", 1, ExperimentRunStatus.PENDING)
+        _create_run(session, "config_x", "r_running", 2, ExperimentRunStatus.RUNNING)
+        _create_run(session, "config_x", "r_stopping", 3, ExperimentRunStatus.STOPPING)
+        _create_run(session, "config_x", "r_completed", 4, ExperimentRunStatus.COMPLETED)
+        _create_run(session, "config_x", "r_failed", 5, ExperimentRunStatus.FAILED)
+        _create_run(session, "config_x", "r_cancelled", 6, ExperimentRunStatus.CANCELLED)
 
-        active_ids = {r.id for r in repo.get_active_runs_for_config("config_x")}
+        active_ids = {r.id for r in repo.get_active_runs_for_experiment("config_x")}
         assert active_ids == {"r_pending", "r_running", "r_stopping"}
 
 
 def test_update_status_sets_started_and_completed_timestamps():
     with session_scope() as session:
         _create_config(session, "config_s")
-        repo = PipelineRunRepository(session)
-        _create_run(session, "config_s", "run_s1", 1, PipelineRunStatus.PENDING)
+        repo = ExperimentRunRepository(session)
+        _create_run(session, "config_s", "run_s1", 1, ExperimentRunStatus.PENDING)
 
-        run = repo.update_status("run_s1", PipelineRunStatus.RUNNING)
+        run = repo.update_status("run_s1", ExperimentRunStatus.RUNNING)
         assert run is not None
         assert run.started_at is not None
         assert run.completed_at is None
 
-        run = repo.update_status("run_s1", PipelineRunStatus.COMPLETED)
+        run = repo.update_status("run_s1", ExperimentRunStatus.COMPLETED)
         assert run is not None
         assert run.completed_at is not None
 
@@ -127,21 +125,21 @@ def test_unique_constraint_on_config_and_run_number_enforced():
 def test_foreign_key_blocks_run_for_missing_config():
     with pytest.raises(IntegrityError):
         with session_scope() as session:
-            PipelineRunRepository(session).create(
+            ExperimentRunRepository(session).create(
                 {
                     "id": "run_orphan",
-                    "pipeline_config_id": "does_not_exist",
+                    "experiment_id": "does_not_exist",
                     "run_number": 1,
                     "use_cache": True,
-                    "status": PipelineRunStatus.PENDING,
+                    "status": ExperimentRunStatus.PENDING,
                 }
             )
 
 
 def test_delete_pipeline_config_cascades_pipeline_runs():
     with session_scope() as session:
-        cfg_repo = PipelineConfigRepository(session)
-        run_repo = PipelineRunRepository(session)
+        cfg_repo = ExperimentRepository(session)
+        run_repo = ExperimentRunRepository(session)
         cfg_repo.create(
             {
                 "id": "config_cascade",
@@ -155,75 +153,64 @@ def test_delete_pipeline_config_cascades_pipeline_runs():
         _create_run(session, "config_cascade", "run_c1", 1)
         _create_run(session, "config_cascade", "run_c2", 2)
 
-        assert len(run_repo.get_by_config_id("config_cascade")) == 2
+        assert len(run_repo.get_by_experiment_id("config_cascade")) == 2
         assert cfg_repo.delete("config_cascade") is True
 
     with session_scope() as session:
-        assert session.query(PipelineConfigModel).filter_by(id="config_cascade").first() is None
-        assert session.query(PipelineRunModel).filter_by(pipeline_config_id="config_cascade").count() == 0
+        assert session.query(ExperimentModel).filter_by(id="config_cascade").first() is None
+        assert session.query(ExperimentRunModel).filter_by(experiment_id="config_cascade").count() == 0
 
 
 def test_artifact_delete_by_run_isolated_and_idempotent():
+    from src.db.models import (
+        ToolModel,
+        ToolType,
+        ToolStage,
+        ToolDefenseType,
+        TaskType,
+    )
+
     with session_scope() as session:
         _create_config(session, "config_art")
         _create_run(session, "config_art", "run_art_1", 1)
         _create_run(session, "config_art", "run_art_2", 2)
 
-        PipelineRepository(session).create(
-            {
-                "id": "run_art_1",
-                "name": "p1",
-                "run_id": "run_art_1",
-                "config": {},
-                "dataset_config": None,
-                "model_config": None,
-                "status": "running",
-            }
+        session.add(
+            ToolModel(
+                id="tool_t",
+                tool_name="t",
+                tool_type=ToolType.DEFENSE,
+                tool_defense_type=ToolDefenseType.NONE,
+                tool_stage=ToolStage.PRE_TRAINING,
+                tool_image="i",
+            )
         )
-        PipelineRepository(session).create(
-            {
-                "id": "run_art_2",
-                "name": "p2",
-                "run_id": "run_art_2",
-                "config": {},
-                "dataset_config": None,
-                "model_config": None,
-                "status": "running",
-            }
-        )
+        session.flush()
 
         TaskRepository(session).create(
             {
                 "id": "task_art_1",
-                "tool_name": "t",
-                "tool_image": "i",
-                "tool_command": "c",
-                "tool_is_baseline": False,
+                "tool_id": "tool_t",
                 "config": {},
                 "priority": 1,
                 "status": DBTaskStatus.PENDING,
-                "task_type": "pre_training",
+                "task_type": TaskType.TOOL,
                 "task_hash": "h1",
                 "counter": 1,
-                "pipeline_id": "run_art_1",
-                "run_id": "run_art_1",
+                "experiment_run_id": "run_art_1",
             }
         )
         TaskRepository(session).create(
             {
                 "id": "task_art_2",
-                "tool_name": "t",
-                "tool_image": "i",
-                "tool_command": "c",
-                "tool_is_baseline": False,
+                "tool_id": "tool_t",
                 "config": {},
                 "priority": 1,
                 "status": DBTaskStatus.PENDING,
-                "task_type": "pre_training",
+                "task_type": TaskType.TOOL,
                 "task_hash": "h2",
                 "counter": 1,
-                "pipeline_id": "run_art_2",
-                "run_id": "run_art_2",
+                "experiment_run_id": "run_art_2",
             }
         )
 
@@ -237,7 +224,8 @@ def test_artifact_delete_by_run_isolated_and_idempotent():
                 "object_key": "k1",
                 "size_bytes": 10,
                 "provenance": {},
-                "created_by_run_id": "run_art_1",
+                "artifact_type": "tool_output",
+                "experiment_run_id": "run_art_1",
             }
         )
         art_repo.create(
@@ -249,66 +237,119 @@ def test_artifact_delete_by_run_isolated_and_idempotent():
                 "object_key": "k2",
                 "size_bytes": 20,
                 "provenance": {},
-                "created_by_run_id": "run_art_2",
+                "artifact_type": "tool_output",
+                "experiment_run_id": "run_art_2",
             }
         )
 
         assert art_repo.delete_by_run_id("run_art_1") == 1
-        # idempotent on second call
         assert art_repo.delete_by_run_id("run_art_1") == 0
         assert [a.id for a in art_repo.get_by_run_id("run_art_2")] == ["art2"]
 
 
-def test_evaluation_result_uniqueness_per_workflow_evaluator_corner_case():
+def test_evaluation_result_uniqueness_per_workflow_task():
     """
-    Corner case: current schema uniqueness is (workflow_id, evaluator_name),
-    not (run_id, workflow_id, evaluator_name). This test documents and guards
-    current behavior.
+    Unique on (workflow_id, evaluation_task_id). Tool name/image come from tools
+    via the evaluation task — not duplicated on evaluation_results.
     """
+    from src.db.models import (
+        ToolModel,
+        ToolType,
+        ToolStage,
+        ToolDefenseType,
+        TaskModel,
+        TaskType,
+        WorkflowModel,
+        WorkflowStatus,
+        ExperimentModel,
+        ExperimentRunModel,
+        ExperimentRunStatus,
+        ModelModel,
+        ModelType,
+        DatasetModel,
+        DatasetType,
+        DatasetVariantModel,
+        DatasetVariantType,
+    )
+
     with session_scope() as session:
-        _create_config(session, "config_eval")
-        _create_run(session, "config_eval", "run_eval_1", 1)
-        _create_run(session, "config_eval", "run_eval_2", 2)
-        PipelineRepository(session).create(
-            {
-                "id": "run_eval_1",
-                "name": "p1",
-                "run_id": "run_eval_1",
-                "config": {},
-                "dataset_config": None,
-                "model_config": None,
-                "status": "running",
-            }
+        session.add(
+            ToolModel(
+                id="tool_fair",
+                tool_name="fairness",
+                tool_type=ToolType.EVAL,
+                tool_defense_type=ToolDefenseType.FAIRNESS,
+                tool_stage=ToolStage.POST_TRAINING,
+                tool_image="fairness:latest",
+            )
         )
-        PipelineRepository(session).create(
-            {
-                "id": "run_eval_2",
-                "name": "p2",
-                "run_id": "run_eval_2",
-                "config": {},
-                "dataset_config": None,
-                "model_config": None,
-                "status": "running",
-            }
+        session.add(DatasetModel(id="ds1", name="cifar", dataset_type=DatasetType.IMAGE))
+        session.add(
+            DatasetVariantModel(
+                id="dsv1",
+                dataset_id="ds1",
+                name="clean",
+                dataset_variant_type=DatasetVariantType.CLEAN,
+                dataset_path="/data/cifar",
+            )
         )
-        WorkflowRepository(session).create(
-            {
-                "id": "wf_shared",
-                "name": "comb_001",
-                "pipeline_id": "run_eval_1",
-                "run_id": "run_eval_1",
-                "status": "completed",
-            }
+        session.add(
+            ModelModel(id="m1", model_type=ModelType.PYTORCH, model_path="/models/m1")
         )
+        session.add(
+            ExperimentModel(
+                id="exp1",
+                experiment_name="exp1",
+                model_id="m1",
+                dataset_variant_id="dsv1",
+            )
+        )
+        session.add(
+            ExperimentRunModel(
+                id="run_eval_1",
+                experiment_id="exp1",
+                run_number=1,
+                status=ExperimentRunStatus.RUNNING,
+            )
+        )
+        session.add(
+            ExperimentRunModel(
+                id="run_eval_2",
+                experiment_id="exp1",
+                run_number=2,
+                status=ExperimentRunStatus.RUNNING,
+            )
+        )
+        session.add(
+            WorkflowModel(
+                id="wf_shared",
+                experiment_run_id="run_eval_1",
+                status=WorkflowStatus.COMPLETED,
+            )
+        )
+        session.add(
+            TaskModel(
+                id="task_eval_1",
+                task_type=TaskType.EVALUATION,
+                tool_id="tool_fair",
+                config={},
+                status=DBTaskStatus.COMPLETED,
+                experiment_run_id="run_eval_1",
+            )
+        )
+        session.flush()
+
+        # Wire ordered workflow ↔ task association
+        wf = session.get(WorkflowModel, "wf_shared")
+        task = session.get(TaskModel, "task_eval_1")
+        wf.tasks.append(task)
+        session.flush()
 
         session.add(
             EvaluationResultModel(
                 id="er1",
                 workflow_id="wf_shared",
-                pipeline_id="run_eval_1",
-                run_id="run_eval_1",
-                evaluator_name="fairness",
-                evaluator_image="img",
+                evaluation_task_id="task_eval_1",
                 metrics={"acc": 0.9},
                 success=True,
                 skipped=False,
@@ -317,15 +358,12 @@ def test_evaluation_result_uniqueness_per_workflow_evaluator_corner_case():
 
     with pytest.raises(IntegrityError):
         with session_scope() as session:
-            # same workflow + evaluator, different run -> still violates current unique constraint
+            # same workflow + same evaluation task → unique violation
             session.add(
                 EvaluationResultModel(
                     id="er2",
                     workflow_id="wf_shared",
-                    pipeline_id="run_eval_2",
-                    run_id="run_eval_2",
-                    evaluator_name="fairness",
-                    evaluator_image="img",
+                    evaluation_task_id="task_eval_1",
                     metrics={"acc": 0.8},
                     success=True,
                     skipped=False,

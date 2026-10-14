@@ -588,11 +588,10 @@ class ApptainerRunner:
         
         # Build command. With a command we exec it; without one we run the
         # image's ENTRYPOINT/CMD like `docker run` does. Apptainer ignores the
-        # Docker WORKDIR, so pass it with --pwd (every evals/* image uses /app).
-        if command:
-            apptainer_cmd = [self.runtime, "exec"]
-        else:
-            apptainer_cmd = [self.runtime, "run", "--pwd", self.default_workdir]
+        # Docker WORKDIR and defaults to the host cwd, so pass it with --pwd in
+        # both cases (every tool and evals/* image uses /app).
+        verb = "exec" if command else "run"
+        apptainer_cmd = [self.runtime, verb, "--pwd", self.default_workdir]
         
         # Add GPU support if available
         if self.gpu_id is not None:

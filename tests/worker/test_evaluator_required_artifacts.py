@@ -186,3 +186,114 @@ class TestMaterializeRequiredArtifacts:
 
         assert result.success
         mock.run.assert_called_once()
+
+
+class TestJudgeApiKey:
+    def test_forwards_key_to_evaluation_tasks(
+        self, workspace: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("JUDGE_API_KEY", "secret-value")
+        runner = TaskRunner(workspace_dir=workspace)
+        mock = _mock_container(runner)
+
+        result = runner.run_task(_eval_task())
+
+        assert result.success
+        assert mock.run.call_args.kwargs["env"]["JUDGE_API_KEY"] == "secret-value"
+        config = json.loads((workspace / "eval_1" / "input" / "config.json").read_text())
+        assert "JUDGE_API_KEY" not in config
+
+    def test_skips_other_task_types(
+        self, workspace: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("JUDGE_API_KEY", "secret-value")
+        runner = TaskRunner(workspace_dir=workspace)
+        mock = _mock_container(runner)
+
+        task = _eval_task()
+        task.task_type = "during_training"
+        result = runner.run_task(task)
+
+        assert result.success
+        assert "JUDGE_API_KEY" not in mock.run.call_args.kwargs["env"]
+
+    def test_docker_command_omits_key_value(self, workspace: Path, monkeypatch: pytest.MonkeyPatch):
+        from unittest.mock import patch
+
+        from src.worker.runner import DockerRunner
+
+        monkeypatch.setenv("JUDGE_API_KEY", "secret-value")
+        runner = DockerRunner(workspace_dir=workspace, gpu_id=None)
+        input_dir = workspace / "input"
+        output_dir = workspace / "output"
+        input_dir.mkdir()
+        output_dir.mkdir()
+
+        with patch("src.worker.runner.subprocess.Popen") as mock_popen:
+            proc = MagicMock()
+            proc.poll.return_value = 0
+            proc.returncode = 0
+            proc.stdout.readline.return_value = ""
+            proc.stderr.readline.return_value = ""
+            mock_popen.return_value = proc
+            _exit, _logs, cmd = runner.run(
+                image="test/eval:latest",
+                command="python evaluate.py",
+                input_dir=input_dir,
+                output_dir=output_dir,
+                env={"JUDGE_API_KEY": "secret-value", "FOO": "bar"},
+            )
+
+        argv = mock_popen.call_args[0][0]
+        assert "JUDGE_API_KEY" in argv
+        assert "JUDGE_API_KEY=secret-value" not in argv
+        assert "FOO=bar" in argv
+        assert "secret-value" not in cmd
+
+
+class TestTaskConfigNotDumpedToEnv:
+    """task.config must not be dumped into subprocess env (Apptainer PathLike crash)."""
+
+    def test_non_string_config_values_omitted_from_env(self, workspace: Path):
+        runner = TaskRunner(workspace_dir=workspace)
+        mock = _mock_container(runner)
+        runner._materialize_required_artifacts = MagicMock(return_value=[])
+
+        task = _eval_task(
+            required=["model.pt"],
+            metrics=["demographic_parity", "equalized_odds"],
+        )
+        task.config["_run_use_cache"] = True
+        task.config["epochs"] = 10
+        task.config["name"] = "fairness_eval"
+
+        result = runner.run_task(task)
+        assert result.success
+
+        passed_env = mock.run.call_args.kwargs["env"]
+        assert all(isinstance(v, str) for v in passed_env.values())
+        assert "metrics" not in passed_env
+        assert "required_artifacts" not in passed_env
+        assert "_run_use_cache" not in passed_env
+        assert "epochs" not in passed_env
+        # String config keys are also omitted — config lives in config.json.
+        assert "name" not in passed_env
+        assert "PYTHONPATH" in passed_env
+
+        config = json.loads((workspace / "eval_1" / "input" / "config.json").read_text())
+        assert config["metrics"] == ["demographic_parity", "equalized_odds"]
+        assert config["_run_use_cache"] is True
+        assert config["name"] == "fairness_eval"
+
+    def test_caller_string_env_still_forwarded(self, workspace: Path):
+        runner = TaskRunner(workspace_dir=workspace)
+        mock = _mock_container(runner)
+        runner._materialize_required_artifacts = MagicMock(return_value=[])
+
+        task = _eval_task()
+        result = runner.run_task(task, env={"CUSTOM_FLAG": "yes", "BAD_LIST": [1, 2]})
+        assert result.success
+
+        passed_env = mock.run.call_args.kwargs["env"]
+        assert passed_env["CUSTOM_FLAG"] == "yes"
+        assert "BAD_LIST" not in passed_env

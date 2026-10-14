@@ -123,6 +123,9 @@ class _FakeQuery:
     def filter(self, *args, **kwargs):
         return self
 
+    def join(self, *args, **kwargs):
+        return self
+
     def first(self):
         return self._rows[0] if self._rows else None
 
@@ -137,7 +140,7 @@ class _FakeSession:
 
     def query(self, model):
         name = getattr(model, "__name__", str(model))
-        if "PipelineRun" in name:
+        if "ExperimentRun" in name or "PipelineRun" in name:
             return _FakeQuery([self._run] if self._run else [])
         if "EvaluationResult" in name:
             return _FakeQuery(self._results)
@@ -154,7 +157,7 @@ def test_export_run_metrics_csv_writes_expected_rows(tmp_results_cwd):
     pipeline = _make_pipeline()
     scheduler = SimpleNamespace(pipeline=pipeline)
 
-    run = SimpleNamespace(id=RUN_ID, pipeline_config_id=CONFIG_ID)
+    run = SimpleNamespace(id=RUN_ID, experiment_id=CONFIG_ID)
     results = [
         _fake_result("wf_ok", "adversarial", {"clean_accuracy": 0.91, "pgd_accuracy": 0.7}),
         _fake_result("wf_ok", "fairness", {"demographic_parity": 0.12}),

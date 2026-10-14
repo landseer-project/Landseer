@@ -1,0 +1,33 @@
+name: Image Labels
+
+on:
+  push:
+    branches:
+      - main
+      - dev/restructure
+    paths:
+      - 'containers/**'
+      - 'configs/evaluators.yaml'
+      - 'src/pipeline/image_labels.py'
+      - '.github/workflows/image-labels.yml'
+  pull_request:
+    paths:
+      - 'containers/**'
+      - 'configs/evaluators.yaml'
+      - 'src/pipeline/image_labels.py'
+      - '.github/workflows/image-labels.yml'
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check Dockerfile labels against the schema
+        run: |
+          pip install --quiet pyyaml
+          python src/pipeline/image_labels.py lint
