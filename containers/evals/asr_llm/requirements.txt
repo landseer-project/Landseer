@@ -5,3 +5,4 @@ sentencepiece==0.2.0
 tokenizers==0.20.3
 tqdm==4.67.1
 transformers==4.45.2
+google-genai

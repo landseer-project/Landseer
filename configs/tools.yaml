@@ -144,6 +144,15 @@ tools:
     container:
       image: ghcr.io/landseer-project/in_teaching:v11
       command: python3 main.py --dataset celeba --num_workers 0 --noise_type symmetric --noise_rate 0.2
+      runtime: null  
+
+  in_watermarkinguchida:
+    name: in-watermarkinguchida
+    defense_stage: during_training
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/in_watermarkinguchida:v3
+      command: python3 main.py --scale 0.1 --epoch 200 --batch_size 64 --embed_dim 256
       runtime: null
 
   watermarknn:
@@ -153,7 +162,7 @@ tools:
     container:
       image: ghcr.io/landseer-project/pre_watermarknn_cpu:v1
       command: conda run -n watermarknn python -u main.py
-      runtime: null
+      runtime: null   
 
   # Post-training tools
   post_noop:
@@ -310,7 +319,7 @@ tools:
     is_baseline: false
     container:
       image: ghcr.io/landseer-project/post_door_llm:v1
-      command: python main.py
+      command: python main.py --batch_size 1
       runtime: null
 
 

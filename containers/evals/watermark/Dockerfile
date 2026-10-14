@@ -34,4 +34,8 @@ COPY watermark/evaluate.py ./evaluate.py
 # Include all watermark trigger files in the evaluator image
 COPY watermark/watermark_triggers/ ./watermark_triggers/
 
+# Baked-in Uchida weight watermark reference
+COPY watermark/watermark_weights/ ./watermark_weights/
+
+
 ENTRYPOINT ["python", "evaluate.py"]

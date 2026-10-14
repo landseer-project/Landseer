@@ -96,7 +96,7 @@ evaluators:
   watermark:
     name: watermark
     container:
-      image: ghcr.io/landseer-project/evals/watermark:v3
+      image: ghcr.io/landseer-project/evals/watermark:v4
       command: ""
     required_artifacts: []
       # - watermark_key.json
@@ -122,7 +122,7 @@ evaluators:
   asr_llm:
     name: asr_llm
     container:
-      image: ghcr.io/landseer-project/evals/asr_llm:v1
+      image: ghcr.io/landseer-project/evals/asr_llm:v6
       command: ""
     required_artifacts: []
     metrics:
