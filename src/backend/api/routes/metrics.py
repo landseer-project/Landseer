@@ -4,6 +4,7 @@ from src.backend.api.models import PipelineMetricsResponse, WorkflowMetrics
 
 import csv
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -161,12 +162,20 @@ def _should_override_metric(existing_evaluator: Optional[str], new_evaluator: st
             return True
     return False
 
-def _export_run_metrics_csv(run_id: str, scheduler: Scheduler) -> Optional[Path]:
+def _export_run_metrics_csv(
+    run_id: str,
+    scheduler: Scheduler,
+    task_metadata: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Optional[Path]:
     """
     Export per-workflow evaluation metrics to CSV for a completed run.
 
     Every expected evaluator is included. If evaluator output is missing, skipped,
     or failed, metric values are written as -1.
+
+    Results come from the DB; any evaluator the DB has no row for falls back to the
+    in-memory ``task_metadata`` (as ``get_pipeline_metrics`` does), so runs whose
+    results never reached the DB (legacy ``--config`` mode, DB errors) still export.
     """
     try:
         from src.db import session_scope
@@ -175,7 +184,10 @@ def _export_run_metrics_csv(run_id: str, scheduler: Scheduler) -> Optional[Path]
         logger.warning(f"Unable to import DB models for metrics CSV export: {e}")
         return None
 
-    pipeline = getattr(scheduler, "pipeline", None)
+    # With several runs loaded, scheduler.pipeline is only the most recently added one.
+    pipeline = (getattr(scheduler, "pipelines", None) or {}).get(run_id) or getattr(
+        scheduler, "pipeline", None
+    )
     if not pipeline:
         return None
 
@@ -183,6 +195,8 @@ def _export_run_metrics_csv(run_id: str, scheduler: Scheduler) -> Optional[Path]
     workflow_is_baseline: Dict[str, bool] = {}
     expected_evaluators_by_workflow: Dict[str, set] = {}
     expected_metric_names_by_evaluator: Dict[str, set] = {}
+    eval_tasks_by_key: Dict[tuple, List[Any]] = {}
+    evaluator_by_task_id: Dict[str, str] = {}
 
     for wf in pipeline.workflows:
         non_eval_tasks = [t for t in wf.tasks if t.task_type != TaskType.EVALUATION]
@@ -193,6 +207,8 @@ def _export_run_metrics_csv(run_id: str, scheduler: Scheduler) -> Optional[Path]
             if task.task_type != TaskType.EVALUATION:
                 continue
             evaluator_name = str(task.tool.name)
+            evaluator_by_task_id[task.id] = evaluator_name
+            eval_tasks_by_key.setdefault((wf.id, evaluator_name), []).append(task)
             expected_evaluators_by_workflow.setdefault(wf.id, set()).add(evaluator_name)
             expected_metric_names_by_evaluator.setdefault(evaluator_name, set()).update(
                 [str(m) for m in (task.config or {}).get("metrics", []) if str(m).strip()]
@@ -204,16 +220,55 @@ def _export_run_metrics_csv(run_id: str, scheduler: Scheduler) -> Optional[Path]
 
     with session_scope() as session:
         run = session.query(ExperimentRunModel).filter(ExperimentRunModel.id == run_id).first()
+        run_experiment_id = run.experiment_id if run is not None else None
 
-        results = (
+        # Read everything while the session is open: evaluator_name is a lazy
+        # evaluation_task -> tool lookup that fails once the session is closed.
+        results = []
+        for r in (
             session.query(EvaluationResultModel)
             .join(WorkflowModel, EvaluationResultModel.workflow_id == WorkflowModel.id)
             .filter(WorkflowModel.experiment_run_id == run_id)
             .all()
-        )
- 
-    if run is not None:
-        config_id = run.experiment_id
+        ):
+            try:
+                name = r.evaluator_name
+            except Exception:
+                name = None
+            results.append(SimpleNamespace(
+                workflow_id=r.workflow_id,
+                evaluator_name=name or evaluator_by_task_id.get(
+                    getattr(r, "evaluation_task_id", None)
+                ),
+                metrics=dict(r.metrics or {}),
+                success=r.success,
+                skipped=r.skipped,
+            ))
+
+    result_lookup: Dict[tuple, Any] = {}
+    for result in results:
+        if result.evaluator_name:
+            result_lookup[(result.workflow_id, result.evaluator_name)] = result
+
+    # Fall back to in-memory evaluation results for anything the DB does not have.
+    for key, tasks in eval_tasks_by_key.items():
+        if key in result_lookup:
+            continue
+        for task in tasks:
+            meta = (task_metadata or {}).get(task.id) or {}
+            eval_result = (meta.get("result") or {}).get("evaluation_result")
+            if isinstance(eval_result, dict):
+                result_lookup[key] = SimpleNamespace(
+                    workflow_id=key[0],
+                    evaluator_name=key[1],
+                    metrics=dict(eval_result.get("metrics") or {}),
+                    success=eval_result.get("success", True),
+                    skipped=bool(eval_result.get("skipped", False)),
+                )
+                break
+
+    if run_experiment_id is not None:
+        config_id = run_experiment_id
     else:
         pipeline_name = getattr(pipeline, "name", None) or "unknown_config"
         config_id = (
@@ -225,12 +280,9 @@ def _export_run_metrics_csv(run_id: str, scheduler: Scheduler) -> Optional[Path]
             f"Run {run_id} not found in pipeline_runs; exporting CSV under {config_id}/{run_id}"
         )
 
-    result_lookup: Dict[tuple, Any] = {}
     observed_metric_names_by_evaluator:  Dict[str, set] = {}
-    for result in results:
-        key = (result.workflow_id, result.evaluator_name)
-        result_lookup[key] = result
-        observed_metric_names_by_evaluator.setdefault(result.evaluator_name, set()).update(
+    for (_, evaluator_name), result in result_lookup.items():
+        observed_metric_names_by_evaluator.setdefault(evaluator_name, set()).update(
             list((result.metrics or {}).keys())
         )
 

@@ -161,7 +161,7 @@ async def update_task_status(
                     run_repo.update_status(run_id, final_status)
                     logger.info(f"Pipeline run {run_id} finalized as {final_status.value}")
             try:
-                csv_path = _export_run_metrics_csv(run_id, scheduler)
+                csv_path = _export_run_metrics_csv(run_id, scheduler, state.task_metadata)
             except Exception as export_err:
                 logger.warning(
                     f"Failed to export metrics CSV for run {run_id}: {export_err}",
