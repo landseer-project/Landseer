@@ -56,7 +56,6 @@ def _load_image_chw(path: Path, image_size: int) -> np.ndarray:
         rgb = img.convert("RGB")
         if image_size > 0:
             rgb = rgb.resize((image_size, image_size), Image.BILINEAR)
-        # arr = np.asarray(rgb, dtype=np.float32)
         # Landseer CelebA contract: CHW float32 in [0, 1]
         arr = np.asarray(rgb, dtype=np.float32) / 255.0
 
@@ -88,7 +87,7 @@ def _load_split(
         valid_labels.append(int(label))
         valid_names.append(name)
 
-        hwc = np.transpose(arr.astype(np.uint8), (1, 2, 0))
+        hwc = np.transpose((arr * 255.0).round().clip(0, 255).astype(np.uint8), (1, 2, 0))
         Image.fromarray(hwc, mode="RGB").save(output_img_dir / name, quality=95)
 
     if not images:
@@ -133,7 +132,6 @@ def main() -> None:
         return
 
     source_root = Path(args.source_artifacts_dir)
-
     if not source_root.exists():
         raise FileNotFoundError(f"Source CelebA directory not found: {source_root}")
 
@@ -183,7 +181,9 @@ def main() -> None:
         out_img_dir,
     )
 
-    print(f"Train before poisoning: shape={train_x.shape}, range=[{train_x.min()}, {train_x.max()}]")
+    print(f"Train before poisoning: shape={train_x.shape}, dtype={train_x.dtype}, range=[{train_x.min()}, {train_x.max()}]")
+
+    trigger_value = 1.0 if args.trigger_value is None else args.trigger_value
 
     poisoner = BadNetsStrategy()
 
@@ -195,19 +195,21 @@ def main() -> None:
         target_class=args.target_class,
         seed=args.poison_seed,
         trigger_size=args.trigger_size,
-        trigger_value=args.trigger_value,
+        trigger_value=trigger_value,
         trigger_position=args.trigger_position,
     )
 
-    poisoned_train_x = result.data
-    poisoned_train_y = result.labels
+    poisoned_train_x = np.asarray(result.data, dtype=np.float32)
+    poisoned_train_y = np.asarray(result.labels, dtype=np.int64)
+
+    if poisoned_train_x.min() < 0.0 or poisoned_train_x.max() > 1.0:
+        raise ValueError(
+            f"Poisoned CelebA data outside [0,1]: "
+            f"[{poisoned_train_x.min()}, {poisoned_train_x.max()}]"
+        )
 
     poisoned_indices = np.flatnonzero(poisoned_train_y != train_y)
     actual_poison_rate = len(poisoned_indices) / len(poisoned_train_x)
-
-    trigger_value = args.trigger_value
-    if trigger_value is None:
-        trigger_value = 1.0 if train_x.min() >= 0 and train_x.max() <= 1.0 + 1e-6 else 255.0
 
     attack_info = {
         "technique": "badnets",
@@ -234,8 +236,8 @@ def main() -> None:
 
     np.save(output_dir / "data.npy", poisoned_train_x)
     np.save(output_dir / "labels.npy", poisoned_train_y)
-    np.save(output_dir / "test_data.npy", test_x)
-    np.save(output_dir / "test_labels.npy", test_y)
+    np.save(output_dir / "test_data.npy", test_x.astype(np.float32))
+    np.save(output_dir / "test_labels.npy", test_y.astype(np.int64))
     np.save(output_dir / "filenames.npy", train_names)
     np.save(output_dir / "test_filenames.npy", test_names)
 
@@ -243,6 +245,8 @@ def main() -> None:
 
     print(f"CelebA BadNets artifacts written to {output_dir}")
     print(f"Train={len(poisoned_train_x)}, test={len(test_x)}, poisoned={len(poisoned_indices)}")
+    print(f"Train dtype={poisoned_train_x.dtype}, range=[{poisoned_train_x.min()}, {poisoned_train_x.max()}]")
+    print(f"Test dtype={test_x.dtype}, range=[{test_x.min()}, {test_x.max()}]")
     print(f"Poison rate: requested={args.poison_rate:.4f}, actual={actual_poison_rate:.4f}")
     print(
         f"Target={args.target_class}, trigger={args.trigger_size}x{args.trigger_size}, "

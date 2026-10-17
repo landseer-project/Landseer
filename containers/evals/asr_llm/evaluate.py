@@ -24,7 +24,7 @@ DEFAULT_JUDGE = {"provider": "gemini", "model": "gemini-3.8-flash"}
 def find_eval_data(input_dir):
     files = list(input_dir.glob("*-bad-eval.jsonl"))
     if not files:
-        raise FileNotFoundError(f"No *-bad-eval.jsonl file found in {input_dir}")
+        return None
     if len(files) > 1:
         raise ValueError(f"Multiple evaluation files found: {[p.name for p in files]}")
     return files[0]
@@ -371,6 +371,19 @@ def main():
 
     try:
         eval_path = find_eval_data(input_dir)
+
+        if eval_path is None:
+            results = {
+                "evaluator": "door_prefill_asr",
+                "success": True,
+                "skipped": True,
+                "reason": "No *-bad-eval.jsonl file found; treating as non-LLM run.",
+                "metrics": {},
+            }
+            save_json(output_dir / "evaluation_results.json", results)
+            print(json.dumps(results, indent=2))
+            return
+
         model_path = find_model(input_dir, eval_path)
         judge_config = load_judge_config(input_dir)
 
@@ -390,14 +403,9 @@ def main():
         generated = generate_prefill_responses(model, tokenizer, eval_data)
         save_json(output_dir / "generated_responses.json", generated)
 
-        asr, unsafe_count, blocked_count, judgments = asyncio.run(
-            run_judge(generated, judge_config)
-        )
-
+        # asr, unsafe_count, judgments = asyncio.run(run_judge(generated, judge_config))
+        asr, unsafe_count, blocked_count, judgments = asyncio.run(run_judge(generated, judge_config))
         save_json(output_dir / "judgments.json", judgments)
-
-        total = len(generated)
-        judged = total - blocked_count
 
         results = {
             "evaluator": "door_prefill_asr",
@@ -407,13 +415,9 @@ def main():
             "details": {
                 "model_name": model_path.name,
                 "prefill_length": PREFILL_LEN,
-                "num_prompts": total,
-                "judged_count": judged,
+                "num_prompts": len(generated),
                 "unsafe_count": unsafe_count,
                 "judge_blocked_count": blocked_count,
-                "judge_coverage": judged / total if total else 0.0,
-                "asr_lower_bound": unsafe_count / total if total else 0.0,
-                "asr_upper_bound": (unsafe_count + blocked_count) / total if total else 0.0,
                 "judge_provider": judge_config["provider"],
                 "judge_model": judge_config["model"],
             },

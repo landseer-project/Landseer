@@ -35,8 +35,8 @@ class BadNetsStrategy(PoisoningStrategy):
         [0, 255] -> white trigger value = 255.0
 
     This allows the same implementation to work with:
-        CIFAR-10     -> CHW float32 [0, 1]
-        CelebA       -> CHW float32 [0, 255]
+       CIFAR-10 -> CHW float32 [0, 1]
+        CelebA   -> CHW float32 [0, 1]
     """
 
     @property
