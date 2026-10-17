@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.common import get_logger
 from src.pipeline.tasks import TaskStatus
+from src.pipeline.run_identity import bind_pipeline_to_run
 from src.backend.initialization import get_backend_context, set_backend_context
 from src.backend.scheduler import Scheduler
 from src.backend.api.models import (
@@ -164,16 +165,11 @@ async def start_pipeline_run(
                 ),
             )
 
-            # Bind pipeline and all tasks/workflows to this run's ID
-            pipeline.id = run_id
-            for workflow in pipeline.workflows:
-                workflow.pipeline_id = run_id
-                workflow.run_id = run_id
-                for task in workflow.tasks:
-                    task.pipeline_id = run_id
-                    task.run_id = run_id
-                    # Propagate per-run cache policy to workers via task payload.
-                    task.config["_run_use_cache"] = bool(request_data.get("use_cache", True))
+            # Bind pipeline, workflows and tasks to run-scoped IDs and propagate
+            # the run's cache policy to workers via the task payload.
+            bind_pipeline_to_run(
+                pipeline, run_id, use_cache=bool(request_data.get("use_cache", True))
+            )
 
             # Step 3: Dataset context (best-effort)
             ctx = get_backend_context()
@@ -780,16 +776,10 @@ async def restart_pipeline_run(
                 attack_config_path=effective_attack_config_path,
             )
             
-            # Set pipeline ID to new run_id
-            pipeline.id = new_run_id
-            
-            # Set run_id on all tasks and workflows
-            for workflow in pipeline.workflows:
-                workflow.pipeline_id = new_run_id
-                workflow.run_id = new_run_id
-                for task in workflow.tasks:
-                    task.pipeline_id = new_run_id
-                    task.run_id = new_run_id
+            # Bind to run-scoped IDs. Pass use_cache like the start route does:
+            # workers hash task.config into the cache key, so omitting
+            # _run_use_cache here made every restarted task miss the cache.
+            bind_pipeline_to_run(pipeline, new_run_id, use_cache=request.use_cache)
             
             # Merge into shared scheduler (do not replace other active runs)
             state.add_run(pipeline, scheduler_type="priority")
