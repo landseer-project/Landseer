@@ -63,7 +63,8 @@ class Worker:
         task_timeout: int = 28000,
         heartbeat_interval: float = 30.0,
         use_cache: bool = True,
-        runtime: Optional[str] = None
+        runtime: Optional[str] = None,
+        data_root: Optional[Path] = None,
     ):
         """
         Initialize the worker.
@@ -73,13 +74,17 @@ class Worker:
             worker_id: Worker identifier (auto-generated if not provided)
             workspace_dir: Directory for task workspaces
             cache_dir: Directory for artifact caching
-            data_path: Path to input data directory (dataset, model config)
+            data_path: Path to input data directory (dataset, model config);
+                used only for runs whose dataset it matches
             gpu_id: GPU ID to use (None for CPU-only)
             poll_interval: Seconds between task polls when idle
             task_timeout: Task execution timeout in seconds
             heartbeat_interval: Seconds between heartbeats
             use_cache: Whether to use artifact caching
             runtime: Container runtime to use (auto-detect if None)
+            data_root: Directory with <name>/<variant>/ dataset dirs, preferred
+                over a MinIO download when the run's dir matches
+                (default: LANDSEER_DATA_ROOT)
         """
         self.backend_url = backend_url
         self.worker_id = worker_id or f"worker_{uuid.uuid4().hex[:8]}"
@@ -94,7 +99,10 @@ class Worker:
         
         self.cache_dir = cache_dir or Path(os.environ.get("LANDSEER_CACHE_DIR", "/data/landseer/cache"))
         self.data_path = data_path  # Path to input data (manual override)
-        self._dataset_path: Optional[Path] = None  # Auto-fetched from backend
+        if data_root is None and os.environ.get("LANDSEER_DATA_ROOT"):
+            data_root = Path(os.environ["LANDSEER_DATA_ROOT"])
+        self.data_root = data_root  # <root>/<name>/<variant>/ manual dataset dirs
+        self._dataset_path: Optional[Path] = None  # Dataset dir of the active run
         
         # Configuration
         self.gpu_id = gpu_id
@@ -131,10 +139,17 @@ class Worker:
         # Manifest of the dataset the backend serves for the active run
         # (from MinIO, the backend's local dir, or GET /dataset/manifest).
         self._dataset_manifest: Optional[Dict[str, Any]] = None
-        # resolved dataset dir -> (content_id, provenance_id); cleared per run
-        self._dataset_identity_memo: Dict[str, tuple] = {}
-        # Set when the manual data path does not match the backend's dataset
-        # for the active run; every task of that run then fails with it.
+        # (resolved dataset dir, manifest content_id) -> (content_id, provenance_id)
+        self._dataset_identity_memo: Dict[tuple, tuple] = {}
+        # (resolved dir, manifest content_id) -> mismatch description (None: matches)
+        self._dir_check_memo: Dict[tuple, Optional[str]] = {}
+        # (name, variant, content_id) -> (dataset dir, manifest) already resolved
+        self._resolved_datasets: Dict[tuple, tuple] = {}
+        # run_id -> that run's dataset/model context (see _activate_run)
+        self._run_contexts: Dict[str, Dict[str, Any]] = {}
+        # Set when no verified copy of the active run's dataset could be found
+        # and the manual data path does not match it; every task of that run
+        # then fails with it.
         self._dataset_mismatch: Optional[str] = None
 
         # Components (initialized on start)
@@ -172,37 +187,129 @@ class Worker:
         name = dataset_info.get("name") or "dataset"
         variant = dataset_info.get("variant") or "clean"
         return self.cache_dir / "datasets" / str(name) / str(variant) / "config_model.py"
-    
-    def _try_download_model_script_via_minio(self, dataset_info: Dict[str, Any]) -> None:
+
+    @staticmethod
+    def _file_sha256(path: Path) -> Optional[str]:
+        try:
+            return hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            return None
+
+    def _model_script_ok(self, path: Optional[Path], sha: Optional[str]) -> bool:
+        """path is a file and, when the backend sent a hash, has that content."""
+        return bool(path and path.is_file() and (not sha or self._file_sha256(path) == sha))
+
+    def _download_model_script(self, dataset_info: Dict[str, Any]) -> Optional[Path]:
         """
         Fetch ``config_model.py`` from MinIO when the backend published
         ``model_script_minio_key`` (remote workers do not have host-local ``model_script`` paths).
+
+        With ``model_script_sha256`` the copy is stored by content hash, so runs
+        with different model scripts on the same dataset never share one.
         """
-        if self._model_script_path and self._model_script_path.exists():
-            return
         key = dataset_info.get("model_script_minio_key")
-        if not key:
-            return
-        if not dataset_info.get("minio_available"):
-            return
+        if not key or not dataset_info.get("minio_available"):
+            return None
         minio = self._get_minio_store_for_dataset_downloads()
         if minio is None:
             logger.warning(
                 "Dataset advertises model_script_minio_key but worker has no MinIO client "
                 "(enable two-level cache + MinIO)"
             )
-            return
-        dest = self._model_script_cache_path(dataset_info)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        if dest.exists():
-            self._model_script_path = dest
-            return
-        if minio.download_file(key, dest):
-            self._model_script_path = dest
-            logger.info(f"Downloaded model script from MinIO: {key} -> {dest}")
-        else:
+            return None
+        sha = dataset_info.get("model_script_sha256")
+        if not sha:
+            # Older backend: one script per dataset, kept next to its cache copy.
+            dest = self._model_script_cache_path(dataset_info)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if dest.exists():
+                return dest
+            if minio.download_file(key, dest):
+                logger.info(f"Downloaded model script from MinIO: {key} -> {dest}")
+                return dest
             logger.warning(f"Failed to download model script from MinIO: {key}")
-    
+            return None
+        dest = self.cache_dir / "model_scripts" / sha[:16] / "config_model.py"
+        if self._model_script_ok(dest, sha):
+            return dest
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(f".{dest.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+        try:
+            if minio.download_file(key, tmp) and self._model_script_ok(tmp, sha):
+                os.replace(tmp, dest)
+                logger.info(f"Downloaded model script from MinIO: {key} -> {dest}")
+                return dest
+        finally:
+            tmp.unlink(missing_ok=True)
+        logger.warning(f"Failed to download model script {key} (sha256 {sha[:12]}) from MinIO")
+        return None
+
+    def _model_script_from_pipeline_config(self) -> Optional[Path]:
+        """Model script named by LANDSEER_PIPELINE_CONFIG (a pinned pipeline yaml), if set."""
+        cfg_path_raw = os.environ.get("LANDSEER_PIPELINE_CONFIG")
+        if not cfg_path_raw:
+            return None
+        try:
+            cfg_path = Path(cfg_path_raw).expanduser().resolve()
+            cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+            model_cfg = cfg.get("model") if isinstance(cfg, dict) else None
+            model_script = model_cfg.get("script") if isinstance(model_cfg, dict) else None
+            if model_script:
+                model_path = Path(model_script)
+                if not model_path.is_absolute():
+                    model_path = (cfg_path.parent / model_path).resolve()
+                if model_path.exists():
+                    return model_path
+                logger.warning(f"Model script from LANDSEER_PIPELINE_CONFIG not found: {model_path}")
+        except Exception as e:
+            logger.warning(
+                f"Failed to resolve model script from LANDSEER_PIPELINE_CONFIG={cfg_path_raw}: {e}"
+            )
+        return None
+
+    def _resolve_model_script(self, dataset_info: Dict[str, Any], run_id: Optional[str]) -> Optional[Path]:
+        """
+        The model config script of the run described by dataset_info.
+
+        Order: the backend's path if it exists here (and matches
+        model_script_sha256), the MinIO copy, then LANDSEER_PIPELINE_CONFIG and,
+        without a run id, the backend's pipeline info. A script whose content
+        differs from the run's is never used.
+        """
+        sha = dataset_info.get("model_script_sha256")
+        model_script = dataset_info.get("model_script")
+        if model_script:
+            model_path = Path(model_script)
+            if self._model_script_ok(model_path, sha):
+                logger.info(f"Model config script: {model_path}")
+                return model_path
+            if model_path.is_file():
+                logger.info(
+                    f"Local model script {model_path} differs from the run's (sha256 {sha[:12]}); "
+                    "fetching the run's copy"
+                )
+            else:
+                logger.warning(f"Model script path not found: {model_script}")
+        downloaded = self._download_model_script(dataset_info)
+        if downloaded:
+            return downloaded
+        pinned = self._model_script_from_pipeline_config()
+        if pinned and self._model_script_ok(pinned, sha):
+            logger.info(f"Model config script (pipeline yaml): {pinned}")
+            return pinned
+        if run_id is None and self._client is not None:
+            # Pipeline info describes the backend's latest run only.
+            try:
+                pipeline_info = self._client.get_pipeline_info()
+                model = pipeline_info.get("model") if isinstance(pipeline_info, dict) else None
+                script = model.get("script") if isinstance(model, dict) else None
+                if script and self._model_script_ok(Path(script), sha):
+                    logger.info(f"Model config script (pipeline info): {script}")
+                    return Path(script)
+            except Exception as e:
+                logger.debug(f"Failed to fetch pipeline info for model script: {e}")
+        return None
+
     def _setup_signal_handlers(self) -> None:
         """Setup signal handlers for graceful shutdown."""
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -250,104 +357,118 @@ class Worker:
                     "different filesystems: cache stores and hits will use full copies"
                 )
     
-    def _fetch_dataset(self) -> Optional[Path]:
+    def _fetch_dataset(self, run_id: Optional[str] = None) -> Optional[Path]:
         """
-        Fetch dataset information from backend and download if needed.
-        
-        The backend prepares the dataset on startup and uploads to MinIO.
-        This method:
-        1. Gets dataset info from backend
-        2. If MinIO available, downloads dataset to local cache
-        3. Gets model script path for container execution
-        4. Returns path to dataset
-        
+        Resolve the dataset and model script of run_id (None: the dataset the
+        backend prepared last) and return the dataset directory.
+
+        Dataset sources, first match wins:
+        1. LANDSEER_DATA_PATH / --data-path, if it matches the run's dataset manifest
+        2. LANDSEER_DATA_ROOT/<name>/<variant> (--data-root), if it matches
+        3. the backend's own directory (worker on the backend host)
+        4. a verified copy synced from MinIO into <cache>/datasets/<name>/<variant>
+        A manual dir that does not match is skipped, not fatal: the run uses
+        the MinIO copy. Only when no verified copy can be had is
+        ``_dataset_mismatch`` set (the run's tasks then fail with it). Without a
+        backend manifest manual dirs cannot be verified and are used as is.
+
+        Resolved dirs are memoized per dataset (name, variant, content_id), so
+        a worker alternating between runs does not re-verify or re-download.
+
         Returns:
             Path to dataset directory, or None if not available
         """
-        # If manual data_path specified, prefer it for dataset arrays, but still
-        # try to fetch backend dataset metadata so we can resolve model_script_path.
-        if self.data_path and self.data_path.exists():
-            logger.info(f"Using manual data path: {self.data_path}")
-            # In manual dataset mode, prefer explicit YAML config for model script
-            # so we don't couple to whichever pipeline the backend currently has loaded.
-            cfg_path_raw = os.environ.get("LANDSEER_PIPELINE_CONFIG")
-            if self._model_script_path is None and cfg_path_raw:
-                try:
-                    cfg_path = Path(cfg_path_raw).expanduser().resolve()
-                    cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-                    model_cfg = cfg.get("model") if isinstance(cfg, dict) else None
-                    model_script = model_cfg.get("script") if isinstance(model_cfg, dict) else None
-                    if model_script:
-                        model_path = Path(model_script)
-                        if not model_path.is_absolute():
-                            model_path = (cfg_path.parent / model_path).resolve()
-                        if model_path.exists():
-                            self._model_script_path = model_path
-                            logger.info(f"Model config script (pipeline yaml): {model_path}")
-                        else:
-                            logger.warning(
-                                f"Model script from LANDSEER_PIPELINE_CONFIG not found: {model_path}"
-                            )
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to resolve model script from LANDSEER_PIPELINE_CONFIG={cfg_path_raw}: {e}"
-                    )
-
-            try:
-                dataset_info = self._client.get_dataset_info()
-                if isinstance(dataset_info, dict):
-                    self._dataset_info = dataset_info
-                    model_script = dataset_info.get("model_script")
-                    if model_script:
-                        model_path = Path(model_script)
-                        if model_path.exists():
-                            self._model_script_path = model_path
-                            logger.info(f"Model config script: {model_path}")
-                        else:
-                            logger.warning(f"Model script path not found: {model_script}")
-            except Exception as e:
-                logger.debug(
-                    f"Manual data path mode: failed to fetch dataset metadata for model script: {e}"
-                )
-            if self._model_script_path is None:
-                try:
-                    pipeline_info = self._client.get_pipeline_info()
-                    model = pipeline_info.get("model") if isinstance(pipeline_info, dict) else None
-                    model_script = model.get("script") if isinstance(model, dict) else None
-                    if model_script:
-                        model_path = Path(model_script)
-                        if model_path.exists():
-                            self._model_script_path = model_path
-                            logger.info(f"Model config script (pipeline info): {model_path}")
-                except Exception as e:
-                    logger.debug(
-                        f"Manual data path mode: failed to fetch pipeline info for model script: {e}"
-                    )
-            self._try_download_model_script_via_minio(self._dataset_info or {})
-            return self.data_path
-        
-        # Try to get dataset info from backend
+        self._dataset_mismatch = None
         try:
-            dataset_info = self._client.get_dataset_info()
+            dataset_info = self._client.get_dataset_info(run_id=run_id)
         except Exception as e:
             logger.warning(f"Failed to get dataset info from backend: {e}")
-            return None
-        self._dataset_info = dataset_info or {}
-        
-        # Get model script path (for container execution)
-        model_script = dataset_info.get("model_script")
-        if model_script:
-            model_path = Path(model_script)
-            if model_path.exists():
-                self._model_script_path = model_path
-                logger.info(f"Model config script: {model_path}")
-            else:
-                logger.warning(f"Model script path not found: {model_script}")
+            dataset_info = {}
+        if not isinstance(dataset_info, dict):
+            dataset_info = {}
+        self._dataset_info = dataset_info
+        self._model_script_path = self._resolve_model_script(dataset_info, run_id)
 
+        name, variant = dataset_info.get("name"), dataset_info.get("variant")
+        content_id = dataset_info.get("content_id")
+        identity = (name, variant, content_id)
+        known = self._resolved_datasets.get(identity) if content_id else None
+        if known and known[0].exists():
+            self._dataset_manifest = known[1]
+            logger.info(f"Dataset {name}/{variant} ({content_id[:12]}) already resolved at {known[0]}")
+            return known[0]
+
+        path = self._locate_dataset(run_id, dataset_info)
+        if path is not None and content_id and not self._dataset_mismatch:
+            self._resolved_datasets[identity] = (path, self._dataset_manifest)
+        return path
+
+    def _manual_dataset_dirs(self, dataset_info: Dict[str, Any]) -> List[tuple]:
+        """Existing (label, dir) manual candidates for the dataset, in preference order."""
+        dirs = []
+        if self.data_path:
+            dirs.append(("LANDSEER_DATA_PATH", self.data_path))
+        if self.data_root and dataset_info.get("name"):
+            dirs.append((
+                "LANDSEER_DATA_ROOT",
+                self.data_root / str(dataset_info["name"]) / str(dataset_info.get("variant") or "clean"),
+            ))
+        return [(label, d) for label, d in dirs if d.exists()]
+
+    def _locate_dataset(self, run_id: Optional[str], dataset_info: Dict[str, Any]) -> Optional[Path]:
+        """Dataset dir for _fetch_dataset: verified manual dirs first, then the backend/MinIO copy."""
+        manual = self._manual_dataset_dirs(dataset_info)
+        mismatch: Optional[str] = None
+        if manual:
+            manifest = self._client.get_dataset_manifest(run_id=run_id) if self._client else None
+            if not isinstance(manifest, dict) or not manifest.get("content_id"):
+                label, path = manual[0]
+                logger.warning(
+                    f"Backend has no dataset manifest; cannot verify {label} dir {path}; using it as is"
+                )
+                return path
+            self._dataset_manifest = manifest
+            for label, path in manual:
+                if label == "LANDSEER_DATA_PATH":
+                    problem = self._manual_dataset_mismatch(run_id, manifest=manifest, allow_override=False)
+                else:
+                    problem = self._dir_mismatch(path, manifest)
+                    if problem:
+                        problem = f"Dataset at {label} dir {path} does not match ({problem})"
+                if problem is None:
+                    logger.info(
+                        f"Using {label} dir {path} for {dataset_info.get('name')}/"
+                        f"{dataset_info.get('variant')} ({manifest['content_id'][:12]})"
+                    )
+                    return path
+                logger.info(f"{problem}; trying the next dataset source")
+                mismatch = mismatch or problem
+
+        path = self._fetch_backend_dataset(dataset_info)
+        if path is not None:
+            if mismatch:
+                logger.warning(
+                    f"Manual dataset dirs do not hold {dataset_info.get('name')}/"
+                    f"{dataset_info.get('variant')}; using the verified copy at {path}"
+                )
+            return path
+        if mismatch is None:
+            return None
+        if os.environ.get("LANDSEER_ALLOW_DATASET_MISMATCH") == "1" and self.data_path and self.data_path.exists():
+            # Last resort only: the override never wins over a verified copy.
+            self._manual_dataset_mismatch(run_id, manifest=self._dataset_manifest, allow_override=True)
+            return self.data_path
+        self._dataset_mismatch = (
+            f"{mismatch} No verified copy of this dataset is available from the backend or MinIO either."
+        )
+        return None
+
+    def _fetch_backend_dataset(self, dataset_info: Dict[str, Any]) -> Optional[Path]:
+        """The backend's dataset dir if visible here, else a verified MinIO copy."""
         if not dataset_info.get("available"):
             logger.info("No dataset available from backend")
             return None
-        
+
         # Check if we can use local path (same machine as backend)
         local_path = dataset_info.get("local_path")
         if local_path:
@@ -355,9 +476,8 @@ class Worker:
             if local_dir.exists() and (local_dir / "data.npy").exists():
                 logger.info(f"Using local dataset path: {local_dir}")
                 self._dataset_manifest = dsm.load_manifest(local_dir)
-                self._try_download_model_script_via_minio(dataset_info)
                 return local_dir
-        
+
         # Try to download from MinIO
         minio_key = dataset_info.get("minio_key")
         if minio_key and dataset_info.get("minio_available") and self._two_level_cache:
@@ -379,15 +499,53 @@ class Worker:
                         minio, minio_key, download_dir, dataset_info.get("manifest_minio_key")
                     )
                     if synced is not None:
-                        self._try_download_model_script_via_minio(dataset_info)
                         return synced
-                    
+
             except Exception as e:
                 logger.warning(f"Failed to download dataset from MinIO: {e}")
-        
+
         logger.warning("Dataset not available locally or via MinIO")
         return None
-    
+
+    def _activate_run(self, run_id: str) -> None:
+        """
+        Switch the dataset/model context to run_id's.
+
+        Each run's context is remembered, so a worker alternating between
+        concurrent runs (e.g. a CIFAR-10 and a CelebA run) switches without
+        refetching or re-verifying anything.
+        """
+        remembered = self._run_contexts.get(run_id)
+        if remembered and remembered["path"].exists():
+            logger.info(f"Run changed ({self._active_run_id} -> {run_id}); restoring its dataset/model context")
+            self._dataset_info = remembered["info"]
+            self._dataset_manifest = remembered["manifest"]
+            self._dataset_path = remembered["path"]
+            self._model_script_path = remembered["model"]
+            self._dataset_mismatch = None
+        else:
+            logger.info(f"Run changed ({self._active_run_id} -> {run_id}); resolving its dataset/model context")
+            self._model_script_path = None
+            self._dataset_manifest = None
+            self._dataset_mismatch = None
+            self._dataset_path = self._fetch_dataset(run_id)
+            self._remember_run_context(run_id)
+        # Task IDs are run-scoped (src/pipeline/run_identity.py), so the
+        # per-task lineage caches (_task_outputs, _task_dataset_id) stay
+        # valid across run switches and are not cleared: a worker
+        # alternating between concurrent runs keeps its local lineage.
+        self._active_run_id = run_id
+
+    def _remember_run_context(self, run_id: Optional[str]) -> None:
+        """Remember the active dataset/model context for run_id (only once it resolved)."""
+        if run_id and self._dataset_path is not None and not self._dataset_mismatch:
+            self._run_contexts[run_id] = {
+                "info": self._dataset_info,
+                "manifest": self._dataset_manifest,
+                "path": self._dataset_path,
+                "model": self._model_script_path,
+            }
+
     def _wait_for_backend(self, max_retries: int = 30, retry_delay: float = 2.0) -> bool:
         """
         Wait for backend to become available.
@@ -632,45 +790,75 @@ class Worker:
             )
         return None
 
-    def _manual_dataset_mismatch(self) -> Optional[str]:
+    def _dir_mismatch(self, data_dir: Path, manifest: Dict[str, Any]) -> Optional[str]:
+        """
+        None if data_dir holds exactly the manifest's files, else what differs.
+
+        Stat-only until every size matches (a dir of another dataset is
+        rejected without hashing), then sha256 via the sidecar. Memoized per
+        (dir, content_id), so switching runs never re-verifies a dir.
+        """
+        resolved = str(data_dir.resolve())
+        key = (resolved, manifest["content_id"])
+        if key in self._dir_check_memo:
+            return self._dir_check_memo[key]
+        res = dsm.verify_dir(data_dir, manifest, quick=True)
+        if res.ok:
+            prov_id = (manifest.get("provenance") or {}).get("provenance_id")
+            self._dataset_identity_memo[key] = (manifest["content_id"], prov_id)
+            problem = None
+        else:
+            problem = f"local copy {(res.content_id or 'none')[:12]}; {res.describe()}"
+        self._dir_check_memo[key] = problem
+        return problem
+
+    def _manual_dataset_mismatch(
+        self,
+        run_id: Optional[str] = None,
+        manifest: Optional[Dict[str, Any]] = None,
+        allow_override: bool = True,
+    ) -> Optional[str]:
         """
         In manual LANDSEER_DATA_PATH / --data-path mode, check the local copy
-        against the backend's dataset manifest. Returns an error message on
-        mismatch, None when it matches or cannot be compared.
+        against the backend's dataset manifest (of run_id's dataset). Returns
+        an error message on mismatch, None when it matches or cannot be
+        compared. With allow_override, LANDSEER_ALLOW_DATASET_MISMATCH=1 turns
+        a mismatch into a warning (the dir's own content_id is then used).
         """
         if not (self.data_path and self.data_path.exists()):
             return None
-        manifest = self._client.get_dataset_manifest() if self._client else None
-        if not manifest:
+        if manifest is None:
+            manifest = self._client.get_dataset_manifest(run_id=run_id) if self._client else None
+        if not isinstance(manifest, dict) or not manifest.get("content_id"):
             logger.warning(
                 "Backend has no dataset manifest; cannot verify manual data path "
                 f"{self.data_path}"
             )
             return None
         self._dataset_manifest = manifest
-        res = dsm.verify_dir(self.data_path, manifest)
-        extra = dsm.list_unlisted_files(self.data_path, manifest)
-        if extra:
-            logger.warning(
-                f"{len(extra)} files in {self.data_path} are not in the dataset manifest "
-                f"and are ignored (e.g. {extra[:3]})"
-            )
-        prov_id = (manifest.get("provenance") or {}).get("provenance_id")
-        resolved = str(self.data_path.resolve())
-        if res.ok:
-            self._dataset_identity_memo[resolved] = (manifest["content_id"], prov_id)
+        problem = self._dir_mismatch(self.data_path, manifest)
+        if problem is None:
+            extra = dsm.list_unlisted_files(self.data_path, manifest)
+            if extra:
+                logger.warning(
+                    f"{len(extra)} files in {self.data_path} are not in the dataset manifest "
+                    f"and are ignored (e.g. {extra[:3]})"
+                )
             logger.info(f"Manual data path matches backend dataset ({manifest['content_id'][:12]})")
             return None
-        self._dataset_identity_memo[resolved] = (res.content_id, None)
         msg = (
             f"Dataset at LANDSEER_DATA_PATH={self.data_path} does not match the backend's "
             f"{self._dataset_info.get('name')}/{self._dataset_info.get('variant')} "
-            f"(content_id {manifest['content_id'][:12]}; local copy "
-            f"{(res.content_id or 'none')[:12]}; {res.describe()}). "
-            "Point the worker at the backend's dataset, or set "
-            "LANDSEER_ALLOW_DATASET_MISMATCH=1 to run anyway."
+            f"(content_id {manifest['content_id'][:12]}; {problem}). "
+            "Point the worker at the backend's dataset (or a LANDSEER_DATA_ROOT holding it), "
+            "or set LANDSEER_ALLOW_DATASET_MISMATCH=1 to run anyway."
         )
-        if os.environ.get("LANDSEER_ALLOW_DATASET_MISMATCH") == "1":
+        if allow_override and os.environ.get("LANDSEER_ALLOW_DATASET_MISMATCH") == "1":
+            # Full verify (hashes every file) for the copy's own content_id.
+            res = dsm.verify_dir(self.data_path, manifest)
+            self._dataset_identity_memo[(str(self.data_path.resolve()), manifest["content_id"])] = (
+                res.content_id, None
+            )
             logger.warning(msg + " Continuing because LANDSEER_ALLOW_DATASET_MISMATCH=1.")
             return None
         return msg
@@ -729,7 +917,9 @@ class Worker:
             if local and local.get("content_id") == manifest["content_id"]:
                 res = dsm.verify_dir(download_dir, manifest)
                 if res.ok:
-                    self._dataset_identity_memo[str(download_dir.resolve())] = (manifest["content_id"], prov_id)
+                    self._dataset_identity_memo[(str(download_dir.resolve()), manifest["content_id"])] = (
+                        manifest["content_id"], prov_id
+                    )
                     logger.info(f"Dataset cached and verified at {download_dir} ({manifest['content_id'][:12]})")
                     return download_dir
                 logger.warning(f"Cached dataset at {download_dir} is corrupted ({res.describe()}); re-downloading")
@@ -757,7 +947,9 @@ class Worker:
                 logger.warning(f"Failed to sync dataset from MinIO ({minio_key}): {e}")
                 return None
 
-        self._dataset_identity_memo[str(download_dir.resolve())] = (manifest["content_id"], prov_id)
+        self._dataset_identity_memo[(str(download_dir.resolve()), manifest["content_id"])] = (
+            manifest["content_id"], prov_id
+        )
         logger.info(f"Dataset downloaded and verified at {download_dir} ({manifest['content_id'][:12]})")
         return download_dir
 
@@ -829,7 +1021,8 @@ class Worker:
         With the backend's manifest, the local copy is verified against it: a
         match gives the manifest's ids, a mismatch the local copy's own
         content_id. Without a manifest, every file in the dir is hashed.
-        Memoized per run; the sidecar keeps rechecks to a stat walk.
+        Memoized per (dir, manifest content_id), so it holds across run
+        switches; the sidecar keeps first checks to a stat walk.
         """
         if not data_dir:
             return (None, None)
@@ -837,9 +1030,10 @@ class Worker:
             resolved = str(data_dir.resolve())
         except OSError:
             return (None, None)
-        if resolved in self._dataset_identity_memo:
-            return self._dataset_identity_memo[resolved]
         manifest = self._dataset_manifest
+        memo_key = (resolved, manifest.get("content_id") if manifest else None)
+        if memo_key in self._dataset_identity_memo:
+            return self._dataset_identity_memo[memo_key]
         try:
             if manifest:
                 res = dsm.verify_dir(data_dir, manifest)
@@ -858,7 +1052,7 @@ class Worker:
         except OSError as e:
             logger.warning(f"Could not hash dataset at {data_dir}: {e}")
             return (None, None)
-        self._dataset_identity_memo[resolved] = ident
+        self._dataset_identity_memo[memo_key] = ident
         return ident
 
     def _dataset_fingerprint(self, data_dir: Optional[Path]) -> Dict[str, Any]:
@@ -912,25 +1106,24 @@ class Worker:
         logger.info(f"Executing task: {task.id} ({task.tool_name})")
         
         try:
-            # Refresh dataset/model context when pipeline run changes.
-            # Without this, long-lived workers may keep stale model_script/dataset
-            # identity and incorrectly reuse cache entries across runs.
+            # Switch dataset/model context when the pipeline run changes: runs
+            # can use different datasets and model scripts, and the cache key
+            # must reflect the task's own run.
             if task.run_id and task.run_id != self._active_run_id:
-                logger.info(f"Run changed ({self._active_run_id} -> {task.run_id}); refreshing dataset/model context")
-                self._model_script_path = None
-                # The new run's dataset may differ: forget the old manifest and ids
-                # before fetching (the fetch loads the new manifest).
-                self._dataset_identity_memo.clear()
-                self._dataset_manifest = None
-                refreshed = self._fetch_dataset()
+                self._activate_run(task.run_id)
+
+            data_dir = self._dataset_path
+            if data_dir is None and task.run_id is None and self.data_path and self.data_path.exists():
+                # Task without a run id (older backend): the manual dir as before.
+                data_dir = self.data_path
+            if data_dir is None and not self._dataset_mismatch:
+                # Headless backend may expose dataset only after a run is started.
+                # Retry dataset fetch at task execution time instead of only worker startup.
+                refreshed = self._fetch_dataset(task.run_id)
                 if refreshed:
                     self._dataset_path = refreshed
-                # Task IDs are run-scoped (src/pipeline/run_identity.py), so the
-                # per-task lineage caches (_task_outputs, _task_dataset_id) stay
-                # valid across run switches and are not cleared: a worker
-                # alternating between concurrent runs keeps its local lineage.
-                self._active_run_id = task.run_id
-                self._dataset_mismatch = self._manual_dataset_mismatch()
+                    data_dir = refreshed
+                    self._remember_run_context(task.run_id)
 
             if self._dataset_mismatch:
                 logger.error(f"Refusing to run {task.id}: {self._dataset_mismatch}")
@@ -940,15 +1133,6 @@ class Worker:
                     execution_time_ms=0,
                     error_message=self._dataset_mismatch,
                 )
-
-            data_dir = self.data_path if (self.data_path and self.data_path.exists()) else self._dataset_path
-            if data_dir is None:
-                # Headless backend may expose dataset only after a run is started.
-                # Retry dataset fetch at task execution time instead of only worker startup.
-                refreshed = self._fetch_dataset()
-                if refreshed:
-                    self._dataset_path = refreshed
-                    data_dir = refreshed
             dataset_id, dataset_prov_id = self._dataset_identity(data_dir)
 
             # Build parent_hashes (for cache key) and ancestor_dirs (ordered
@@ -1441,12 +1625,11 @@ class Worker:
             return 1
         
         # Fetch dataset from backend
+        # The backend's latest dataset; each run's own dataset is resolved when
+        # its first task arrives, so a mismatch here is not fatal.
         self._dataset_path = self._fetch_dataset()
-        mismatch = self._manual_dataset_mismatch()
-        if mismatch:
-            logger.error(mismatch)
-            self._cleanup()
-            return 1
+        if self._dataset_mismatch:
+            logger.warning(f"{self._dataset_mismatch} Runs on other datasets are unaffected.")
         if self._dataset_path:
             logger.info(f"Dataset available at: {self._dataset_path}")
             # Early visibility for manual data path mode: warn before tasks fail.
@@ -1577,8 +1760,19 @@ Examples:
     type=click.Path(),
     metavar="DIR",
     help=(
-        "Override: manual path to dataset directory. If not specified, "
-        "dataset is automatically fetched from backend/MinIO (env: LANDSEER_DATA_PATH)"
+        "Manual path to one dataset directory, used for runs whose dataset it matches; "
+        "other runs fetch theirs from the backend/MinIO (env: LANDSEER_DATA_PATH)"
+    ),
+)
+@click.option(
+    "--data-root",
+    default=lambda: os.environ.get("LANDSEER_DATA_ROOT"),
+    type=click.Path(),
+    metavar="DIR",
+    help=(
+        "Directory holding local dataset copies as <name>/<variant>/ (e.g. cifar10/clean). "
+        "A run's dataset is taken from here when it matches the backend's manifest, "
+        "else synced from MinIO (env: LANDSEER_DATA_ROOT)"
     ),
 )
 @click.option(
@@ -1630,6 +1824,7 @@ def cli(
     cache_dir: str,
     no_cache: bool,
     data_path: Optional[str],
+    data_root: Optional[str],
     minio_endpoint: str,
     poll_interval: float,
     heartbeat_interval: float,
@@ -1655,6 +1850,7 @@ def cli(
         workspace_dir=Path(workspace) if workspace else None,
         cache_dir=Path(cache_dir),
         data_path=Path(data_path) if data_path else None,
+        data_root=Path(data_root) if data_root else None,
         gpu_id=gpu,
         poll_interval=poll_interval,
         task_timeout=timeout,

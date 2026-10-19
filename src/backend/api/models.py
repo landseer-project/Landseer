@@ -231,6 +231,7 @@ class PipelineDetailResponse(BaseModel):
 class DatasetInfoResponse(BaseModel):
     """Response model for dataset information."""
     available: bool = Field(description="Whether dataset is available")
+    run_id: Optional[str] = Field(default=None, description="Run this dataset was prepared for (when requested with run_id)")
     name: Optional[str] = Field(default=None, description="Dataset name")
     variant: Optional[str] = Field(default=None, description="Dataset variant (clean/poisoned)")
     train_samples: Optional[int] = Field(default=None, description="Number of training samples")
@@ -242,6 +243,7 @@ class DatasetInfoResponse(BaseModel):
     poisoning: Optional[Dict[str, Any]] = Field(default=None, description="Poisoning configuration if applied")
     model_script: Optional[str] = Field(default=None, description="Path to model config script")
     model_script_minio_key: Optional[str] = Field(default=None, description="MinIO object key for model config script")
+    model_script_sha256: Optional[str] = Field(default=None, description="sha256 of the model config script (workers verify local copies against it)")
     content_id: Optional[str] = Field(default=None, description="Dataset identity: sha256 over the manifest's (path, size, sha256) list")
     provenance_id: Optional[str] = Field(default=None, description="Hash of how the dataset was made (image, params, poisoning, source)")
     provenance: Optional[Dict[str, Any]] = Field(default=None, description="How the dataset was made (from dataset_manifest.json)")

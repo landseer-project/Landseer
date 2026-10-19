@@ -46,8 +46,10 @@ Base URL: `http://localhost:8000`
 
 ## Dataset and stats
 
-- `GET /dataset`
-- `GET /dataset/download-url`
+- `GET /dataset[?run_id=]`: dataset and model script of a run (404 for an
+  unknown run); without `run_id`, the most recently prepared dataset
+- `GET /dataset/manifest[?run_id=]`: full `dataset_manifest.json`
+- `GET /dataset/download-url[?run_id=]`
 - `GET /stats/database`
 - `GET /stats/store`
 - `GET /stats/system`

@@ -11,8 +11,10 @@ Workflow generation follows the specification in docs/Tasks.md:
 4. Task deduplication - Same tool + same dependencies = same task
 """
 
+import functools
 import os
 import shlex
+import threading
 import yaml
 import logging
 from pathlib import Path
@@ -834,7 +836,7 @@ def create_workflow_from_combination(
     return workflow
 
 
-def create_pipeline_from_config(
+def _build_pipeline_from_config(
     config_path: str,
     tools_yaml_path: str = "configs/tools.yaml",
     evaluators_yaml_path: str = "configs/evaluators.yaml",
@@ -976,6 +978,19 @@ def create_pipeline_from_config(
     
     return pipeline
 
+
+# Task dedup state (the registry and ID counters in src/pipeline/tasks.py) is
+# module-global and clear_registry wipes it. The start/restart routes build
+# pipelines in worker threads, so two runs built at once (e.g. a CIFAR-10 and a
+# CelebA run) would corrupt each other's dedup. Builds are serialized; they are
+# CPU-bound under the GIL anyway.
+_PIPELINE_BUILD_LOCK = threading.RLock()
+
+
+@functools.wraps(_build_pipeline_from_config)
+def create_pipeline_from_config(*args: Any, **kwargs: Any) -> Pipeline:
+    with _PIPELINE_BUILD_LOCK:
+        return _build_pipeline_from_config(*args, **kwargs)
 
 def get_workflow_generation_summary(config_path: str, tools_yaml_path: str = "configs/tools.yaml") -> Dict[str, Any]:
     """

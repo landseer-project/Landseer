@@ -303,8 +303,16 @@ def verify_dir(
     data_dir: PathLike,
     manifest: Dict[str, Any],
     workers: Optional[int] = None,
+    quick: bool = False,
 ) -> VerifyResult:
-    """Check data_dir's copy of every manifest file (size first, then sha256)."""
+    """
+    Check data_dir's copy of every manifest file (size first, then sha256).
+
+    With ``quick`` the check stops at the first missing or size-mismatched
+    file without hashing anything (content_id stays None): a stat-only answer
+    to "is this the same dataset at all", e.g. a celeba dir checked against a
+    cifar10 manifest.
+    """
     expected: Dict[str, Dict[str, Any]] = manifest.get("files", {})
     root = Path(data_dir)
     res = VerifyResult()
@@ -314,12 +322,18 @@ def verify_dir(
             size = (root / rel).stat().st_size
         except OSError:
             res.missing.append(rel)
+            if quick:
+                return res
             continue
         if size != int(exp["size"]):
             res.size_mismatch.append(rel)
+            if quick:
+                return res
         else:
             to_hash.append(rel)
-    actual = hash_files(root, to_hash, workers=workers)
+    # One hash_files call for everything: each call reads and rewrites the
+    # sidecar, which is tens of MB for a 200k-file dataset.
+    actual = hash_files(root, to_hash + res.size_mismatch, workers=workers)
     for rel in to_hash:
         if actual.get(rel, {}).get("sha256") != expected[rel]["sha256"]:
             res.hash_mismatch.append(rel)
@@ -329,11 +343,5 @@ def verify_dir(
     if res.ok:
         res.content_id = manifest.get("content_id")
     else:
-        local = {rel: actual[rel] for rel in actual}
-        for rel in res.size_mismatch:
-            try:
-                local.update(hash_files(root, [rel], workers=1))
-            except OSError:
-                pass
-        res.content_id = compute_content_id(local) if local else None
+        res.content_id = compute_content_id(actual) if actual else None
     return res

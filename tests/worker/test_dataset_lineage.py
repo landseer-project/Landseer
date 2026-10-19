@@ -8,6 +8,7 @@ Covers:
 - an unknown parent dataset only warns
 - manual LANDSEER_DATA_PATH is compared with the backend's dataset at startup
   and on run change, with LANDSEER_ALLOW_DATASET_MISMATCH=1 as the escape hatch
+  (a mismatch no longer stops the worker; see test_per_run_datasets.py)
 - the backend exposes dataset_content_id / nested cache_key on the task API
 
 No containers or GPUs: the runner, client and cache are mocks.
@@ -297,16 +298,19 @@ def test_auto_mode_is_not_checked(tmp_path):
     w._client.get_dataset_manifest.assert_not_called()
 
 
-def test_start_exits_on_manual_mismatch(worker, tmp_path):
+def test_start_continues_on_manual_mismatch(worker, tmp_path):
+    # Runs can use different datasets: a manual dir that does not match the
+    # backend's latest dataset is no reason to exit (other runs may match it).
+    worker._client.get_dataset_info.return_value = {"available": True, "name": "cifar10", "variant": "clean"}
     worker._client.get_dataset_manifest.return_value = _other_manifest(tmp_path)
 
     with patch.object(worker, "_init_components"), \
          patch.object(worker, "_wait_for_backend", return_value=True), \
          patch.object(worker, "_register", return_value=True), \
-         patch.object(worker, "_fetch_dataset", return_value=worker.data_path), \
          patch.object(worker, "_work_loop") as loop:
-        assert worker.start() == 1
-    loop.assert_not_called()
+        assert worker.start() == 0
+    loop.assert_called_once()
+    assert "LANDSEER_DATA_PATH" in worker._dataset_mismatch
 
 
 def test_start_continues_when_backend_has_no_manifest(worker):
