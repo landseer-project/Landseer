@@ -768,7 +768,7 @@ class TaskRunner:
         # Only task workspaces are pruned by age. The local artifact cache is
         # managed by its size cap (src/store/local_lru.py), so
         # LANDSEER_CACHE_RETENTION_HOURS is no longer used.
-        workspace_retention_h = int(os.environ.get("LANDSEER_WORKSPACE_RETENTION_HOURS", "24"))
+        workspace_retention_h = int(os.environ.get("LANDSEER_WORKSPACE_RETENTION_HOURS", "72"))
         workspace_cutoff = now - (workspace_retention_h * 3600)
 
         reclaimed_workspace = 0

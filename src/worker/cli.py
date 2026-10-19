@@ -486,6 +486,45 @@ class Worker:
             self._task_heartbeat_thread.join(timeout=2.0)
         self._task_heartbeat_thread = None
 
+    @staticmethod
+    def _has_files(path: Optional[Path]) -> bool:
+        """True if path is a directory that still holds at least one entry."""
+        try:
+            return path is not None and path.is_dir() and any(path.iterdir())
+        except OSError:
+            return False
+
+    def _cached_output(self, cache_key: Optional[str]) -> Optional[Path]:
+        """This worker's cache copy of cache_key's output (hydrating from MinIO if needed)."""
+        if not cache_key:
+            return None
+        local = self.cache_dir / cache_key / "output"
+        if (self.cache_dir / cache_key / ".success").exists() and self._has_files(local):
+            return local
+        if self._two_level_cache:
+            try:
+                hydrated = self._two_level_cache.get(cache_key)
+                if hydrated and self._has_files(Path(hydrated)):
+                    return Path(hydrated)
+            except Exception as e:
+                logger.warning(f"Failed to fetch cached output {cache_key[:12]}: {e}")
+        return None
+
+    def _usable_output(self, path: Optional[Path], cache_key: Optional[str]) -> Optional[Path]:
+        """
+        Return a dependency output dir that still has its files.
+
+        Workspaces are pruned by age (LANDSEER_WORKSPACE_RETENTION_HOURS), so a
+        remembered workspace path can be gone or empty by the time a downstream
+        task runs; fall back to the cache copy of the same output.
+        """
+        if self._has_files(path):
+            return path
+        cached = self._cached_output(cache_key)
+        if cached is not None:
+            logger.info(f"Workspace output {path} is gone or empty; using cache copy {cached}")
+        return cached
+
     def _resolve_task_output_path(self, task_info: TaskInfo) -> Optional[Path]:
         """Resolve a dependency output directory from backend metadata."""
         candidates: List[Path] = []
@@ -498,11 +537,9 @@ class Worker:
             candidates.append(log_path.parent.parent / "output")
 
         for path in candidates:
-            try:
-                if path.exists():
-                    return path
-            except Exception:
-                continue
+            # An existing but emptied workspace dir (pruned) is not a usable output.
+            if self._has_files(path):
+                return path
 
         # Cross-worker fallback: dependency output may exist only on a different
         # worker host path. If we have a cache_key and two-level cache is active,
@@ -527,8 +564,16 @@ class Worker:
                 )
         return None
 
-    def _collect_remote_ancestry(self, task_id: str, visited: Optional[set[str]] = None) -> tuple[list[Path], Optional[TaskInfo]]:
-        """Collect full ancestor outputs for a task by querying backend task metadata."""
+    def _collect_remote_ancestry(
+        self,
+        task_id: str,
+        visited: Optional[set[str]] = None,
+        missing: Optional[List[str]] = None,
+    ) -> tuple[list[Path], Optional[TaskInfo]]:
+        """Collect full ancestor outputs for a task by querying backend task metadata.
+
+        Ancestors whose output cannot be found anywhere are appended to ``missing``.
+        """
         if visited is None:
             visited = set()
         if task_id in visited:
@@ -541,7 +586,7 @@ class Worker:
 
         ancestry: List[Path] = []
         for dep_id in task_info.dependency_ids:
-            dep_ancestry, dep_task = self._collect_remote_ancestry(dep_id, visited)
+            dep_ancestry, dep_task = self._collect_remote_ancestry(dep_id, visited, missing)
             ancestry.extend(dep_ancestry)
             if dep_task:
                 dep_output = self._resolve_task_output_path(dep_task)
@@ -551,6 +596,8 @@ class Worker:
                     dep_cache_key = dep_task.cache_key or ""
                     self._task_outputs[dep_id] = (dep_cache_key, dep_output, list(dep_ancestry))
                     self._task_dataset_id[dep_id] = dep_task.dataset_content_id
+                elif missing is not None:
+                    missing.append(f"ancestor {dep_id} (no output in workspace, cache or MinIO)")
 
         return ancestry, task_info
 
@@ -909,18 +956,35 @@ class Worker:
             # Refuse to build on a parent produced from a different dataset.
             parent_hashes: List[str] = []
             ancestor_dirs: List[Path] = []
+            # Every upstream output must be present: running on a partial input
+            # set (e.g. no model.pt) yields wrong results that then get cached.
+            missing_deps: List[str] = []
+            key_by_output = {
+                str(out): key for key, out, _ in self._task_outputs.values() if out is not None and key
+            }
             for dep_id in task.dependency_ids:
                 if dep_id in self._task_outputs:
                     dep_key, dep_out, dep_anc = self._task_outputs[dep_id]
                     dep_id_hash = self._task_dataset_id.get(dep_id)
                     if dep_key:
                         parent_hashes.append(dep_key)
-                    self._append_unique_paths(ancestor_dirs, dep_anc)
-                    if dep_out is not None:
-                        self._append_unique_paths(ancestor_dirs, [dep_out])
+                    resolved_anc: List[Path] = []
+                    for anc in dep_anc:
+                        usable = self._usable_output(anc, key_by_output.get(str(anc)))
+                        if usable is None:
+                            missing_deps.append(f"ancestor of {dep_id} ({anc})")
+                        else:
+                            resolved_anc.append(usable)
+                    self._append_unique_paths(ancestor_dirs, resolved_anc)
+                    usable_out = self._usable_output(dep_out, dep_key)
+                    if usable_out is None:
+                        missing_deps.append(f"{dep_id} ({dep_out})")
+                    else:
+                        self._append_unique_paths(ancestor_dirs, [usable_out])
+                        self._task_outputs[dep_id] = (dep_key, usable_out, resolved_anc)
                 else:
                     logger.warning(f"Dep {dep_id} not yet in _task_outputs; resolving remotely")
-                    dep_anc, dep_task = self._collect_remote_ancestry(dep_id)
+                    dep_anc, dep_task = self._collect_remote_ancestry(dep_id, missing=missing_deps)
                     dep_id_hash = dep_task.dataset_content_id if dep_task else None
                     self._append_unique_paths(ancestor_dirs, dep_anc)
                     if dep_task:
@@ -936,11 +1000,13 @@ class Worker:
                             )
                             self._task_dataset_id[dep_id] = dep_id_hash
                         else:
-                            logger.warning(f"Could not resolve output path for dependency {dep_id}")
+                            missing_deps.append(f"{dep_id} (no output in workspace, cache or MinIO)")
                     else:
                         ws_out = self._runner.workspace_dir / dep_id / "output"
-                        if ws_out.exists():
+                        if self._has_files(ws_out):
                             self._append_unique_paths(ancestor_dirs, [ws_out])
+                        else:
+                            missing_deps.append(f"{dep_id} (unknown to backend, no workspace output)")
 
                 lineage_error = self._parent_dataset_error(dep_id, dep_id_hash, dataset_id, data_dir)
                 if lineage_error:
@@ -955,6 +1021,20 @@ class Worker:
                             "dataset_provenance_id": dataset_prov_id,
                         },
                     )
+
+            if missing_deps:
+                error = "Dependency output missing: " + "; ".join(missing_deps)
+                logger.error(f"Refusing to run {task.id}: {error}")
+                return ExecutionResult(
+                    success=False,
+                    exit_code=-1,
+                    execution_time_ms=0,
+                    error_message=error,
+                    artifacts={
+                        "dataset_content_id": dataset_id,
+                        "dataset_provenance_id": dataset_prov_id,
+                    },
+                )
 
             cache_context = self._build_cache_context(data_dir)
             cache_key = self._compute_cache_key(task, parent_hashes, cache_context)
