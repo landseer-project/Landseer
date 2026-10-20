@@ -300,8 +300,10 @@ accuracy, default 20), `--no_augment`, `--max_train_examples`. Outputs:
 The Dockerfile deletes the base image's `/etc/ld.so.conf.d/z-cuda-stubs.conf`:
 with it, the linker cache resolves `libcuda.so.1` to the CUDA stub before the
 host driver, `cuInit` fails with error 34 and TensorFlow silently runs on the
-CPU (about 8x slower here). Images built on `tensorflow/tensorflow:2.15.0-gpu`
-without that line, such as `in_freeat`'s, have the same problem; check with
+CPU (about 8x slower here). `in_freeat` does the same, and every Dockerfile
+under `containers/` on a `tensorflow/tensorflow:*-gpu` base must too
+(`tests/pipeline/test_tensorflow_gpu_images.py` checks it, along with
+`TF_FORCE_GPU_ALLOW_GROWTH=true`). To check an image, run
 `python -c "import tensorflow as tf; print(tf.config.list_physical_devices('GPU'))"`.
 
 ## Building and testing locally

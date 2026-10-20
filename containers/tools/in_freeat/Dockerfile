@@ -25,8 +25,15 @@ LABEL org.opencontainers.image.title="Free Adversarial Training" \
       org.landseer.model_output="model" \
       org.landseer.model_path="model_tf/model.keras"
 
+# The base image lists the CUDA stub libcuda.so.1 in the linker cache ahead of the
+# driver's, so TensorFlow loads the stub (cuInit error 34) and silently runs on the CPU.
+RUN rm /etc/ld.so.conf.d/z-cuda-stubs.conf && ldconfig
+
+# Allocate GPU memory as needed: by default TensorFlow reserves almost all of it,
+# starving other tasks that share the GPU.
 ENV PYTHONUNBUFFERED=1 \
-    TF_CPP_MIN_LOG_LEVEL=2
+    TF_CPP_MIN_LOG_LEVEL=2 \
+    TF_FORCE_GPU_ALLOW_GROWTH=true
 
 WORKDIR /app
 COPY main.py ./main.py
