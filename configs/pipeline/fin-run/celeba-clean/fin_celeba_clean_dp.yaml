@@ -1,0 +1,28 @@
+dataset:
+  name: celeba
+  variant: clean
+
+model:
+  script: configs/model/config_model_resnet20_celeba_dp.py
+  framework: pytorch
+
+pipeline:
+  pre_training:
+    tools:
+      - pre_noop
+      - pre_xgbod_celeba
+      - pre_watermarkbn_celeba
+
+  during_training:
+    tools:
+      - in_noop_celeba
+      - in_dp_celeba
+  post_training:
+    tools:
+      - post_noop
+      - post_neuronprune_celeba
+  deployment:
+    tools:
+      - deploy_noop
+      - deploy_explainshap_celeba
+      - deploy_dataset_inference
