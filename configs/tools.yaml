@@ -88,7 +88,7 @@ tools:
     defense_stage: during_training
     is_baseline: true
     container:
-      image: ghcr.io/landseer-project/in_noop_celeba:v4
+      image: ghcr.io/landseer-project/in_noop_celeba:v5
       command: python main.py
       runtime: null
 
@@ -243,7 +243,7 @@ tools:
     is_baseline: false
     container:
       image: ghcr.io/landseer-project/post_neuronprune:v3
-      command: python3 main.py --clean_threshold 0.55  --pruning-by number --export-number 4  
+      command: python3 main.py --clean_threshold 0.55 --pruning-by number --pruning-max 16 --pruning-step 1 --export-number 12
       runtime: null
 
 

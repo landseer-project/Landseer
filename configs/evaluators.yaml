@@ -6,10 +6,10 @@
 #
 artifact_roots:
   - /data/landseer/eval_artifacts
-evaluators:
-  clean:
-    required_artifacts:
-      - celeba_shadows
+# evaluators:
+#   clean:
+#     required_artifacts:
+#       - celeba_shadows
 
 evaluators:
   clean:
@@ -147,9 +147,10 @@ evaluators:
     container:
       image: ghcr.io/landseer-project/evals/privacy:v4
       command: ""
-    required_artifacts: []
+    required_artifacts:
+      - celeba_shadows
     metrics:
       - mia_auc
     defense_types:
-      - differential_privacys
+      - differential_privacy
 

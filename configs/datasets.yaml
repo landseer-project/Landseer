@@ -32,7 +32,7 @@ datasets:
           landseer.dataset: celeba
           landseer.variant: clean
       poisoned:
-        image: ghcr.io/landseer-project/dataset_celeba_poisoned:v3
+        image: ghcr.io/landseer-project/dataset_celeba_poisoned:v4
         labels:
           landseer.dataset: celeba
           landseer.variant: poisoned
