@@ -6,10 +6,6 @@
 #
 artifact_roots:
   - /data/landseer/eval_artifacts
-evaluators:
-  clean:
-    required_artifacts:
-      - celeba_shadows
 
 evaluators:
   clean:
@@ -151,5 +147,5 @@ evaluators:
     metrics:
       - mia_auc
     defense_types:
-      - differential_privacys
+      - differential_privacy
 
