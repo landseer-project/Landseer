@@ -6,7 +6,7 @@ This scheduler prioritizes tasks based on:
 2. Usage counter (within the same level, tasks used in more workflows have higher priority)
 """
 
-from typing import Optional, List, Dict
+from typing import Callable, Optional, List, Dict
 
 from ...pipeline.tasks import Task, TaskStatus, TaskType
 from ...pipeline.pipeline import Pipeline
@@ -106,18 +106,22 @@ class PriorityScheduler(Scheduler):
                 )
             task.priority = priority
     
-    def get_next_task(self) -> Optional[Task]:
+    def get_next_task(self, accept: Optional[Callable[[Task], bool]] = None) -> Optional[Task]:
         """
         Get the next task to execute based on priority.
-        
+
         Selects the highest priority task (highest priority number)
-        that is ready to execute (all dependencies completed).
-        
+        that is ready to execute (all dependencies completed) and, when
+        ``accept`` is given, that it accepts (placement pins).
+
         Returns:
             Next task to execute, or None if no tasks are ready
         """
         # Get all ready tasks
-        ready_tasks = [task for task in self._all_tasks if self._is_task_ready(task)]
+        ready_tasks = [
+            task for task in self._all_tasks
+            if self._is_task_ready(task) and (accept is None or accept(task))
+        ]
         
         if not ready_tasks:
             return None

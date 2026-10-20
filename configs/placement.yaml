@@ -1,0 +1,9 @@
+# Pin tools to workers. A task whose tool is listed here is handed only to
+# workers whose id starts with one of the given prefixes (simurgh-gpu0,
+# gilbreth-11984977, fabiha, ...); every other task goes to any worker.
+# Keys are tool registry keys or names ("deploy_explainshap_celeba").
+# The backend re-reads this file when it changes: no restart needed.
+# A pinned task waits while no matching worker is up.
+pins:
+  # Long (median 4.3 h, up to 24 h) and failed on gilbreth's scratch quota.
+  deploy_explainshap_celeba: [simurgh-]

@@ -13,6 +13,7 @@ from src.backend.scheduler import Scheduler, PriorityScheduler
 from src.backend.api.state import SchedulerState, get_scheduler, get_scheduler_state
 from src.backend.api.helpers import task_to_response
 from src.backend.api.routes.metrics import _export_run_metrics_csv
+from src.backend.scheduler.placement import get_placement
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -33,7 +34,8 @@ async def get_next_task(
     2. Execute the task
     3. Call PUT /tasks/status to report completion or failure
     """
-    task = scheduler.get_next_task()
+    # No worker id here, so pinned tools (configs/placement.yaml) are never handed out.
+    task = scheduler.get_next_task(accept=get_placement().accepts(None))
     
     if task is None:
         # Check if all tasks are done or if we're waiting on running tasks
