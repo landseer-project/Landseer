@@ -298,7 +298,7 @@ tools:
     defense_stage: deployment
     is_baseline: false
     container:
-      image: ghcr.io/landseer-project/deploy_dataset_inference:v2
+      image: ghcr.io/landseer-project/deploy_dataset_inference:v3
       command: python3 main.py
       runtime: null
   
