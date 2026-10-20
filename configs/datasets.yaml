@@ -12,6 +12,14 @@ datasets:
         labels:
           landseer.dataset: cifar10
           landseer.variant: clean
+      poisoned:
+        # No loader image: the BadNets set (5%, 3x3 trigger, target class 0) is
+        # already prepared under <data root>/cifar10/poisoned. An empty image
+        # makes a missing dir fail instead of falling back to the clean loader.
+        image: ""
+        labels:
+          landseer.dataset: cifar10
+          landseer.variant: poisoned
 
   celeba:
     default_image: ghcr.io/landseer-project/datasets/celeba:v2
