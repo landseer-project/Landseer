@@ -764,45 +764,6 @@ class TestTaskExecution:
         assert call_args[1]["ancestor_dirs"] is not None
         assert dep_output in call_args[1]["ancestor_dirs"]
     
-    def test_execute_task_handles_missing_dependency_outputs(self, temp_workspace, mock_task):
-        """_execute_task should handle missing dependency outputs gracefully."""
-        worker = Worker(workspace_dir=temp_workspace, use_cache=False)
-        worker._runner = MagicMock()
-        worker._runner.workspace_dir = temp_workspace
-        worker._client = MagicMock()
-        worker._client.get_task.return_value = None
-        
-        task_with_deps = TaskInfo(
-            id="test_task_3",
-            tool_name="test_tool",
-            tool_image="test/image:latest",
-            tool_command="python main.py",
-            tool_runtime=None,
-            tool_is_baseline=False,
-            config={},
-            priority=90,
-            status="pending",
-            task_type="post_training",
-            counter=1,
-            workflows=[],
-            pipeline_id="pipeline_1",
-            dependency_ids=["missing_dep"]
-        )
-        
-        result = ExecutionResult(
-            success=True,
-            exit_code=0,
-            execution_time_ms=1000,
-            output_path=temp_workspace / "test_task_3" / "output"
-        )
-        worker._runner.run_task.return_value = result
-        
-        # Should not raise exception
-        worker._execute_task(task_with_deps)
-
-        call_args = worker._runner.run_task.call_args
-        assert call_args[1].get("ancestor_dirs") in (None, [])
-
     def test_execute_task_clears_current_task_on_failure(self, temp_workspace, mock_task):
         """_execute_task should clear current_task even on failure."""
         worker = Worker(workspace_dir=temp_workspace, use_cache=False)

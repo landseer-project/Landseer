@@ -111,6 +111,51 @@ async def list_model_configs():
         "total": len(scripts),
     }
 
+
+def _prepare_run_dataset(
+    state: SchedulerState,
+    run_id: str,
+    pipeline,
+    config_path: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Prepare and publish the run's own dataset and model script and record them
+    for GET /dataset?run_id= (src/backend/run_datasets.py).
+
+    Uses the built pipeline's dataset/model config, so request overrides are
+    already applied. Best-effort: a failure is logged and the run still starts.
+    Needs the backend context (MinIO store); without one nothing is prepared.
+    """
+    ctx = get_backend_context()
+    if not ctx:
+        return None
+    try:
+        from src.data import DatasetManager
+        from src.backend.run_datasets import prepare_run_dataset
+
+        manager = ctx.dataset_manager or DatasetManager(Path("./data").resolve())
+        model_cfg = pipeline.model if isinstance(pipeline.model, dict) else {}
+        t_prepare_start = time.time()
+        info = prepare_run_dataset(
+            state.run_datasets,
+            run_id,
+            dict(pipeline.dataset or {}),
+            model_cfg.get("script"),
+            manager,
+            store=ctx.store,
+            config_path=config_path,
+        )
+        logger.info(f"Dataset for run {run_id} ready after {time.time() - t_prepare_start:.1f}s")
+    except Exception as e:
+        logger.warning(f"Dataset context setup failed for run {run_id}: {e}")
+        return None
+    ctx.dataset_manager = manager
+    # Legacy single-dataset view (GET /dataset without run_id): the latest run.
+    ctx.dataset_info = info
+    set_backend_context(ctx)
+    return info
+
+
 @router.post("/api/pipeline-configs/{config_id}/runs", response_model=PipelineRunResponse, tags=["Pipeline Runs"])
 async def start_pipeline_run(
     config_id: str,
@@ -135,8 +180,7 @@ async def start_pipeline_run(
         preserving run state transitions in DB.
         """
         from src.db import session_scope, ExperimentRunRepository, ExperimentRunStatus
-        from src.pipeline.config_loader import create_pipeline_from_config, load_pipeline_config
-        from src.data import DatasetManager
+        from src.pipeline.config_loader import create_pipeline_from_config
 
         try:
             # Step 1b: transition to RUNNING immediately after background init starts.
@@ -171,92 +215,12 @@ async def start_pipeline_run(
                 pipeline, run_id, use_cache=bool(request_data.get("use_cache", True))
             )
 
-            # Step 3: Dataset context (best-effort)
+            # Step 3: This run's own dataset (best-effort). Prepared and published
+            # before the tasks are scheduled so workers can fetch it by run_id.
             ctx = get_backend_context()
             if ctx:
                 ctx.pipeline = pipeline
-                try:
-                    cfg = load_pipeline_config(config_path)
-                    effective_ds_name = request_data.get("dataset_name") or cfg.dataset.name
-                    effective_ds_variant = request_data.get("dataset_variant") or cfg.dataset.variant
-                    current_ds = ctx.dataset_info or {}
-                    needs_prepare = (
-                        not current_ds
-                        or current_ds.get("name") != effective_ds_name
-                        or current_ds.get("variant") != effective_ds_variant
-                    )
-                    if needs_prepare:
-                        base_dir = Path("./data").resolve()
-                        manager = ctx.dataset_manager or DatasetManager(base_dir)
-                        poisoning = None
-                        if effective_ds_variant == "poisoned":
-                            poisoning = cfg.dataset.params.get("poisoning")
-                        cfg.dataset.name = effective_ds_name
-                        cfg.dataset.variant = effective_ds_variant
-                        t_prepare_start = time.time()
-                        ds_info = manager.prepare_dataset(
-                            name=cfg.dataset.name,
-                            variant=cfg.dataset.variant,
-                            poisoning=poisoning,
-                            **cfg.dataset.params,
-                        )
-                        if ds_info:
-                            ctx.dataset_info = ds_info.to_dict()
-                            ctx.dataset_manager = manager
-                            if ctx.store and ctx.store.is_available:
-                                dir_suffix = Path(ds_info.output_dir).name
-                                dataset_key = f"datasets/{cfg.dataset.name}/{dir_suffix}"
-                                try:
-                                    from src.backend.dataset_publish import publish_dataset
-
-                                    # Skips the upload when MinIO already has a
-                                    # manifest with the same content_id.
-                                    t_upload_start = time.time()
-                                    if not publish_dataset(ctx.store, ctx.dataset_info, dataset_key):
-                                        raise RuntimeError(f"dataset upload to {dataset_key} incomplete")
-                                    logger.info(
-                                        f"Dataset available in MinIO after {time.time() - t_upload_start:.1f}s: {dataset_key}"
-                                    )
-
-                                    model_script = (
-                                        getattr(cfg.model, "script", None) if cfg and cfg.model else None
-                                    )
-                                    if model_script:
-                                        model_path = Path(model_script)
-                                        if not model_path.is_absolute():
-                                            cfg_base = (
-                                                Path(ctx.pipeline_config_path).resolve().parent
-                                                if ctx.pipeline_config_path
-                                                else Path(config_path).resolve().parent
-                                            )
-                                            model_path = (cfg_base / model_path).resolve()
-                                        if model_path.exists() and model_path.is_file():
-                                            model_script_key = f"{dataset_key}/config_model.py"
-                                            if ctx.store.exists(model_script_key) or ctx.store.upload_file(
-                                                model_path, model_script_key
-                                            ):
-                                                ctx.dataset_info["model_script_minio_key"] = model_script_key
-                                                logger.info(
-                                                    f"Model script available in MinIO: {model_script_key}"
-                                                )
-                                            else:
-                                                logger.warning(
-                                                    f"Failed to upload model script to MinIO: {model_path}"
-                                                )
-                                        else:
-                                            logger.warning(
-                                                f"Model script path not found for MinIO upload: {model_path}"
-                                            )
-                                except Exception as e:
-                                    logger.warning(f"Failed to upload dataset to MinIO: {e}")
-                        else:
-                            raise RuntimeError(
-                                f"Dataset preparation returned no dataset info for "
-                                f"{cfg.dataset.name}/{cfg.dataset.variant}"
-                            )
-                except Exception as e:
-                    logger.warning(f"Dataset context setup failed for run {run_id}: {e}")
-                set_backend_context(ctx)
+                _prepare_run_dataset(state, run_id, pipeline, config_path)
 
             # Step 4: Merge into shared scheduler (multi-run safe)
             state.add_run(pipeline, scheduler_type="priority")
@@ -764,8 +728,19 @@ async def restart_pipeline_run(
                 "use_cache": request.use_cache,
                 "status": ExperimentRunStatus.PENDING,
             })
-            
-            # Load pipeline from config
+            response_fields = dict(
+                id=new_run.id,
+                experiment_id=new_run.experiment_id,
+                run_number=new_run.run_number,
+                use_cache=new_run.use_cache,
+                tools_config=getattr(new_run, "tools_config", None),
+                error_message=new_run.error_message,
+                created_at=new_run.created_at.isoformat(),
+            )
+        # ── session closed here: the new run row is committed and the SQLite
+        # lock is not held while the pipeline and its dataset are prepared ──
+
+        def _build_restarted_pipeline():
             pipeline = create_pipeline_from_config(
                 config_path=config.config_path,
                 tools_yaml_path="configs/tools.yaml",
@@ -775,34 +750,44 @@ async def restart_pipeline_run(
                 include_evaluation=True,
                 attack_config_path=effective_attack_config_path,
             )
-            
             # Bind to run-scoped IDs. Pass use_cache like the start route does:
             # workers hash task.config into the cache key, so omitting
             # _run_use_cache here made every restarted task miss the cache.
             bind_pipeline_to_run(pipeline, new_run_id, use_cache=request.use_cache)
+            # Prepare/publish the dataset like the start route: without it the
+            # restarted run had no dataset identity and every cache key missed.
+            _prepare_run_dataset(state, new_run_id, pipeline, config.config_path)
+            return pipeline
+
+        try:
+            pipeline = await asyncio.to_thread(_build_restarted_pipeline)
             
             # Merge into shared scheduler (do not replace other active runs)
             state.add_run(pipeline, scheduler_type="priority")
             
             # Update run status to running
-            run_repo.update_status(new_run_id, ExperimentRunStatus.RUNNING)
+            with session_scope() as session:
+                ExperimentRunRepository(session).update_status(new_run_id, ExperimentRunStatus.RUNNING)
+        except Exception as e:
+            try:
+                with session_scope() as session:
+                    ExperimentRunRepository(session).update_status(
+                        new_run_id, ExperimentRunStatus.FAILED, error_message=str(e)
+                    )
+            except Exception as db_e:
+                logger.error(f"Failed to persist FAILED status for run {new_run_id}: {db_e}")
+            raise
             
-            # Sync pipeline to DB
-            if state.db_service and state.db_service.is_available():
-                state.db_service.sync_pipeline_to_db(pipeline)
-            
-            return PipelineRunResponse(
-                id=new_run.id,
-                experiment_id=new_run.experiment_id,
-                run_number=new_run.run_number,
-                use_cache=new_run.use_cache,
-                tools_config=getattr(new_run, "tools_config", None),
-                status=new_run.status.value,
-                error_message=new_run.error_message,
-                created_at=new_run.created_at.isoformat(),
-                started_at=new_run.started_at.isoformat() if new_run.started_at else None,
-                completed_at=new_run.completed_at.isoformat() if new_run.completed_at else None,
-            )
+        # Sync pipeline to DB
+        if state.db_service and state.db_service.is_available():
+            state.db_service.sync_pipeline_to_db(pipeline)
+        
+        return PipelineRunResponse(
+            **response_fields,
+            status=ExperimentRunStatus.RUNNING.value,
+            started_at=None,
+            completed_at=None,
+        )
     except HTTPException:
         raise
     except Exception as e:

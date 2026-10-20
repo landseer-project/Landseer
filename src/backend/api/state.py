@@ -10,6 +10,7 @@ from src.common import get_logger
 from src.pipeline.tasks import TaskStatus
 from src.pipeline.pipeline import Pipeline
 from src.backend.scheduler import Scheduler, PriorityScheduler
+from src.backend.run_datasets import RunDatasetRegistry
 
 try:
     from src.backend.db_service import get_db_service, DatabaseService
@@ -38,6 +39,8 @@ class SchedulerState:
         self.pipeline: Optional[Pipeline] = None
         # Active pipelines/runs keyed by pipeline.id (set to run_id on start).
         self.pipelines: Dict[str, Pipeline] = {}
+        # Dataset (and model script) of each run, served by GET /dataset?run_id=.
+        self.run_datasets = RunDatasetRegistry()
         self.started_at: Optional[datetime] = None
         self.task_metadata: Dict[str, Dict[str, Any]] = {}
         self.workers: Dict[str, Dict[str, Any]] = {}

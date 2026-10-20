@@ -502,8 +502,10 @@ class TestAddEvaluationTasksToWorkflow:
             workflow=wf, evaluators=evaluators, pipeline_id="p1"
         )
 
-        assert len(tasks) == len(evaluators)
-        assert len(wf.tasks) == len(evaluators)
+        # An empty workflow has no tools, so tool-gated evaluators (fairness) are left out.
+        expected = [k for k, d in evaluators.items() if not d.applies_to.get("tools")]
+        assert len(tasks) == len(expected)
+        assert len(wf.tasks) == len(expected)
 
     def test_all_added_tasks_are_evaluation_type(self, repo_evaluators):
         wf = Workflow(name="wf", pipeline_id="p1")
@@ -696,3 +698,67 @@ class TestMakeCombinations:
             assert "during_training" in combo
             assert "post_training" in combo
             assert "deployment" in combo
+
+
+# ============================================================================
+# Tests: evaluator applies_to
+# ============================================================================
+
+
+def _eval_def(name: str, applies_to=None) -> EvaluatorDefinition:
+    return EvaluatorDefinition(
+        name=name,
+        container=EvaluatorContainerConfig(image=f"img/{name}:v1", command=""),
+        applies_to=applies_to or {},
+    )
+
+
+def _workflow_with(*tool_names: str) -> Workflow:
+    wf = Workflow(name="wf", pipeline_id="p1")
+    for name in tool_names:
+        wf.add_task(TaskFactory.create_task(TaskType.IN_TRAINING, tool=make_tool(name)))
+    return wf
+
+
+class TestEvaluatorAppliesTo:
+    def test_no_rules_applies_everywhere(self):
+        assert config_loader_module.evaluator_applies(_eval_def("clean"), "cifar10", "clean", set())
+
+    def test_variant_rule(self):
+        d = _eval_def("backdoor", {"dataset_variants": ["poisoned"]})
+        assert config_loader_module.evaluator_applies(d, "celeba", "poisoned", set())
+        assert not config_loader_module.evaluator_applies(d, "celeba", "clean", set())
+        # Unknown variant: the rule cannot be checked, so it does not filter.
+        assert config_loader_module.evaluator_applies(d, None, None, set())
+
+    def test_dataset_rule(self):
+        d = _eval_def("privacy", {"datasets": ["celeba"]})
+        assert config_loader_module.evaluator_applies(d, "celeba", "clean", set())
+        assert not config_loader_module.evaluator_applies(d, "cifar10", "clean", set())
+
+    def test_tools_rule_matches_registry_key_and_display_name(self):
+        d = _eval_def("fairness", {"tools": ["in_fair"]})
+        assert config_loader_module.evaluator_applies(d, "celeba", "clean", {"in_fair"})
+        assert not config_loader_module.evaluator_applies(d, "celeba", "clean", {"in_noop_celeba"})
+
+    def test_add_evaluation_tasks_filters_by_applies_to(self):
+        evaluators = {
+            "clean": _eval_def("clean"),
+            "backdoor": _eval_def("backdoor", {"dataset_variants": ["poisoned"]}),
+            "fairness": _eval_def("fairness", {"tools": ["in_fair"]}),
+        }
+        fair_wf = _workflow_with("in-fair")
+        tasks = add_evaluation_tasks_to_workflow(
+            fair_wf, evaluators, "p1", dataset_name="celeba", dataset_variant="clean"
+        )
+        assert sorted(t.tool.name for t in tasks) == ["clean", "fairness"]
+
+        noop_wf = _workflow_with("in-noop-celeba")
+        tasks = add_evaluation_tasks_to_workflow(
+            noop_wf, evaluators, "p1", dataset_name="celeba", dataset_variant="poisoned"
+        )
+        assert sorted(t.tool.name for t in tasks) == ["backdoor", "clean"]
+
+    def test_repo_yaml_schedules_backdoor_and_fairness_narrowly(self, repo_evaluators):
+        assert repo_evaluators["backdoor"].applies_to == {"dataset_variants": ["poisoned"]}
+        assert repo_evaluators["fairness"].applies_to == {"tools": ["in_fair"]}

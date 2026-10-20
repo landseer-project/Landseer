@@ -45,6 +45,7 @@ WORKER_RUNTIME="${WORKER_RUNTIME:-docker}"
 WORKER_CACHE_DIR="${WORKER_CACHE_DIR:-/data/landseer/cache}"
 WORKER_WORKSPACE="${WORKER_WORKSPACE:-/data/landseer/worker}"
 WORKER_DATA_PATH="${WORKER_DATA_PATH:-/data/landseer/landseer_old_data/data/celeba/clean}"
+WORKER_DATA_ROOT="${WORKER_DATA_ROOT:-}"
 WORKER_ID="${WORKER_ID:-vm-worker-$(hostname)}"
 WORKER_POLL_INTERVAL="${WORKER_POLL_INTERVAL:-5.0}"
 WORKER_HEARTBEAT_INTERVAL="${WORKER_HEARTBEAT_INTERVAL:-30.0}"
@@ -112,6 +113,9 @@ start_worker() {
       --heartbeat-interval "$WORKER_HEARTBEAT_INTERVAL"
       --minio-endpoint "$MINIO_ENDPOINT"
     )
+    if [[ -n "$WORKER_DATA_ROOT" ]]; then
+      WORKER_ARGS+=( --data-root "$WORKER_DATA_ROOT" )
+    fi
     # shellcheck disable=SC2206
     WORKER_ARGS+=( $WORKER_EXTRA_ARGS )
 

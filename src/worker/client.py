@@ -257,12 +257,13 @@ class LandseerClient:
                 }
             raise
     
-    def get_dataset_info(self) -> Dict[str, Any]:
+    def get_dataset_info(self, run_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Get dataset information from backend.
         
-        The backend prepares the dataset on startup and uploads to MinIO.
-        Workers can use this to:
+        The backend prepares each run's dataset and uploads it to MinIO. With
+        ``run_id`` this is that run's dataset and model script; without, the
+        most recently prepared one. Workers can use this to:
         1. Check if dataset is available
         2. Get MinIO key to download dataset
         3. Get local path if running on same machine
@@ -279,16 +280,22 @@ class LandseerClient:
             - test_samples: int
         """
         try:
-            response = self._make_request("GET", "/dataset")
+            if run_id:
+                response = self._make_request("GET", "/dataset", params={"run_id": run_id})
+            else:
+                response = self._make_request("GET", "/dataset")
             return response.json()
         except Exception as e:
             logger.warning(f"Failed to get dataset info: {e}")
             return {"available": False}
 
-    def get_dataset_manifest(self) -> Optional[Dict[str, Any]]:
-        """Full dataset_manifest.json from the backend, or None if it has none."""
+    def get_dataset_manifest(self, run_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Full dataset_manifest.json (of run_id's dataset) from the backend, or None if it has none."""
         try:
-            response = self._make_request("GET", "/dataset/manifest")
+            if run_id:
+                response = self._make_request("GET", "/dataset/manifest", params={"run_id": run_id})
+            else:
+                response = self._make_request("GET", "/dataset/manifest")
             data = response.json()
             return data if isinstance(data, dict) else None
         except Exception as e:

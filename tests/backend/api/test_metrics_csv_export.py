@@ -221,6 +221,79 @@ def test_export_run_metrics_csv_writes_expected_rows(tmp_results_cwd):
     assert skipped["combination_success"] == "success"
 
 
+def _export_with_fake_db(scheduler, run, results, task_metadata=None):
+    fake_session = _FakeSession(run, results)
+
+    @contextmanager
+    def fake_scope():
+        yield fake_session
+
+    with patch("src.db.session_scope", fake_scope):
+        return _export_run_metrics_csv(RUN_ID, scheduler, task_metadata)
+
+
+def _read_rows(csv_path):
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        return {r["workflow_id"]: r for r in csv.DictReader(f)}
+
+
+def test_export_falls_back_to_in_memory_results_when_db_is_empty(tmp_results_cwd):
+    """Legacy --config runs never write evaluation_results rows; use task metadata."""
+    pipeline = _make_pipeline()
+    scheduler = SimpleNamespace(pipeline=pipeline)
+    task_metadata = {
+        "t_ok_adv": {"result": {"evaluation_result": {
+            "success": True, "metrics": {"clean_accuracy": 0.9, "pgd_accuracy": 0.6}}}},
+        "t_ok_fair": {"result": {"evaluation_result": {
+            "success": True, "metrics": {"demographic_parity": 0.05}}}},
+        "t_fail_fair": {"result": {"evaluation_result": {"success": False, "metrics": {}}}},
+        "t_skip_fair": {"result": {"evaluation_result": {"skipped": True, "metrics": {}}}},
+    }
+
+    rows = _read_rows(_export_with_fake_db(scheduler, None, [], task_metadata))
+
+    ok = rows["wf_ok"]
+    assert ok["adversarial.status"] == "ok"
+    assert float(ok["adversarial.clean_accuracy"]) == pytest.approx(0.9)
+    assert float(ok["fairness.demographic_parity"]) == pytest.approx(0.05)
+    assert ok["combination_success"] == "success"
+    assert rows["wf_failed"]["fairness.status"] == "failed"
+    assert rows["wf_skipped"]["fairness.status"] == "skipped"
+    assert rows["wf_missing"]["fairness.status"] == "missing"
+
+
+def test_export_prefers_db_rows_over_in_memory(tmp_results_cwd):
+    pipeline = _make_pipeline()
+    scheduler = SimpleNamespace(pipeline=pipeline)
+    run = SimpleNamespace(id=RUN_ID, experiment_id=CONFIG_ID)
+    results = [_fake_result("wf_ok", "fairness", {"demographic_parity": 0.12})]
+    task_metadata = {"t_ok_fair": {"result": {"evaluation_result": {
+        "success": True, "metrics": {"demographic_parity": 0.99}}}}}
+
+    rows = _read_rows(_export_with_fake_db(scheduler, run, results, task_metadata))
+
+    assert float(rows["wf_ok"]["fairness.demographic_parity"]) == pytest.approx(0.12)
+
+
+def test_export_uses_pipeline_of_requested_run(tmp_results_cwd):
+    """With several runs loaded, scheduler.pipeline is the latest one, not this run."""
+    pipeline = _make_pipeline()
+    other = DefenseEvaluationPipeline(
+        name="other_run",
+        workflows=[WorkflowFactory.create_workflow(
+            name="other_combo",
+            tasks=[_make_eval_task("t_other", "clean", ["clean_accuracy"])],
+        )],
+    )
+    other.id = "run_other"
+    scheduler = SimpleNamespace(pipeline=other, pipelines={RUN_ID: pipeline, "run_other": other})
+    run = SimpleNamespace(id=RUN_ID, experiment_id=CONFIG_ID)
+
+    rows = _read_rows(_export_with_fake_db(scheduler, run, []))
+
+    assert set(rows) == {"wf_failed", "wf_missing", "wf_ok", "wf_skipped"}
+
+
 def test_export_skips_when_no_evaluation_tasks(tmp_results_cwd):
     clear_task_registry()
     train = create_task_with_id(

@@ -11,14 +11,16 @@ Workflow generation follows the specification in docs/Tasks.md:
 4. Task deduplication - Same tool + same dependencies = same task
 """
 
+import functools
 import os
 import shlex
+import threading
 import yaml
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any, Tuple, Union
 from itertools import product
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .tools import ToolDefinition, Tool, ContainerConfig, get_tool, get_all_tools, init_tool_registry
 from .tasks import Task, TaskType, TaskFactory, EvaluationTask, get_or_create_task, clear_task_registry
@@ -150,7 +152,14 @@ class EvaluatorDefinition(BaseModel):
     )
     metrics: List[str] = Field(default_factory=list, description="Metrics produced")
     defense_types: List[str] = Field(default_factory=list, description="Applicable defense types")
-    
+    applies_to: Dict[str, List[str]] = Field(
+        default_factory=dict,
+        description=(
+            "Workflows this evaluator is scheduled for: any of `datasets`, "
+            "`dataset_variants`, `tools` (a workflow tool from the list). Empty = every workflow."
+        ),
+    )
+
     def to_tool(self) -> ToolDefinition:
         """Convert to ToolDefinition for task creation."""
         return ToolDefinition(
@@ -227,7 +236,8 @@ def load_evaluators_from_yaml(yaml_path: str) -> Dict[str, EvaluatorDefinition]:
             required_artifacts=eval_data.get('required_artifacts', []),
             artifact_roots=[str(p).strip() for p in per_roots if str(p).strip()],
             metrics=eval_data.get('metrics', []),
-            defense_types=eval_data.get('defense_types', [])
+            defense_types=eval_data.get('defense_types', []),
+            applies_to=eval_data.get('applies_to') or {},
         )
     
     logger.info(f"Loaded {len(evaluators)} evaluators from {yaml_path}")
@@ -358,6 +368,37 @@ def select_evaluators_for_attack_config(
     return {}
 
 
+def _tool_token(name: str) -> str:
+    """Compare tool names and registry keys alike ("in-fair" == "in_fair")."""
+    return str(name).strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def evaluator_applies(
+    eval_def: EvaluatorDefinition,
+    dataset_name: Optional[str],
+    dataset_variant: Optional[str],
+    workflow_tools: set,
+) -> bool:
+    """
+    Whether ``eval_def.applies_to`` admits this workflow.
+
+    A rule on the dataset or variant is ignored when the caller does not know
+    it (None); a ``tools`` rule needs one of its tools among ``workflow_tools``
+    (tokens from ``_tool_token``).
+    """
+    rules = eval_def.applies_to or {}
+    datasets = rules.get("datasets") or []
+    if datasets and dataset_name is not None and dataset_name not in datasets:
+        return False
+    variants = rules.get("dataset_variants") or []
+    if variants and dataset_variant is not None and dataset_variant not in variants:
+        return False
+    tools = rules.get("tools") or []
+    if tools and not ({_tool_token(t) for t in tools} & workflow_tools):
+        return False
+    return True
+
+
 def add_evaluation_tasks_to_workflow(
     workflow: Workflow,
     evaluators: Dict[str, EvaluatorDefinition],
@@ -365,19 +406,25 @@ def add_evaluation_tasks_to_workflow(
     last_deployment_task: Optional[Task] = None,
     attack_config_path: Optional[str] = None,
     attack_config: Optional[Dict[str, Any]] = None,
+    dataset_name: Optional[str] = None,
+    dataset_variant: Optional[str] = None,
 ) -> List[Task]:
     """
     Add evaluation tasks to a workflow.
-    
-    ALL evaluators are added to every workflow. Evaluators with
-    missing required artifacts will skip gracefully at runtime.
-    
+
+    Every evaluator whose ``applies_to`` admits the workflow is added. An
+    evaluator that is added but then lacks a required artifact fails at
+    runtime, so ``applies_to`` must leave out workflows that cannot produce it
+    (e.g. backdoor on clean datasets).
+
     Args:
         workflow: Workflow to add tasks to
         evaluators: Dictionary of evaluator definitions
         pipeline_id: Pipeline ID for task tracking
         last_deployment_task: Last task from deployment stage (dependency)
-        
+        dataset_name: Run's dataset, for ``applies_to.datasets``
+        dataset_variant: Run's dataset variant, for ``applies_to.dataset_variants``
+
     Returns:
         List of created evaluation tasks
     """
@@ -397,8 +444,13 @@ def add_evaluation_tasks_to_workflow(
         tool_token = str(wf_task.tool.name).strip().lower().replace("-", "_").replace(" ", "_")
         if tool_token in {"in_dp", "post_dp", "deploy_dp", "dp"} or "differential_privacy" in tool_token:
             defense_types.add("differential_privacy")
-    
+    workflow_tools = {
+        _tool_token(t.tool.name) for t in workflow.tasks if t.task_type != TaskType.EVALUATION
+    }
+
     for eval_name, eval_def in evaluators.items():
+        if not evaluator_applies(eval_def, dataset_name, dataset_variant, workflow_tools):
+            continue
         # Create task config
         task_config = {
             "stage": "evaluation",
@@ -531,11 +583,41 @@ class StageConfig(BaseModel):
         return normalized
 
 
+CombinationRule = Union[str, Dict[str, Union[str, List[str]]]]
+
+
+class CombinationSelection(BaseModel):
+    """Which generated combinations to run (``combinations:`` in a pipeline YAML).
+
+    A rule is either a combo id (``comb_005``) or a mapping of stage -> tool id
+    (or ordered list of tool ids) that must equal that stage's tool sequence
+    exactly; stages left out of a rule match anything. A combination runs if it
+    matches any ``include`` rule (every combination when ``include`` is empty)
+    and no ``exclude`` rule. A bare list is shorthand for ``include``.
+
+    Selected combinations keep their ``comb_NNN`` ids from the full enumeration,
+    so results line up with unfiltered runs of the same config.
+    """
+    include: List[CombinationRule] = Field(default_factory=list)
+    exclude: List[CombinationRule] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_bare_list(cls, v):
+        if isinstance(v, list):
+            return {"include": v}
+        return v
+
+
 class PipelineConfig(BaseModel):
     """Complete pipeline configuration."""
     dataset: DatasetConfig = Field(description="Dataset configuration")
     model: ModelConfig = Field(description="Model configuration")
     pipeline: Dict[str, StageConfig] = Field(description="Pipeline stages and tools")
+    combinations: Optional[CombinationSelection] = Field(
+        default=None,
+        description="Optional include/exclude rules limiting which combinations run",
+    )
 
     @field_validator("pipeline")
     def validate_stages(cls, v):
@@ -718,6 +800,86 @@ def make_combinations(config: PipelineConfig) -> List[Dict[str, List[ToolDefinit
     return combinations
 
 
+def _tool_identity(tool_def: ToolDefinition) -> Tuple[str, str]:
+    # Stage-level command overrides model_copy the definition, so compare by
+    # name + image rather than object identity or the full model.
+    return (tool_def.name, tool_def.container.image)
+
+
+def select_combinations(
+    combinations: List[Dict[str, List[ToolDefinition]]],
+    selection: Optional[CombinationSelection],
+) -> List[Tuple[str, Dict[str, List[ToolDefinition]]]]:
+    """
+    Number combinations ``comb_001``... and keep those chosen by ``selection``.
+
+    Raises ValueError for rules naming an unknown combo id, stage or tool (a
+    typo would otherwise silently select nothing or everything), and when the
+    rules leave no combination to run.
+    """
+    numbered = [(f"comb_{idx:03d}", combo) for idx, combo in enumerate(combinations, start=1)]
+    if selection is None or not (selection.include or selection.exclude):
+        return numbered
+
+    stages = ["pre_training", "during_training", "post_training", "deployment"]
+    all_tools = get_all_tools()
+    name_to_tool: Dict[str, ToolDefinition] = {t.name: t for t in all_tools.values()}
+    stage_tools: Dict[str, set] = {stage: set() for stage in stages}
+    for _, combo in numbered:
+        for stage in stages:
+            stage_tools[stage].update(_tool_identity(t) for t in combo.get(stage, []))
+
+    def resolve_rule(rule: CombinationRule) -> Union[str, Dict[str, List[Tuple[str, str]]]]:
+        if isinstance(rule, str):
+            if rule not in dict(numbered):
+                raise ValueError(
+                    f"combinations: unknown combo id '{rule}' "
+                    f"(this config has comb_001..comb_{len(numbered):03d})"
+                )
+            return rule
+        resolved: Dict[str, List[Tuple[str, str]]] = {}
+        for stage, tools in rule.items():
+            if stage not in stages:
+                raise ValueError(f"combinations: unknown stage '{stage}' in rule {rule}")
+            wanted = [tools] if isinstance(tools, str) else list(tools)
+            identities = []
+            for tool_id in wanted:
+                tool_def = all_tools.get(tool_id) or name_to_tool.get(tool_id)
+                if tool_def is None or _tool_identity(tool_def) not in stage_tools[stage]:
+                    raise ValueError(
+                        f"combinations: tool '{tool_id}' is not in stage '{stage}' of this config"
+                    )
+                identities.append(_tool_identity(tool_def))
+            resolved[stage] = identities
+        return resolved
+
+    def matches(rule, combo_id: str, combo: Dict[str, List[ToolDefinition]]) -> bool:
+        if isinstance(rule, str):
+            return rule == combo_id
+        return all(
+            [_tool_identity(t) for t in combo.get(stage, [])] == wanted
+            for stage, wanted in rule.items()
+        )
+
+    include = [resolve_rule(r) for r in selection.include]
+    exclude = [resolve_rule(r) for r in selection.exclude]
+    selected = [
+        (combo_id, combo)
+        for combo_id, combo in numbered
+        if (not include or any(matches(r, combo_id, combo) for r in include))
+        and not any(matches(r, combo_id, combo) for r in exclude)
+    ]
+    if not selected:
+        raise ValueError(
+            f"combinations: the include/exclude rules leave none of the {len(numbered)} combinations"
+        )
+    logger.info(
+        "combinations: running %d of %d (%s)",
+        len(selected), len(numbered), ", ".join(cid for cid, _ in selected),
+    )
+    return selected
+
+
 def create_workflow_from_combination(
     combo_id: str,
     combination: Dict[str, List[ToolDefinition]],
@@ -829,12 +991,14 @@ def create_workflow_from_combination(
             last_deployment_task=last_deployment_task,
             attack_config_path=attack_config_path,
             attack_config=attack_config,
+            dataset_name=config.dataset.name,
+            dataset_variant=config.dataset.variant,
         )
-    
+
     return workflow
 
 
-def create_pipeline_from_config(
+def _build_pipeline_from_config(
     config_path: str,
     tools_yaml_path: str = "configs/tools.yaml",
     evaluators_yaml_path: str = "configs/evaluators.yaml",
@@ -940,13 +1104,13 @@ def create_pipeline_from_config(
         model=config.model.model_dump()
     )
     
-    # Generate combinations with permutation logic
-    combinations = make_combinations(config)
+    # Generate combinations with permutation logic, then apply the config's
+    # optional `combinations:` include/exclude rules
+    combinations = select_combinations(make_combinations(config), config.combinations)
     
     # Create workflows from combinations with task deduplication
     # Use the actual pipeline ID for proper task ownership
-    for idx, combo in enumerate(combinations, start=1):
-        combo_id = f"comb_{idx:03d}"
+    for combo_id, combo in combinations:
         workflow = create_workflow_from_combination(
             combo_id, combo, config, 
             pipeline_id=pipeline.id,
@@ -976,6 +1140,19 @@ def create_pipeline_from_config(
     
     return pipeline
 
+
+# Task dedup state (the registry and ID counters in src/pipeline/tasks.py) is
+# module-global and clear_registry wipes it. The start/restart routes build
+# pipelines in worker threads, so two runs built at once (e.g. a CIFAR-10 and a
+# CelebA run) would corrupt each other's dedup. Builds are serialized; they are
+# CPU-bound under the GIL anyway.
+_PIPELINE_BUILD_LOCK = threading.RLock()
+
+
+@functools.wraps(_build_pipeline_from_config)
+def create_pipeline_from_config(*args: Any, **kwargs: Any) -> Pipeline:
+    with _PIPELINE_BUILD_LOCK:
+        return _build_pipeline_from_config(*args, **kwargs)
 
 def get_workflow_generation_summary(config_path: str, tools_yaml_path: str = "configs/tools.yaml") -> Dict[str, Any]:
     """
@@ -1034,6 +1211,9 @@ def get_workflow_generation_summary(config_path: str, tools_yaml_path: str = "co
         }
         total_combinations *= len(options)
     
+    if config.combinations is not None:
+        total_combinations = len(select_combinations(make_combinations(config), config.combinations))
+
     return {
         "config_path": config_path,
         "total_workflows": total_combinations,

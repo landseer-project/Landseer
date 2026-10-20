@@ -18,6 +18,8 @@ def isolated_cache_dir(tmp_path, monkeypatch):
     """Workers built without cache_dir use a per-test dir, never /data/landseer/cache."""
     cache = tmp_path / "landseer-cache"
     monkeypatch.setenv("LANDSEER_CACHE_DIR", str(cache))
+    # A host-level dataset root must not leak into worker tests.
+    monkeypatch.delenv("LANDSEER_DATA_ROOT", raising=False)
     return cache
 
 

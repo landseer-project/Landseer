@@ -60,7 +60,7 @@ def test_is_task_dir_name(name, expected):
 
 def test_prune_removes_stale_run_scoped_dirs(tmp_path):
     runner = TaskRunner(workspace_dir=tmp_path, gpu_id=None, timeout=60)
-    old = time.time() - 48 * 3600
+    old = time.time() - 96 * 3600  # older than the 72h default retention
     stale = [tmp_path / "task_3", tmp_path / "e807ab0e-3f9a2c41d0e7"]
     keep = [tmp_path / "3b81bf4a-aaaaaaaaaaaa", tmp_path / "not_a_task"]
     for d in stale + keep:

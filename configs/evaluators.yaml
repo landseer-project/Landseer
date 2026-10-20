@@ -6,10 +6,6 @@
 #
 artifact_roots:
   - /data/landseer/eval_artifacts
-# evaluators:
-#   clean:
-#     required_artifacts:
-#       - celeba_shadows
 
 evaluators:
   clean:
@@ -35,6 +31,8 @@ evaluators:
       command: ""
     required_artifacts:
       - poisoning_metadata.json
+    applies_to:
+      dataset_variants: [poisoned]
     metrics:
       - attack_success_rate
       - clean_accuracy_post_attack
@@ -63,6 +61,9 @@ evaluators:
       command: ""
     required_artifacts:
       - test_sensitive.npy
+    # in_fair writes test_sensitive.npy (and its own test split); no other tool does
+    applies_to:
+      tools: [in_fair]
     metrics:
       - demographic_parity
       - equalized_odds_diff

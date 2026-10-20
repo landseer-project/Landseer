@@ -768,7 +768,7 @@ class TaskRunner:
         # Only task workspaces are pruned by age. The local artifact cache is
         # managed by its size cap (src/store/local_lru.py), so
         # LANDSEER_CACHE_RETENTION_HOURS is no longer used.
-        workspace_retention_h = int(os.environ.get("LANDSEER_WORKSPACE_RETENTION_HOURS", "24"))
+        workspace_retention_h = int(os.environ.get("LANDSEER_WORKSPACE_RETENTION_HOURS", "72"))
         workspace_cutoff = now - (workspace_retention_h * 3600)
 
         reclaimed_workspace = 0
@@ -967,7 +967,7 @@ class TaskRunner:
 
         return missing
 
-    def _skip_evaluation_missing_artifacts(
+    def _fail_evaluation_missing_artifacts(
         self,
         task: TaskInfo,
         task_dir: Path,
@@ -975,17 +975,20 @@ class TaskRunner:
         missing: List[str],
         start_time: float,
     ) -> "ExecutionResult":
-        """Write a skipped evaluation_results.json and return a successful skip result."""
+        """Write a failed evaluation_results.json and return a failed result.
+
+        The backend only schedules an evaluator where its inputs can exist
+        (``applies_to``), so a missing one means a lost upstream output. A
+        successful skip with -1 metrics would hide that and get cached.
+        """
         output_dir.mkdir(parents=True, exist_ok=True)
-        expected_metrics = []
-        if isinstance(task.config, dict):
-            expected_metrics = list(task.config.get("metrics") or [])
+        error = f"missing required artifacts: {', '.join(missing)}"
         payload = {
             "evaluator": task.tool_name,
-            "success": True,
-            "skipped": True,
-            "skip_reason": f"missing required artifacts: {', '.join(missing)}",
-            "metrics": {name: -1.0 for name in expected_metrics},
+            "success": False,
+            "skipped": False,
+            "error": error,
+            "metrics": {},
             "parameters": {
                 "source": "worker_required_artifacts",
                 "missing_artifacts": missing,
@@ -996,19 +999,17 @@ class TaskRunner:
         )
         execution_time_ms = int((time.time() - start_time) * 1000)
         result = ExecutionResult(
-            success=True,
-            exit_code=0,
+            success=False,
+            exit_code=-1,
             execution_time_ms=execution_time_ms,
             output_path=output_dir,
-            logs=f"Skipping evaluator: missing required artifacts: {', '.join(missing)}\n",
-            artifacts={
-                "skipped": True,
-                "missing_artifacts": missing,
-            },
+            logs=f"Evaluator not run: {error}\n",
+            error_message=error,
+            artifacts={"missing_artifacts": missing},
         )
         self._write_task_log(task_dir, task, result, docker_command=None)
-        logger.info(
-            "Skipping evaluation task %s (%s): missing required artifacts %s",
+        logger.error(
+            "Failing evaluation task %s (%s): missing required artifacts %s",
             task.id,
             task.tool_name,
             missing,
@@ -1237,7 +1238,7 @@ class TaskRunner:
 
             # Evaluation tasks: materialize required_artifacts from dataset /
             # LANDSEER_EVAL_ARTIFACTS_DIR when not already present from tool ancestry.
-            # Skip gracefully if still missing (do not run the container).
+            # Fail if still missing (do not run the container).
             if task.task_type == "evaluation":
                 missing_artifacts = self._materialize_required_artifacts(
                     task=task,
@@ -1245,7 +1246,7 @@ class TaskRunner:
                     data_dir=input_path if (input_path and input_path.is_dir()) else None,
                 )
                 if missing_artifacts:
-                    return self._skip_evaluation_missing_artifacts(
+                    return self._fail_evaluation_missing_artifacts(
                         task=task,
                         task_dir=task_dir,
                         output_dir=output_dir,
