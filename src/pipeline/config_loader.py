@@ -18,9 +18,9 @@ import threading
 import yaml
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any, Tuple, Union
 from itertools import product
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .tools import ToolDefinition, Tool, ContainerConfig, get_tool, get_all_tools, init_tool_registry
 from .tasks import Task, TaskType, TaskFactory, EvaluationTask, get_or_create_task, clear_task_registry
@@ -533,11 +533,41 @@ class StageConfig(BaseModel):
         return normalized
 
 
+CombinationRule = Union[str, Dict[str, Union[str, List[str]]]]
+
+
+class CombinationSelection(BaseModel):
+    """Which generated combinations to run (``combinations:`` in a pipeline YAML).
+
+    A rule is either a combo id (``comb_005``) or a mapping of stage -> tool id
+    (or ordered list of tool ids) that must equal that stage's tool sequence
+    exactly; stages left out of a rule match anything. A combination runs if it
+    matches any ``include`` rule (every combination when ``include`` is empty)
+    and no ``exclude`` rule. A bare list is shorthand for ``include``.
+
+    Selected combinations keep their ``comb_NNN`` ids from the full enumeration,
+    so results line up with unfiltered runs of the same config.
+    """
+    include: List[CombinationRule] = Field(default_factory=list)
+    exclude: List[CombinationRule] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_bare_list(cls, v):
+        if isinstance(v, list):
+            return {"include": v}
+        return v
+
+
 class PipelineConfig(BaseModel):
     """Complete pipeline configuration."""
     dataset: DatasetConfig = Field(description="Dataset configuration")
     model: ModelConfig = Field(description="Model configuration")
     pipeline: Dict[str, StageConfig] = Field(description="Pipeline stages and tools")
+    combinations: Optional[CombinationSelection] = Field(
+        default=None,
+        description="Optional include/exclude rules limiting which combinations run",
+    )
 
     @field_validator("pipeline")
     def validate_stages(cls, v):
@@ -718,6 +748,86 @@ def make_combinations(config: PipelineConfig) -> List[Dict[str, List[ToolDefinit
     
     logger.info(f"Generated {len(combinations)} workflow combinations from pipeline configuration")
     return combinations
+
+
+def _tool_identity(tool_def: ToolDefinition) -> Tuple[str, str]:
+    # Stage-level command overrides model_copy the definition, so compare by
+    # name + image rather than object identity or the full model.
+    return (tool_def.name, tool_def.container.image)
+
+
+def select_combinations(
+    combinations: List[Dict[str, List[ToolDefinition]]],
+    selection: Optional[CombinationSelection],
+) -> List[Tuple[str, Dict[str, List[ToolDefinition]]]]:
+    """
+    Number combinations ``comb_001``... and keep those chosen by ``selection``.
+
+    Raises ValueError for rules naming an unknown combo id, stage or tool (a
+    typo would otherwise silently select nothing or everything), and when the
+    rules leave no combination to run.
+    """
+    numbered = [(f"comb_{idx:03d}", combo) for idx, combo in enumerate(combinations, start=1)]
+    if selection is None or not (selection.include or selection.exclude):
+        return numbered
+
+    stages = ["pre_training", "during_training", "post_training", "deployment"]
+    all_tools = get_all_tools()
+    name_to_tool: Dict[str, ToolDefinition] = {t.name: t for t in all_tools.values()}
+    stage_tools: Dict[str, set] = {stage: set() for stage in stages}
+    for _, combo in numbered:
+        for stage in stages:
+            stage_tools[stage].update(_tool_identity(t) for t in combo.get(stage, []))
+
+    def resolve_rule(rule: CombinationRule) -> Union[str, Dict[str, List[Tuple[str, str]]]]:
+        if isinstance(rule, str):
+            if rule not in dict(numbered):
+                raise ValueError(
+                    f"combinations: unknown combo id '{rule}' "
+                    f"(this config has comb_001..comb_{len(numbered):03d})"
+                )
+            return rule
+        resolved: Dict[str, List[Tuple[str, str]]] = {}
+        for stage, tools in rule.items():
+            if stage not in stages:
+                raise ValueError(f"combinations: unknown stage '{stage}' in rule {rule}")
+            wanted = [tools] if isinstance(tools, str) else list(tools)
+            identities = []
+            for tool_id in wanted:
+                tool_def = all_tools.get(tool_id) or name_to_tool.get(tool_id)
+                if tool_def is None or _tool_identity(tool_def) not in stage_tools[stage]:
+                    raise ValueError(
+                        f"combinations: tool '{tool_id}' is not in stage '{stage}' of this config"
+                    )
+                identities.append(_tool_identity(tool_def))
+            resolved[stage] = identities
+        return resolved
+
+    def matches(rule, combo_id: str, combo: Dict[str, List[ToolDefinition]]) -> bool:
+        if isinstance(rule, str):
+            return rule == combo_id
+        return all(
+            [_tool_identity(t) for t in combo.get(stage, [])] == wanted
+            for stage, wanted in rule.items()
+        )
+
+    include = [resolve_rule(r) for r in selection.include]
+    exclude = [resolve_rule(r) for r in selection.exclude]
+    selected = [
+        (combo_id, combo)
+        for combo_id, combo in numbered
+        if (not include or any(matches(r, combo_id, combo) for r in include))
+        and not any(matches(r, combo_id, combo) for r in exclude)
+    ]
+    if not selected:
+        raise ValueError(
+            f"combinations: the include/exclude rules leave none of the {len(numbered)} combinations"
+        )
+    logger.info(
+        "combinations: running %d of %d (%s)",
+        len(selected), len(numbered), ", ".join(cid for cid, _ in selected),
+    )
+    return selected
 
 
 def create_workflow_from_combination(
@@ -942,13 +1052,13 @@ def _build_pipeline_from_config(
         model=config.model.model_dump()
     )
     
-    # Generate combinations with permutation logic
-    combinations = make_combinations(config)
+    # Generate combinations with permutation logic, then apply the config's
+    # optional `combinations:` include/exclude rules
+    combinations = select_combinations(make_combinations(config), config.combinations)
     
     # Create workflows from combinations with task deduplication
     # Use the actual pipeline ID for proper task ownership
-    for idx, combo in enumerate(combinations, start=1):
-        combo_id = f"comb_{idx:03d}"
+    for combo_id, combo in combinations:
         workflow = create_workflow_from_combination(
             combo_id, combo, config, 
             pipeline_id=pipeline.id,
@@ -1049,6 +1159,9 @@ def get_workflow_generation_summary(config_path: str, tools_yaml_path: str = "co
         }
         total_combinations *= len(options)
     
+    if config.combinations is not None:
+        total_combinations = len(select_combinations(make_combinations(config), config.combinations))
+
     return {
         "config_path": config_path,
         "total_workflows": total_combinations,
