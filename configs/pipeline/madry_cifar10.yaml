@@ -1,0 +1,21 @@
+dataset:
+  name: cifar10
+  variant: clean
+model:
+  script: configs/model/config_model_resnet20.py
+  framework: pytorch
+pipeline:
+  pre_training:
+    tools:
+      - pre_noop
+  during_training:
+    tools:
+      - in_noop
+      # TensorFlow tool; runs between its adapters (configs/tools.yaml).
+      - in_madry
+  post_training:
+    tools:
+      - post_noop
+  deployment:
+    tools:
+      - deploy_noop

@@ -356,6 +356,19 @@ class TestRepository:
         assert spec["output"]["name"] == "tensorflow-to-pytorch"
         assert spec["output"]["model_path"] == "model_tf/model.keras"
 
+    @pytest.mark.parametrize("key", ["in_madry", "in_madry_celeba"])
+    def test_in_madry_labels_select_its_adapters(self, key):
+        tools = load_tools_from_yaml(str(REPO_ROOT / "configs" / "tools.yaml"))
+        tool = tools[key]
+        assert tool.adapters is None
+        labels = parse_dockerfile_labels((REPO_ROOT / "containers" / "tools" / "in_madry" / "Dockerfile").read_text())
+        assert validate_labels(labels).ok
+        spec = _resolve(tool, labels)["adapters"]
+        assert spec["input"]["name"] == "pytorch-to-tensorflow"
+        assert spec["input"]["env"]["LANDSEER_MODEL_INPUT"] == "architecture"
+        assert spec["output"]["name"] == "tensorflow-to-pytorch"
+        assert spec["output"]["model_path"] == "model_tf/model.keras"
+
     def test_pytorch_tools_unaffected(self):
         tools = load_tools_from_yaml(str(REPO_ROOT / "configs" / "tools.yaml"))
         assert _resolve(tools["in_trades"], _labels(framework="pytorch==2.1.0", model_input=None, model_output=None)) == {}

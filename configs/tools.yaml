@@ -215,6 +215,28 @@ tools:
       command: python main.py
       runtime: null
 
+  # PGD adversarial training (Madry et al.), ported from the official TensorFlow
+  # code. Adapters come from the image labels, as for in_freeat.
+  in_madry:
+    name: in-madry
+    defense_stage: during_training
+    is_baseline: false
+    framework: tensorflow
+    container:
+      image: ghcr.io/landseer-project/in_madry:v1
+      command: python main.py
+      runtime: null
+
+  in_madry_celeba:
+    name: in-madry-celeba
+    defense_stage: during_training
+    is_baseline: false
+    framework: tensorflow
+    container:
+      image: ghcr.io/landseer-project/in_madry:v1
+      command: python main.py --dataset celeba
+      runtime: null
+
   watermarknn:
     name: watermarknn
     defense_stage: during_training

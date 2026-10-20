@@ -274,11 +274,42 @@ Extra arguments: `--epochs` (passes over the data, each minibatch replayed
 `--max_train_examples`. Outputs: `model_tf/model.keras`, `freeat_metrics.json`,
 and (from the output adapter) `model.pt` and `conversion_report.json`.
 
+## `in_madry`
+
+`containers/tools/in_madry` runs PGD adversarial training
+([paper](https://arxiv.org/abs/1706.06083),
+[code](https://github.com/MadryLab/cifar10_challenge)) in TensorFlow 2.15, ported
+from the official TF1 `train.py` and `pgd_attack.LinfPGDAttack` for the same
+reason as `in_freeat`: it trains the pipeline's `config_model.py` network. The
+port keeps the original's semantics: `tf.compat.v1.train.MomentumOptimizer`,
+`tf.train.piecewise_constant` boundaries, weight decay on conv/dense kernels,
+pad-2 crop + flip augmentation, `DataSubset` batching, and the attack running on
+the training-mode model (batch norm updates its moving averages during attack
+steps, as `tf.contrib.layers.batch_norm(updates_collections=None)` does). Its
+arguments are the original `config.json` keys (`--max_num_training_steps`,
+`--epsilon` and `--step_size` on the 0-255 scale, `--num_steps`,
+`--step_size_schedule`, ...); the default `--num_steps` is the paper's 7 (the
+repository ships 10). `containers/tools/in_madry/test_main.py` checks these
+against TF1 behaviour inside the image.
+
+Extra arguments: `--epochs`, `--eval_num_steps` (PGD steps of the final robust
+accuracy, default 20), `--no_augment`, `--max_train_examples`. Outputs:
+`model_tf/model.keras`, `madry_metrics.json`, and (from the output adapter)
+`model.pt` and `conversion_report.json`.
+
+The Dockerfile deletes the base image's `/etc/ld.so.conf.d/z-cuda-stubs.conf`:
+with it, the linker cache resolves `libcuda.so.1` to the CUDA stub before the
+host driver, `cuInit` fails with error 34 and TensorFlow silently runs on the
+CPU (about 8x slower here). Images built on `tensorflow/tensorflow:2.15.0-gpu`
+without that line, such as `in_freeat`'s, have the same problem; check with
+`python -c "import tensorflow as tf; print(tf.config.list_physical_devices('GPU'))"`.
+
 ## Building and testing locally
 
 ```bash
 docker build -t landseer-local/adapter_pytorch_tensorflow:dev containers/adapters/pytorch_tensorflow
 docker build -t landseer-local/in_freeat:dev containers/tools/in_freeat
+docker build -t landseer-local/in_madry:dev containers/tools/in_madry
 ```
 
 `configs/tools.yaml` references `ghcr.io/landseer-project/adapter_pytorch_tensorflow:v1`
