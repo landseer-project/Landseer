@@ -7,6 +7,8 @@ Tests cover:
 - discover_configs: config_id derived from filename stem
 - discover_configs: returns sorted by filename
 - discover_configs: ignores non-yaml files
+- discover_configs: finds yaml files in subdirectories
+- discover_configs: skips a second file with an already-used stem
 - discover_configs: resolves config_path to absolute
 - compute_config_hash: returns non-empty string for existing file
 - compute_config_hash: returns empty string for missing file
@@ -103,6 +105,30 @@ class TestDiscoverConfigs:
         result = discover_configs(pipeline_dir=str(pdir), attack_dir=str(tmp_path))
         assert len(result) == 1
         assert result[0]["name"] == "good"
+
+    def test_finds_yaml_in_subdirectories(self, tmp_path):
+        pdir = tmp_path / "pipeline"
+        (pdir / "fin-run" / "celeba-poisoned").mkdir(parents=True)
+        (pdir / "top.yaml").write_text("x: 1\n")
+        (pdir / "fin-run" / "celeba-poisoned" / "fin_celeba_poisoned_noop.yaml").write_text("x: 2\n")
+
+        result = discover_configs(pipeline_dir=str(pdir), attack_dir=str(tmp_path))
+        ids = {c["id"]: c["config_path"] for c in result}
+        assert set(ids) == {"config_top", "config_fin_celeba_poisoned_noop"}
+        assert ids["config_fin_celeba_poisoned_noop"].endswith(
+            "fin-run/celeba-poisoned/fin_celeba_poisoned_noop.yaml"
+        )
+
+    def test_duplicate_stem_in_subdirectory_is_skipped(self, tmp_path):
+        pdir = tmp_path / "pipeline"
+        (pdir / "sub").mkdir(parents=True)
+        (pdir / "same.yaml").write_text("x: 1\n")
+        (pdir / "sub" / "same.yaml").write_text("x: 2\n")
+
+        result = discover_configs(pipeline_dir=str(pdir), attack_dir=str(tmp_path))
+        assert [c["id"] for c in result] == ["config_same"]
+        # The first in sorted path order keeps the id.
+        assert result[0]["config_path"] == str((pdir / "same.yaml").resolve())
 
     def test_config_path_is_absolute(self, tmp_path):
         pdir = tmp_path / "pipeline"

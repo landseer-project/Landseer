@@ -77,7 +77,12 @@ def discover_configs(
     attack_dir: str = "configs/attack",
 ) -> List[Dict[str, Optional[str]]]:
     """
-    Discover pipeline configs from the filesystem.
+    Discover pipeline configs from the filesystem, subdirectories included
+    (e.g. ``configs/pipeline/fin-run/celeba-poisoned/``).
+
+    The id is ``config_<file stem>``, so stems must be unique across the tree;
+    a second file with a stem already seen is skipped with an error rather
+    than silently taking over that id.
     """
     configs: List[Dict[str, Optional[str]]] = []
     pdir = _resolve_dir(pipeline_dir)
@@ -87,8 +92,16 @@ def discover_configs(
         logger.warning("Pipeline config directory not found: %s", pdir)
         return configs
 
-    for file in sorted(pdir.glob("*.yaml")):
+    seen: Dict[str, Path] = {}
+    for file in sorted(pdir.rglob("*.yaml")):
         config_id = f"config_{file.stem}"
+        if config_id in seen:
+            logger.error(
+                "Skipping %s: config id %s is already taken by %s (file names must be unique)",
+                file, config_id, seen[config_id],
+            )
+            continue
+        seen[config_id] = file
         config_hash = compute_config_hash(str(file))
         configs.append(
             {
