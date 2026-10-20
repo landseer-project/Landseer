@@ -228,6 +228,50 @@ class TestRunAdapterChain:
         assert "input adapter image" in error
         assert runner.calls == []
 
+    def test_model_path_written_by_tool_passes(self, workspace):
+        _, _, output_dir = workspace
+        runner = FakeRunner(effects={
+            "input": _input_adapter_effect, "tool": _tool_effect, "output": _output_adapter_effect,
+        })
+        out = {**OUT_ADAPTER, "model_path": "model_tf/model.keras"}
+        exit_code, _, _, error = _chain(runner, workspace, {"input": IN_ADAPTER, "output": out})
+        assert (exit_code, error) == (0, None)
+        assert (output_dir / "model.pt").read_text() == "converted"
+
+    def test_tool_that_saved_elsewhere_fails_instead_of_converting_untrained_model(self, workspace):
+        """H1: the input adapter's untrained model is also under /input; without the
+        check the output adapter would convert it and the task would succeed."""
+        _, _, output_dir = workspace
+
+        def tool_saves_elsewhere(in_dir: Path, out_dir: Path) -> None:
+            (out_dir / "tf_out").mkdir(parents=True)
+            (out_dir / "tf_out" / "model.keras").write_text("trained")
+
+        runner = FakeRunner(effects={"input": _input_adapter_effect, "tool": tool_saves_elsewhere})
+        out = {**OUT_ADAPTER, "model_path": "model_tf/model.keras"}
+        exit_code, logs, _, error = _chain(runner, workspace, {"input": IN_ADAPTER, "output": out})
+        assert exit_code == -1
+        assert "/output/model_tf/model.keras" in error and "tf-to-torch" in error
+        assert [c["key"] for c in runner.calls] == ["input", "tool"]
+        assert not (output_dir / "model.pt").exists()
+        assert error in logs
+
+    def test_tool_that_saved_nothing_fails(self, workspace):
+        runner = FakeRunner(effects={"input": _input_adapter_effect})
+        out = {**OUT_ADAPTER, "model_path": "model_tf/model.keras"}
+        exit_code, _, _, error = _chain(runner, workspace, {"input": IN_ADAPTER, "output": out}, pull_image=runner.pull_image)
+        assert exit_code == -1
+        assert "did not write its model" in error
+        # Checked before pulling the output adapter image.
+        assert runner.pulled == ["test/adapter:v1"]
+
+    def test_without_model_path_output_adapter_still_runs(self, workspace):
+        """Older task configs carry no model_path; the chain runs as before."""
+        runner = FakeRunner(effects={"input": _input_adapter_effect})
+        exit_code, _, _, error = _chain(runner, workspace, {"input": IN_ADAPTER, "output": OUT_ADAPTER})
+        assert (exit_code, error) == (0, None)
+        assert [c["key"] for c in runner.calls] == ["input", "tool", "output"]
+
     def test_rerun_clears_stale_adapter_outputs(self, workspace):
         task_dir, _, output_dir = workspace
         stale = task_dir / "adapters" / "output" / "stale.txt"

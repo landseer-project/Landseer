@@ -3,7 +3,17 @@
 # outputs -> the standard model.pt). Tools reference them by key under
 # `adapters: {input: ..., output: ...}`. See docs/how-to/adapter-layers.md.
 adapters:
-  # config_model.py (+ model.pt when an upstream task produced one) -> /input/model_tf/model.keras
+  # A tool that names no adapters gets them automatically when its image's
+  # org.landseer.framework is not pytorch: an input adapter (pytorch -> its
+  # framework) unless org.landseer.model_input is none, an output adapter
+  # (its framework -> pytorch) when org.landseer.model_output is model. They are
+  # matched on source_framework/target_framework among the adapters below with
+  # auto_select (default true). Tools may set framework / model_input /
+  # model_output / model_path here to override their image labels.
+
+  # config_model.py (+ model.pt when an upstream task produced one) -> /input/model_tf/model.keras.
+  # Picked automatically; the tool's model_input chooses the weights
+  # (architecture: fresh initialisation, weights: the upstream model.pt).
   pytorch_to_tensorflow:
     name: pytorch-to-tensorflow
     source_framework: pytorch
@@ -13,11 +23,12 @@ adapters:
       command: python main.py --direction input
       runtime: null
 
-  # Architecture only (fresh initialisation), for in-training tools that train from scratch.
+  # Architecture only (fresh initialisation), for naming explicitly under a tool's adapters.
   config_model_to_tensorflow:
     name: config-model-to-tensorflow
     source_framework: pytorch
     target_framework: tensorflow
+    auto_select: false
     container:
       image: ghcr.io/landseer-project/adapter_pytorch_tensorflow:v1
       command: python main.py --direction input --weights none
@@ -196,10 +207,9 @@ tools:
     name: in-freeat
     defense_stage: during_training
     is_baseline: false
+    # Adapters come from the image labels (model_input=architecture,
+    # model_output=model, model_path=model_tf/model.keras).
     framework: tensorflow
-    adapters:
-      input: config_model_to_tensorflow
-      output: tensorflow_to_pytorch
     container:
       image: ghcr.io/landseer-project/in_freeat:v1
       command: python main.py

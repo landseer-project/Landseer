@@ -1,8 +1,8 @@
 # Landseer in-training tool: Free Adversarial Training (TensorFlow).
 # Build with context directory containers/tools/in_freeat:
 #   docker build -t <image> containers/tools/in_freeat
-# Runs between the pytorch_to_tensorflow input and output adapters
-# (configs/tools.yaml); see docs/how-to/adapter-layers.md.
+# Its model_* labels make Landseer run it between the PyTorch<->TensorFlow
+# adapters (configs/tools.yaml); see docs/how-to/adapter-layers.md.
 FROM tensorflow/tensorflow:2.15.0-gpu
 
 LABEL org.opencontainers.image.title="Free Adversarial Training" \
@@ -20,7 +20,10 @@ LABEL org.opencontainers.image.title="Free Adversarial Training" \
       org.landseer.accelerator="cuda" \
       org.landseer.cuda="12.3" \
       org.landseer.stage="during_training" \
-      org.landseer.defense_type="adversarial"
+      org.landseer.defense_type="adversarial" \
+      org.landseer.model_input="architecture" \
+      org.landseer.model_output="model" \
+      org.landseer.model_path="model_tf/model.keras"
 
 ENV PYTHONUNBUFFERED=1 \
     TF_CPP_MIN_LOG_LEVEL=2

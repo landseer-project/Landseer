@@ -78,7 +78,15 @@ ALLOWED_VALUES: Dict[str, frozenset] = {
     NS + "type": frozenset(TYPE_REQUIRED),
     NS + "accelerator": frozenset({"cpu", "cuda"}),
     NS + "stage": frozenset({"pre_training", "during_training", "post_training", "deployment"}),
+    # Which model a tool reads and writes; with a non-pytorch framework these
+    # pick the tool's adapters (src/pipeline/tools.py resolve_adapters).
+    NS + "model_input": frozenset({"none", "architecture", "weights"}),
+    NS + "model_output": frozenset({"none", "model"}),
 }
+
+# Tool frameworks whose models need adapters to/from the standard PyTorch form;
+# tools in these must declare model_input and model_output.
+ADAPTED_MODEL_FRAMEWORKS = frozenset({"tensorflow", "keras", "tf"})
 ALLOWED_LIST_VALUES: Dict[str, frozenset] = {
     NS + "modality": frozenset({"image", "text", "tabular"}),
 }
@@ -177,6 +185,18 @@ def validate_labels(
         value = labels.get(key, "")
         if value and (", " in value or " ," in value):
             report.errors.append(f"{key} must be comma-separated without spaces: {value!r}")
+
+    if image_type == "tool":
+        framework = labels.get(NS + "framework", "").split(",")[0].split("=")[0].strip().lower()
+        if framework in ADAPTED_MODEL_FRAMEWORKS:
+            for key in (NS + "model_input", NS + "model_output"):
+                if not labels.get(key):
+                    report.errors.append(
+                        f"missing {key} (required for {framework} tools; it selects the tool's adapters)"
+                    )
+        model_path = labels.get(NS + "model_path", "")
+        if model_path and (model_path.startswith("/") or ".." in model_path.split("/")):
+            report.errors.append(f"{NS}model_path must be relative to /input and /output: {model_path!r}")
 
     if image_type == "dataset":
         dataset = labels.get(NS + "dataset")

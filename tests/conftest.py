@@ -51,3 +51,14 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             item.add_marker(pytest.mark.db)
         if "smoke" in lower_name:
             item.add_marker(pytest.mark.smoke)
+
+
+@pytest.fixture(autouse=True)
+def _no_image_label_lookups(monkeypatch):
+    """Adapter selection reads tool image labels (docker inspect / registry HTTP).
+    Tests get no labels unless they patch ``_fetch_image_labels`` themselves."""
+    try:
+        from src.pipeline import tools as tools_mod
+    except Exception:  # pragma: no cover - suites that cannot import src
+        return
+    monkeypatch.setattr(tools_mod, "_fetch_image_labels", lambda image, runtime=None: {})

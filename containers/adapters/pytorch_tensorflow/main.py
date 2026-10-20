@@ -36,6 +36,9 @@ import numpy as np
 
 MAP_FORMAT = "landseer-torch-keras-map/1"
 
+# Tool's org.landseer.model_input label (passed as LANDSEER_MODEL_INPUT) -> --weights.
+WEIGHTS_FOR_MODEL_INPUT = {"architecture": "none", "weights": "required"}
+
 
 def log(msg):
     print(f"[adapter] {msg}", flush=True)
@@ -48,11 +51,16 @@ def parse_args():
                         help="input: PyTorch -> Keras before the tool; output: Keras -> PyTorch after it")
     parser.add_argument("--input", default=os.environ.get("INPUT_DIR", "/input"))
     parser.add_argument("--output", default=os.environ.get("OUTPUT_DIR", "/output"))
-    parser.add_argument("--model-dir", default="model_tf",
-                        help="Directory (relative to input/output) holding the Keras model and weight map")
-    parser.add_argument("--weights", choices=["auto", "none", "required"], default="auto",
+    parser.add_argument("--model-path", default=os.environ.get("LANDSEER_MODEL_PATH") or "model_tf/model.keras",
+                        help="The tool's Keras model, relative to input/output (default: $LANDSEER_MODEL_PATH, "
+                             "set from the tool's org.landseer.model_path label); weight_map.json goes next to it")
+    parser.add_argument("--model-dir", default=None,
+                        help="Directory for model.keras; overrides the directory of --model-path")
+    parser.add_argument("--weights", choices=["auto", "none", "required"],
+                        default=WEIGHTS_FOR_MODEL_INPUT.get(os.environ.get("LANDSEER_MODEL_INPUT", ""), "auto"),
                         help="input direction: load /input/model.pt (auto: if present; none: keep the "
-                             "fresh initialisation of config_model.py)")
+                             "fresh initialisation of config_model.py). Default from $LANDSEER_MODEL_INPUT: "
+                             "architecture -> none, weights -> required")
     parser.add_argument("--input-shape", default="",
                         help="Per-sample input shape C,H,W (default: from data.npy, else 3,32,32)")
     parser.add_argument("--trace-batch", type=int, default=11,
@@ -61,7 +69,14 @@ def parse_args():
     parser.add_argument("--atol", type=float, default=1e-3)
     parser.add_argument("--rtol", type=float, default=1e-3)
     parser.add_argument("--seed", type=int, default=0)
-    return parser.parse_args()
+    args = parser.parse_args()
+    model_path = Path(args.model_path)
+    if model_path.is_absolute() or ".." in model_path.parts:
+        parser.error(f"--model-path must be relative: {args.model_path}")
+    if args.model_dir is not None:
+        model_path = Path(args.model_dir) / model_path.name
+    args.model_dir, args.model_file = str(model_path.parent), model_path.name
+    return args
 
 
 # ---------------------------------------------------------------------------
@@ -302,7 +317,7 @@ def run_input(args) -> int:
     if not report["ok"]:
         raise SystemExit("Converted Keras model does not match the PyTorch model")
 
-    keras_model.save(model_dir / "model.keras")
+    keras_model.save(model_dir / args.model_file)
     weight_map = {
         "format": MAP_FORMAT,
         "input_shape": list(input_shape),
@@ -313,7 +328,7 @@ def run_input(args) -> int:
         "parity": report,
     }
     (model_dir / "weight_map.json").write_text(json.dumps(weight_map, indent=2))
-    log(f"wrote {model_dir / 'model.keras'} and weight_map.json ({len(entries)} mapped weights)")
+    log(f"wrote {model_dir / args.model_file} and weight_map.json ({len(entries)} mapped weights)")
     return 0
 
 
@@ -327,11 +342,11 @@ def run_output(args) -> int:
 
     input_dir, output_dir = Path(args.input), Path(args.output)
     model_dir = input_dir / args.model_dir
-    keras_path = model_dir / "model.keras"
+    keras_path = model_dir / args.model_file
     map_path = model_dir / "weight_map.json"
     for path in (keras_path, map_path):
         if not path.exists():
-            raise SystemExit(f"{path} not found: the tool must write {args.model_dir}/model.keras and the "
+            raise SystemExit(f"{path} not found: the tool must write {args.model_dir}/{args.model_file} and the "
                              "input adapter must have written weight_map.json")
 
     weight_map = json.loads(map_path.read_text())

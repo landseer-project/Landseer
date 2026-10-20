@@ -155,6 +155,20 @@ def run_adapter_chain(
     spec = adapters.get("output")
     if spec:
         name = spec.get("name") or spec["image"]
+        # The input adapter's model is also under /input, so without this check a
+        # tool that saved elsewhere (or not at all) would have the untrained model
+        # converted back and reported as its result.
+        model_path = spec.get("model_path")
+        if model_path:
+            produced = output_dir / model_path
+            if not produced.exists():
+                return _done(
+                    -1,
+                    f"Tool did not write its model to /output/{model_path}; refusing to run "
+                    f"output adapter '{name}' (it would convert the untrained input model)",
+                )
+        else:
+            logger.warning(f"Output adapter '{name}' has no model_path; cannot check the tool wrote its model")
         if pull_image is not None and not pull_image(spec["image"]):
             return _done(-1, f"Failed to pull output adapter image: {spec['image']}")
         # The output adapter reads the tool's outputs next to the task inputs

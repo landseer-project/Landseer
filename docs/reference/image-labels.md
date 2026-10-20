@@ -56,6 +56,13 @@ Stamped at build time, never written in the Dockerfile (CI's
 |---|---|---|
 | `org.landseer.stage` | `pre_training` / `during_training` / `post_training` / `deployment` | Pipeline stage; read by stage validation when `tools.yaml` has no `defense_stage` |
 | `org.landseer.defense_type` | `adversarial` | Defense family; matches evaluator `defense_types` |
+| `org.landseer.model_input` | `none` / `architecture` / `weights` | Which model the tool reads: none, the untrained `config_model.py` network, or the upstream trained `model.pt`. Required when `org.landseer.framework` is TensorFlow |
+| `org.landseer.model_output` | `none` / `model` | Whether the tool writes a trained model. Required when `org.landseer.framework` is TensorFlow |
+| `org.landseer.model_path` | `model_tf/model.keras` | Optional: the tool's model file, relative to `/input` (where the input adapter puts it) and `/output` (where the tool must save it). Default for TensorFlow: `model_tf/model.keras` |
+
+For a tool whose framework is not PyTorch these labels select its
+[adapters](../how-to/adapter-layers.md#automatic-selection-from-image-labels)
+when `tools.yaml` names none; the same keys in `tools.yaml` override them.
 
 **Adapter** (`org.landseer.type=adapter`, see [adapter layers](../how-to/adapter-layers.md))
 

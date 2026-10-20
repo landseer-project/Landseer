@@ -7,7 +7,7 @@ Tests cover:
 - ``framework`` field and the warning for non-standard tools without an output adapter
 - adapter_task_config and its injection into task config by TaskFactory
 - Task hash/dedup: adapters are part of a task's identity
-- The repository's configs/tools.yaml declares in_freeat with its adapters
+- The repository's configs/tools.yaml leaves in_freeat's adapters to its image labels
 """
 
 import logging
@@ -166,10 +166,16 @@ class TestAdapterTaskConfig:
         assert adapter_task_config(tool) == {}
 
     def test_spec_contents(self):
+        # A tensorflow tool's model path defaults to model_tf/model.keras; the
+        # output adapter carries it so the worker can check the tool wrote it.
+        env = {"LANDSEER_MODEL_PATH": "model_tf/model.keras"}
         assert adapter_task_config(_tf_tool()) == {
             "adapters": {
-                "input": {"name": "torch-to-tf", "image": "test/adapter:v1", "command": "python3 main.py", "env": {}},
-                "output": {"name": "tf-to-torch", "image": "test/adapter:v1", "command": "python3 main.py", "env": {}},
+                "input": {"name": "torch-to-tf", "image": "test/adapter:v1", "command": "python3 main.py", "env": env},
+                "output": {
+                    "name": "tf-to-torch", "image": "test/adapter:v1", "command": "python3 main.py", "env": env,
+                    "model_path": "model_tf/model.keras",
+                },
             }
         }
 
@@ -228,14 +234,19 @@ class TestTaskIdentity:
 
 
 class TestRepositoryToolsYaml:
-    def test_in_freeat_declares_adapters(self):
+    def test_in_freeat_adapters_come_from_labels(self):
+        """in_freeat names no adapters; they are selected from its image labels
+        (tests/pipeline/test_auto_adapters_unit.py checks the selection)."""
         tools = load_tools_from_yaml(str(REPO_ROOT / "configs" / "tools.yaml"))
         tool = tools["in_freeat"]
         assert tool.defense_stage == "during_training"
         assert tool.framework == "tensorflow"
-        assert tool.adapters.input.target_framework == "tensorflow"
-        assert tool.adapters.output.source_framework == "tensorflow"
-        assert tool.adapters.output.target_framework == "pytorch"
+        assert tool.adapters is None
+        catalog = tool.adapter_catalog
+        assert catalog["pytorch_to_tensorflow"].target_framework == "tensorflow"
+        assert catalog["tensorflow_to_pytorch"].source_framework == "tensorflow"
+        assert catalog["tensorflow_to_pytorch"].target_framework == "pytorch"
+        assert catalog["config_model_to_tensorflow"].auto_select is False
 
     def test_existing_tools_have_no_adapters(self):
         tools = load_tools_from_yaml(str(REPO_ROOT / "configs" / "tools.yaml"))
