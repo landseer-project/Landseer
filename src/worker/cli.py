@@ -1228,6 +1228,12 @@ class Worker:
 
             if effective_use_cache:
                 cached_path = self._check_cache(cache_key, task, parent_hashes, cache_context)
+                if cached_path and self._eval_not_cacheable(task, cached_path):
+                    # Entries cached before skips stopped being cached: recompute.
+                    logger.warning(
+                        f"Ignoring cached skipped/failed evaluation for task {task.id}; re-running"
+                    )
+                    cached_path = None
                 if cached_path:
                     logger.info(f"Cache hit for task {task.id}")
                     workspace_out = self._runner.workspace_dir / task.id / "output"
@@ -1269,13 +1275,13 @@ class Worker:
 
             # Store in cache if successful.
             # For evaluation tasks, only cache when the evaluation itself
-            # succeeded — failures (e.g. "model.pt not found") should not be
-            # persisted so the evaluator re-runs on the next attempt.
+            # produced metrics: failures (e.g. "model.pt not found") and skips
+            # are not persisted, so the evaluator re-runs on the next attempt.
             should_cache = (
                 effective_use_cache
                 and result.success
                 and result.output_path
-                and not self._eval_failed(task, result.output_path)
+                and not self._eval_not_cacheable(task, result.output_path)
             )
             if should_cache:
                 self._store_in_cache(
@@ -1376,12 +1382,14 @@ class Worker:
             metadata={"execution_time_ms": execution_time_ms},
         )
     
-    def _eval_failed(self, task: TaskInfo, output_path: Path) -> bool:
-        """Return True when an evaluation task's evaluation_results.json reports failure.
+    def _eval_not_cacheable(self, task: TaskInfo, output_path: Path) -> bool:
+        """Return True when an evaluation task's evaluation_results.json reports
+        failure or a skip.
 
-        Prevents caching evaluation failures so the evaluator re-runs on the
-        next attempt once the underlying issue (e.g. missing model.pt) is fixed.
-        Non-evaluation tasks always return False.
+        Neither is cached, so the evaluator re-runs on the next attempt once the
+        underlying issue (e.g. missing model.pt, a lost upstream output) is
+        fixed, instead of replaying -1 metrics. Non-evaluation tasks always
+        return False.
         """
         if task.task_type != "evaluation":
             return False
@@ -1389,7 +1397,7 @@ class Worker:
         if results_file.exists():
             try:
                 payload = json.loads(results_file.read_text())
-                return not payload.get("success", True)
+                return not payload.get("success", True) or bool(payload.get("skipped"))
             except Exception:
                 pass
         # No results file means the container crashed — treat as failure

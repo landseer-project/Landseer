@@ -1,4 +1,4 @@
-"""Tests for evaluator required_artifacts materialization and skip behavior."""
+"""Tests for evaluator required_artifacts materialization and failure on missing ones."""
 
 from __future__ import annotations
 
@@ -137,7 +137,7 @@ class TestMaterializeRequiredArtifacts:
         assert json.loads(payload)["from"] == "tool"
         mock.run.assert_called_once()
 
-    def test_skips_when_missing(self, workspace: Path, tmp_path: Path):
+    def test_fails_when_missing(self, workspace: Path, tmp_path: Path):
         runner = TaskRunner(workspace_dir=workspace)
         mock = _mock_container(runner)
 
@@ -147,15 +147,18 @@ class TestMaterializeRequiredArtifacts:
         task = _eval_task(required=["missing_sidecar.bin"], metrics=["demographic_parity"])
         result = runner.run_task(task, input_path=data_dir)
 
-        assert result.success
-        assert result.artifacts.get("skipped") is True
+        # A missing input is a failure, not a successful skip with -1 metrics.
+        assert not result.success
+        assert "missing_sidecar.bin" in result.error_message
+        assert result.artifacts.get("missing_artifacts") == ["missing_sidecar.bin"]
         mock.run.assert_not_called()
 
         results_path = workspace / task.id / "output" / "evaluation_results.json"
         payload = json.loads(results_path.read_text())
-        assert payload["skipped"] is True
-        assert "missing_sidecar.bin" in payload["skip_reason"]
-        assert payload["metrics"]["demographic_parity"] == -1.0
+        assert payload["success"] is False
+        assert payload["skipped"] is False
+        assert "missing_sidecar.bin" in payload["error"]
+        assert payload["metrics"] == {}
 
     def test_rejects_path_traversal(self, workspace: Path, tmp_path: Path):
         runner = TaskRunner(workspace_dir=workspace)
@@ -167,8 +170,8 @@ class TestMaterializeRequiredArtifacts:
         task = _eval_task(required=["../outside.txt"])
         result = runner.run_task(task, input_path=data_dir)
 
-        assert result.success
-        assert result.artifacts.get("skipped") is True
+        assert not result.success
+        assert result.artifacts.get("missing_artifacts") == ["../outside.txt"]
         mock.run.assert_not_called()
 
     def test_non_evaluation_tasks_ignore_required_artifacts(

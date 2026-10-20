@@ -152,7 +152,14 @@ class EvaluatorDefinition(BaseModel):
     )
     metrics: List[str] = Field(default_factory=list, description="Metrics produced")
     defense_types: List[str] = Field(default_factory=list, description="Applicable defense types")
-    
+    applies_to: Dict[str, List[str]] = Field(
+        default_factory=dict,
+        description=(
+            "Workflows this evaluator is scheduled for: any of `datasets`, "
+            "`dataset_variants`, `tools` (a workflow tool from the list). Empty = every workflow."
+        ),
+    )
+
     def to_tool(self) -> ToolDefinition:
         """Convert to ToolDefinition for task creation."""
         return ToolDefinition(
@@ -229,7 +236,8 @@ def load_evaluators_from_yaml(yaml_path: str) -> Dict[str, EvaluatorDefinition]:
             required_artifacts=eval_data.get('required_artifacts', []),
             artifact_roots=[str(p).strip() for p in per_roots if str(p).strip()],
             metrics=eval_data.get('metrics', []),
-            defense_types=eval_data.get('defense_types', [])
+            defense_types=eval_data.get('defense_types', []),
+            applies_to=eval_data.get('applies_to') or {},
         )
     
     logger.info(f"Loaded {len(evaluators)} evaluators from {yaml_path}")
@@ -360,6 +368,37 @@ def select_evaluators_for_attack_config(
     return {}
 
 
+def _tool_token(name: str) -> str:
+    """Compare tool names and registry keys alike ("in-fair" == "in_fair")."""
+    return str(name).strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def evaluator_applies(
+    eval_def: EvaluatorDefinition,
+    dataset_name: Optional[str],
+    dataset_variant: Optional[str],
+    workflow_tools: set,
+) -> bool:
+    """
+    Whether ``eval_def.applies_to`` admits this workflow.
+
+    A rule on the dataset or variant is ignored when the caller does not know
+    it (None); a ``tools`` rule needs one of its tools among ``workflow_tools``
+    (tokens from ``_tool_token``).
+    """
+    rules = eval_def.applies_to or {}
+    datasets = rules.get("datasets") or []
+    if datasets and dataset_name is not None and dataset_name not in datasets:
+        return False
+    variants = rules.get("dataset_variants") or []
+    if variants and dataset_variant is not None and dataset_variant not in variants:
+        return False
+    tools = rules.get("tools") or []
+    if tools and not ({_tool_token(t) for t in tools} & workflow_tools):
+        return False
+    return True
+
+
 def add_evaluation_tasks_to_workflow(
     workflow: Workflow,
     evaluators: Dict[str, EvaluatorDefinition],
@@ -367,19 +406,25 @@ def add_evaluation_tasks_to_workflow(
     last_deployment_task: Optional[Task] = None,
     attack_config_path: Optional[str] = None,
     attack_config: Optional[Dict[str, Any]] = None,
+    dataset_name: Optional[str] = None,
+    dataset_variant: Optional[str] = None,
 ) -> List[Task]:
     """
     Add evaluation tasks to a workflow.
-    
-    ALL evaluators are added to every workflow. Evaluators with
-    missing required artifacts will skip gracefully at runtime.
-    
+
+    Every evaluator whose ``applies_to`` admits the workflow is added. An
+    evaluator that is added but then lacks a required artifact fails at
+    runtime, so ``applies_to`` must leave out workflows that cannot produce it
+    (e.g. backdoor on clean datasets).
+
     Args:
         workflow: Workflow to add tasks to
         evaluators: Dictionary of evaluator definitions
         pipeline_id: Pipeline ID for task tracking
         last_deployment_task: Last task from deployment stage (dependency)
-        
+        dataset_name: Run's dataset, for ``applies_to.datasets``
+        dataset_variant: Run's dataset variant, for ``applies_to.dataset_variants``
+
     Returns:
         List of created evaluation tasks
     """
@@ -399,8 +444,13 @@ def add_evaluation_tasks_to_workflow(
         tool_token = str(wf_task.tool.name).strip().lower().replace("-", "_").replace(" ", "_")
         if tool_token in {"in_dp", "post_dp", "deploy_dp", "dp"} or "differential_privacy" in tool_token:
             defense_types.add("differential_privacy")
-    
+    workflow_tools = {
+        _tool_token(t.tool.name) for t in workflow.tasks if t.task_type != TaskType.EVALUATION
+    }
+
     for eval_name, eval_def in evaluators.items():
+        if not evaluator_applies(eval_def, dataset_name, dataset_variant, workflow_tools):
+            continue
         # Create task config
         task_config = {
             "stage": "evaluation",
@@ -941,8 +991,10 @@ def create_workflow_from_combination(
             last_deployment_task=last_deployment_task,
             attack_config_path=attack_config_path,
             attack_config=attack_config,
+            dataset_name=config.dataset.name,
+            dataset_variant=config.dataset.variant,
         )
-    
+
     return workflow
 
 
