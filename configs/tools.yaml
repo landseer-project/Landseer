@@ -1,3 +1,49 @@
+# Adapters: optional containers run inside a tool's task, before it (input:
+# standard inputs -> the format the tool needs) and after it (output: the tool's
+# outputs -> the standard model.pt). Tools reference them by key under
+# `adapters: {input: ..., output: ...}`. See docs/how-to/adapter-layers.md.
+adapters:
+  # A tool that names no adapters gets them automatically when its image's
+  # org.landseer.framework is not pytorch: an input adapter (pytorch -> its
+  # framework) unless org.landseer.model_input is none, an output adapter
+  # (its framework -> pytorch) when org.landseer.model_output is model. They are
+  # matched on source_framework/target_framework among the adapters below with
+  # auto_select (default true). Tools may set framework / model_input /
+  # model_output / model_path here to override their image labels.
+
+  # config_model.py (+ model.pt when an upstream task produced one) -> /input/model_tf/model.keras.
+  # Picked automatically; the tool's model_input chooses the weights
+  # (architecture: fresh initialisation, weights: the upstream model.pt).
+  pytorch_to_tensorflow:
+    name: pytorch-to-tensorflow
+    source_framework: pytorch
+    target_framework: tensorflow
+    container:
+      image: ghcr.io/landseer-project/adapter_pytorch_tensorflow:v1
+      command: python main.py --direction input
+      runtime: null
+
+  # Architecture only (fresh initialisation), for naming explicitly under a tool's adapters.
+  config_model_to_tensorflow:
+    name: config-model-to-tensorflow
+    source_framework: pytorch
+    target_framework: tensorflow
+    auto_select: false
+    container:
+      image: ghcr.io/landseer-project/adapter_pytorch_tensorflow:v1
+      command: python main.py --direction input --weights none
+      runtime: null
+
+  # /input/model_tf/model.keras (written by the tool) -> /output/model.pt
+  tensorflow_to_pytorch:
+    name: tensorflow-to-pytorch
+    source_framework: tensorflow
+    target_framework: pytorch
+    container:
+      image: ghcr.io/landseer-project/adapter_pytorch_tensorflow:v1
+      command: python main.py --direction output
+      runtime: null
+
 tools:
   # Pre-training tools
   pre_noop:
@@ -153,6 +199,42 @@ tools:
     container:
       image: ghcr.io/landseer-project/in_watermarkinguchida:v3
       command: python3 main.py --scale 0.1 --epoch 200 --batch_size 64 --embed_dim 256
+      runtime: null
+
+  # Free adversarial training stays in TensorFlow; the adapters convert the
+  # pipeline's PyTorch model to Keras and the trained model back to model.pt.
+  in_freeat:
+    name: in-freeat
+    defense_stage: during_training
+    is_baseline: false
+    # Adapters come from the image labels (model_input=architecture,
+    # model_output=model, model_path=model_tf/model.keras).
+    framework: tensorflow
+    container:
+      image: ghcr.io/landseer-project/in_freeat:v1
+      command: python main.py
+      runtime: null
+
+  # PGD adversarial training (Madry et al.), ported from the official TensorFlow
+  # code. Adapters come from the image labels, as for in_freeat.
+  in_madry:
+    name: in-madry
+    defense_stage: during_training
+    is_baseline: false
+    framework: tensorflow
+    container:
+      image: ghcr.io/landseer-project/in_madry:v1
+      command: python main.py
+      runtime: null
+
+  in_madry_celeba:
+    name: in-madry-celeba
+    defense_stage: during_training
+    is_baseline: false
+    framework: tensorflow
+    container:
+      image: ghcr.io/landseer-project/in_madry:v1
+      command: python main.py --dataset celeba
       runtime: null
 
   watermarknn:
