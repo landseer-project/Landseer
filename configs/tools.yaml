@@ -24,7 +24,7 @@ tools:
     defense_stage: pre_training
     is_baseline: false
     container:
-      image: ghcr.io/landseer-project/pre_xgbod:v3
+      image: ghcr.io/landseer-project/pre_xgbod:v4
       command: python3 main.py
       runtime: null
 
@@ -33,7 +33,7 @@ tools:
     defense_stage: pre_training
     is_baseline: false
     container:
-      image: ghcr.io/landseer-project/pre_xgbod_celeba:v2
+      image: ghcr.io/landseer-project/pre_xgbod_celeba:v3
       command: python3 main.py
       runtime: null
   

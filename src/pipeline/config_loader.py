@@ -18,7 +18,7 @@ import threading
 import yaml
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Tuple, Union
+from typing import Dict, List, Optional, Any, Tuple, Union, Literal
 from itertools import product
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -159,6 +159,18 @@ class EvaluatorDefinition(BaseModel):
             "`dataset_variants`, `tools` (a workflow tool from the list). Empty = every workflow."
         ),
     )
+    input: Literal["final", "training_input"] = Field(
+        default="final",
+        description=(
+            "What the evaluator receives as /input: `final` = the dataset plus every upstream "
+            "output (default); `training_input` = exactly the input the workflow's in-training "
+            "task received (dataset plus pre-training outputs)."
+        ),
+    )
+    enabled_by_attacks: List[str] = Field(
+        default_factory=list,
+        description="Attack-config flags that select this evaluator (in addition to the built-in map).",
+    )
 
     def to_tool(self) -> ToolDefinition:
         """Convert to ToolDefinition for task creation."""
@@ -238,6 +250,8 @@ def load_evaluators_from_yaml(yaml_path: str) -> Dict[str, EvaluatorDefinition]:
             metrics=eval_data.get('metrics', []),
             defense_types=eval_data.get('defense_types', []),
             applies_to=eval_data.get('applies_to') or {},
+            input=eval_data.get('input', 'final'),
+            enabled_by_attacks=eval_data.get('enabled_by_attacks') or [],
         )
     
     logger.info(f"Loaded {len(evaluators)} evaluators from {yaml_path}")
@@ -355,6 +369,11 @@ def select_evaluators_for_attack_config(
     }
 
     selected_keys = {attack_to_evaluator[name] for name in enabled if name in attack_to_evaluator}
+    # Evaluators may also declare the attack flags that enable them (evaluators.yaml).
+    selected_keys |= {
+        name for name, ev in evaluators.items()
+        if set(getattr(ev, "enabled_by_attacks", None) or ()) & enabled
+    }
     if "clean" in evaluators:
         selected_keys.add("clean")
 
@@ -459,6 +478,7 @@ def add_evaluation_tasks_to_workflow(
             "metrics": eval_def.metrics,
             "required_artifacts": eval_def.required_artifacts,
             "artifact_roots": _merged_artifact_roots(eval_def),
+            "input_scope": eval_def.input,
             "workflow_tools_by_stage": tools_by_stage,
             "workflow_defense_types": sorted(defense_types),
             "attack_config_path": attack_config_path,

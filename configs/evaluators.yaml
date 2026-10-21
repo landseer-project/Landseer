@@ -3,6 +3,10 @@
 # Published images: ghcr.io/landseer-project/evals/<name>:<tag>.
 # artifact_roots: optional host directories that contain evaluator sidecars.
 # Can be set globally (here) and/or per evaluator.
+# input: what the evaluator gets as /input. `final` (default) = dataset plus every
+#   upstream output; `training_input` = exactly the input of the workflow's
+#   in-training task (dataset plus pre-training outputs).
+# enabled_by_attacks: attack-config flags that select this evaluator.
 #
 artifact_roots:
   - /data/landseer/eval_artifacts
@@ -91,6 +95,28 @@ evaluators:
     metrics:
       - ood_auc
       - fpr_at_95_tpr
+    defense_types:
+      - outlier_removal
+
+  sanitization:
+    name: sanitization
+    container:
+      image: ghcr.io/landseer-project/evals/sanitization:v2
+      command: ""
+    required_artifacts: []
+    input: training_input
+    enabled_by_attacks:
+      - backdoor
+      - outlier
+    applies_to:
+      dataset_variants:
+        - poisoned
+      tools:
+        - pre-xgbod
+        - pre-xgbod-celeba
+    metrics:
+      - xgbod_train_roc_auc
+      - xgbod_train_precision_at_n
     defense_types:
       - outlier_removal
 
