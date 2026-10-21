@@ -174,7 +174,8 @@ evaluators:
     container:
       image: ghcr.io/landseer-project/evals/privacy:v4
       command: ""
-    required_artifacts: []
+    required_artifacts:
+      - celeba_shadows
     metrics:
       - mia_auc
     defense_types:

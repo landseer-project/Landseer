@@ -52,7 +52,6 @@ from model_loader import load_torch_model_for_eval
 
 # Folder containing ONLY shadow models model_000 to model_127.
 SHADOW_SCORES_SUBDIR = "celeba_shadows"
-# SHADOW_SCORES_DIR = Path("/app/celeba_shadows")
 BUILTIN_SHADOW_DIR = Path("/app/celeba_shadows")
 
 
