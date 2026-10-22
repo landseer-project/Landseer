@@ -205,6 +205,18 @@ def clone_file(src: PathLike, dst: PathLike) -> str:
     return "copy"
 
 
+def hardlink_or_copy(src: PathLike, dst: PathLike) -> str:
+    """Hard-link ``src`` to ``dst``, else copy (other filesystem, link limit); return the method."""
+    try:
+        os.link(src, dst)
+        return "hardlink"
+    except OSError as exc:
+        if exc.errno not in _LINK_FALLBACK_ERRNOS:
+            raise
+    shutil.copy2(src, dst)
+    return "copy"
+
+
 def clone_tree(src: PathLike, dst: PathLike) -> Dict[str, int]:
     """Copy a tree with :func:`clone_file`; return a count per method used."""
     counts: Dict[str, int] = {}

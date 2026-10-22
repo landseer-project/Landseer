@@ -5,6 +5,15 @@ Provides high-level interface for:
 - Uploading task artifacts to MinIO
 - Downloading artifacts with local caching
 - Tracking artifact metadata in database
+
+Dataset de-duplication: many tools copy their whole input dataset into their
+output (CelebA: ~2.6 GB, 200k files per task). A file whose relative path,
+size and sha256 equal the same entry in the run's dataset manifest is not
+uploaded; the completion marker still lists it, with ``source: dataset`` and
+the dataset's ``dataset_content_id``. A download rebuilds such files from this
+worker's verified local copy of that dataset (hard link, else copy). Readers
+that predate this see them as missing and treat the artifact as a miss.
+Set LANDSEER_ARTIFACT_DATASET_DEDUP=0 to upload everything.
 """
 
 import hashlib
@@ -16,10 +25,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple
 
+from ..common import dataset_manifest as dsm
 from ..common import get_logger
-from ..common.fsutil import clone_tree, make_tree_read_only
+from ..common.fsutil import clone_tree, hardlink_or_copy, make_tree_read_only
 from .local_lru import LocalLRU
 from .minio_store import (
     ARTIFACT_COMPLETE_MARKER,
@@ -29,6 +39,13 @@ from .minio_store import (
 )
 
 logger = get_logger(__name__)
+
+# Marker ``source`` of a file left out of the upload because the dataset holds it.
+DATASET_SOURCE = "dataset"
+
+
+def dataset_dedup_enabled() -> bool:
+    return os.environ.get("LANDSEER_ARTIFACT_DATASET_DEDUP", "1").lower() not in ("0", "false", "no")
 
 
 @dataclass
@@ -100,6 +117,15 @@ class ArtifactManager:
         
         # Track artifacts
         self._artifacts: Dict[str, ArtifactInfo] = {}
+
+        # content_id -> (verified local dataset dir, its manifest, where it is
+        # published: name/variant/minio_key). See register_dataset.
+        self._datasets: Dict[str, Tuple[Path, Dict[str, Any], Dict[str, Any]]] = {}
+        # Dataset whose files uploads leave out (the active run's).
+        self._active_dataset: Optional[str] = None
+        # (content_id, published location from the marker) -> local verified
+        # dir, for datasets not registered here (the worker syncs from MinIO).
+        self.dataset_resolver: Optional[Callable[[str, Dict[str, Any]], Optional[Path]]] = None
         
         logger.info(f"Artifact manager initialized. Local cache: {self.local_cache_dir}")
     
@@ -138,6 +164,108 @@ class ArtifactManager:
         json_str = json.dumps(identity, sort_keys=True, separators=(',', ':'))
         return hashlib.blake2s(json_str.encode()).hexdigest()
     
+    # =========================================================================
+    # Dataset De-duplication
+    # =========================================================================
+
+    def register_dataset(
+        self,
+        path: Path,
+        manifest: Dict[str, Any],
+        source: Optional[Dict[str, Any]] = None,
+        active: bool = True,
+    ) -> None:
+        """
+        Record a local dataset dir already verified against ``manifest``.
+
+        Downloads rebuild left-out files from it; with ``active`` uploads also
+        leave out files identical to its manifest entries.
+        """
+        content_id = manifest.get("content_id")
+        if not content_id or not isinstance(manifest.get("files"), dict):
+            return
+        self._datasets[content_id] = (Path(path), manifest, dict(source or {}))
+        if active:
+            self._active_dataset = content_id
+
+    def set_active_dataset(self, content_id: Optional[str]) -> None:
+        """Dataset uploads leave files out for (None: upload everything)."""
+        self._active_dataset = content_id if content_id in self._datasets else None
+
+    def _dataset_copies(self, files: Dict[str, Dict[str, Any]]) -> Dict[str, str]:
+        """rel -> dataset content_id for files identical (path, size, sha256) to the active dataset's."""
+        if not dataset_dedup_enabled() or self._active_dataset not in self._datasets:
+            return {}
+        content_id = self._active_dataset
+        dataset_files = self._datasets[content_id][1]["files"]
+        copies = {}
+        for rel, entry in files.items():
+            # manifest.json shares its object key with the cache manifest.
+            if rel == ARTIFACT_MANIFEST:
+                continue
+            ds = dataset_files.get(rel)
+            if (
+                isinstance(ds, dict)
+                and int(ds.get("size", -1)) == entry["size"]
+                and ds.get("sha256") == entry["sha256"]
+            ):
+                copies[rel] = content_id
+        return copies
+
+    def _dataset_dir(self, content_id: str, location: Dict[str, Any]) -> Optional[Path]:
+        """Local verified copy of dataset content_id, or None."""
+        known = self._datasets.get(content_id)
+        if known and known[0].is_dir():
+            return known[0]
+        if self.dataset_resolver is not None:
+            try:
+                return self.dataset_resolver(content_id, location)
+            except Exception as e:
+                logger.warning(f"Could not get dataset {content_id[:12]} locally: {e}")
+        return None
+
+    def _restore_dataset_files(
+        self,
+        output: Path,
+        expected: Dict[str, Dict[str, Any]],
+        datasets: Dict[str, Dict[str, Any]],
+    ) -> Set[str]:
+        """
+        Rebuild the files the marker says were left out, from local dataset copies.
+
+        Hard-linked (copied across filesystems). Each source must match the
+        marker's size and sha256; sha256 comes from the dataset dir's digest
+        sidecar (keyed by size and mtime, as for dataset verification), so a
+        stale sidecar is the only way a changed file could pass. Raises when a
+        dataset or file is unavailable, which makes the download a miss.
+        """
+        by_dataset: Dict[str, List[str]] = {}
+        for rel, entry in expected.items():
+            if entry.get("source") == DATASET_SOURCE:
+                by_dataset.setdefault(str(entry.get("dataset_content_id")), []).append(rel)
+        methods: Dict[str, int] = {}
+        for content_id, rels in by_dataset.items():
+            root = self._dataset_dir(content_id, datasets.get(content_id) or {})
+            if root is None:
+                raise RuntimeError(f"dataset {content_id[:12]} is not available on this worker")
+            actual = dsm.hash_files(root, rels)
+            bad = [
+                rel for rel in rels
+                if actual.get(rel) != {"size": expected[rel]["size"], "sha256": expected[rel].get("sha256")}
+            ]
+            if bad:
+                raise RuntimeError(
+                    f"dataset {content_id[:12]} at {root} does not hold {len(bad)} files (e.g. {bad[:3]})"
+                )
+            for rel in rels:
+                dest = output / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                method = hardlink_or_copy(root / rel, dest)
+                methods[method] = methods.get(method, 0) + 1
+        if methods:
+            logger.info(f"Rebuilt dataset files from local copies: {methods}")
+        return {rel for rels in by_dataset.values() for rel in rels}
+
     # =========================================================================
     # Local Cache Operations
     # =========================================================================
@@ -379,15 +507,22 @@ class ArtifactManager:
         # Upload all files, then the manifest, then the completion marker
         # LAST: artifact_exists() only reports a hit once the marker is there,
         # so a crash mid-upload leaves a miss rather than a truncated hit.
+        # Byte-identical copies of dataset files are left out (module docstring).
         prefix = self.minio.get_artifact_key(cache_key)
         files = self._describe_files(source_dir)
-        count = self.minio.upload_directory(source_dir, prefix)
-        if count != len(files):
+        from_dataset = self._dataset_copies(files)
+        if from_dataset:
+            count = self.minio.upload_directory(source_dir, prefix, exclude=set(from_dataset))
+        else:
+            count = self.minio.upload_directory(source_dir, prefix)
+        if count != len(files) - len(from_dataset):
             logger.error(
-                f"Uploaded {count}/{len(files)} files for {cache_key[:12]}; "
+                f"Uploaded {count}/{len(files) - len(from_dataset)} files for {cache_key[:12]}; "
                 "not marking artifact complete"
             )
             return False
+        for rel, content_id in from_dataset.items():
+            files[rel].update(source=DATASET_SOURCE, dataset_content_id=content_id)
 
         manifest_path = source_dir.parent / ARTIFACT_MANIFEST
         if manifest_path.exists():
@@ -404,6 +539,11 @@ class ArtifactManager:
             "files": files,
             "completed_at": datetime.utcnow().isoformat(),
         }
+        if from_dataset:
+            # Where each dataset is published, so a worker without it can sync it.
+            marker["datasets"] = {
+                cid: self._datasets[cid][2] for cid in set(from_dataset.values())
+            }
         if not self.minio.upload_bytes(
             json.dumps(marker, sort_keys=True).encode(),
             f"{prefix}{ARTIFACT_COMPLETE_MARKER}",
@@ -416,7 +556,11 @@ class ArtifactManager:
             self._artifacts[cache_key].storage_type = "both"
             self._artifacts[cache_key].minio_key = prefix
 
-        logger.info(f"Uploaded artifact to MinIO: {cache_key[:12]} ({count} files)")
+        skipped = (
+            f", {len(from_dataset)} identical to dataset {self._active_dataset[:12]} left out"
+            if from_dataset else ""
+        )
+        logger.info(f"Uploaded artifact to MinIO: {cache_key[:12]} ({count} files{skipped})")
         return True
 
     def download_from_minio(self, cache_key: str) -> Optional[Path]:
@@ -436,7 +580,8 @@ class ArtifactManager:
             return None
         
         prefix = self.minio.get_artifact_key(cache_key)
-        expected = self._expected_files(prefix)
+        marker = self._read_marker(prefix)
+        expected = self._marker_files(marker)
         incoming = sum(e["size"] for e in expected.values()) if expected else 0
         self._make_room(incoming, protect=cache_key)
 
@@ -469,7 +614,15 @@ class ArtifactManager:
                         shutil.copy2(dest, staging_output / ARTIFACT_MANIFEST)
 
                 if expected is not None:
-                    mismatch = self._mismatched_files(staging_output, expected)
+                    restored = self._restore_dataset_files(
+                        staging_output, expected, self._marker_datasets(marker)
+                    )
+                    # Restored files were checked against the dataset's digests.
+                    check = {
+                        rel: ({"size": e["size"]} if rel in restored else e)
+                        for rel, e in expected.items()
+                    }
+                    mismatch = self._mismatched_files(staging_output, check)
                     if any(mismatch.values()):
                         details = ", ".join(f"{k}={v[:5]}" for k, v in mismatch.items() if v)
                         raise RuntimeError(
@@ -490,13 +643,8 @@ class ArtifactManager:
         logger.info(f"Downloaded artifact from MinIO: {cache_key[:12]} ({count} files)")
         return final / "output"
 
-    def _expected_files(self, prefix: str) -> Optional[Dict[str, Dict[str, Any]]]:
-        """
-        File list from the completion marker, or None for legacy entries.
-
-        Each entry is ``{"size": int, "sha256": str}``. Markers written before
-        checksums were added store only the size, so ``sha256`` may be absent.
-        """
+    def _read_marker(self, prefix: str) -> Optional[Dict[str, Any]]:
+        """The completion marker under prefix, or None (legacy entry or unreadable)."""
         marker_key = f"{prefix}{ARTIFACT_COMPLETE_MARKER}"
         if not self.minio.exists(marker_key):
             return None
@@ -504,9 +652,22 @@ class ArtifactManager:
         if raw is None:
             return None
         try:
-            files = json.loads(raw).get("files")
-        except (ValueError, AttributeError):
+            marker = json.loads(raw)
+        except ValueError:
             return None
+        return marker if isinstance(marker, dict) else None
+
+    @staticmethod
+    def _marker_files(marker: Optional[Dict[str, Any]]) -> Optional[Dict[str, Dict[str, Any]]]:
+        """
+        File list from the completion marker, or None for legacy entries.
+
+        Each entry is ``{"size": int, "sha256": str}``. Markers written before
+        checksums were added store only the size, so ``sha256`` may be absent.
+        Files left out as dataset copies also carry ``source`` and
+        ``dataset_content_id``.
+        """
+        files = marker.get("files") if marker else None
         if not isinstance(files, dict):
             return None
         expected: Dict[str, Dict[str, Any]] = {}
@@ -516,7 +677,22 @@ class ArtifactManager:
             expected[str(rel)] = {"size": int(entry["size"])}
             if entry.get("sha256"):
                 expected[str(rel)]["sha256"] = str(entry["sha256"])
+            if entry.get("source") == DATASET_SOURCE:
+                expected[str(rel)]["source"] = DATASET_SOURCE
+                expected[str(rel)]["dataset_content_id"] = str(entry.get("dataset_content_id"))
         return expected
+
+    @staticmethod
+    def _marker_datasets(marker: Optional[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        """content_id -> published location of the datasets the marker's files come from."""
+        datasets = (marker or {}).get("datasets")
+        if not isinstance(datasets, dict):
+            return {}
+        return {str(k): v for k, v in datasets.items() if isinstance(v, dict)}
+
+    def _expected_files(self, prefix: str) -> Optional[Dict[str, Dict[str, Any]]]:
+        """File list from the completion marker under prefix (see _marker_files)."""
+        return self._marker_files(self._read_marker(prefix))
 
     # =========================================================================
     # High-Level Operations

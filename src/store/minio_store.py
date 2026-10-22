@@ -10,7 +10,7 @@ import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, BinaryIO, Dict, Generator, List, Optional, Union
+from typing import Any, BinaryIO, Collection, Dict, Generator, List, Optional, Union
 
 from ..common import get_logger
 
@@ -225,7 +225,8 @@ class MinioStore:
         self,
         local_dir: Union[str, Path],
         prefix: str,
-        recursive: bool = True
+        recursive: bool = True,
+        exclude: Optional[Collection[str]] = None,
     ) -> int:
         """
         Upload a directory to MinIO.
@@ -234,6 +235,7 @@ class MinioStore:
             local_dir: Path to local directory
             prefix: Object key prefix (e.g., "artifacts/task_1/")
             recursive: Include subdirectories
+            exclude: Posix paths relative to local_dir that are not uploaded
             
         Returns:
             Number of files uploaded
@@ -253,6 +255,8 @@ class MinioStore:
         for file_path in local_dir.glob(pattern):
             if file_path.is_file():
                 rel_path = file_path.relative_to(local_dir)
+                if exclude and rel_path.as_posix() in exclude:
+                    continue
                 object_key = f"{prefix.rstrip('/')}/{rel_path.as_posix()}"
                 
                 if self.upload_file(file_path, object_key):

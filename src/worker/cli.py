@@ -8,6 +8,7 @@ executes them in containers, and reports results back.
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import sys
@@ -351,6 +352,9 @@ class Worker:
                     "Run helper_scripts/setup_minio_tiering.sh and check .env.db."
                 )
             logger.info("Using two-level cache (local staging + MinIO/GCS)")
+            # Artifacts that left out dataset copies are rebuilt from a local
+            # copy of that dataset (see src/store/artifact_manager.py).
+            self._two_level_cache.manager.dataset_resolver = self._local_dataset_for_content
             if not same_filesystem(self.cache_dir, self.workspace_dir):
                 logger.warning(
                     f"Cache dir {self.cache_dir} and workspace {self.workspace_dir} are on "
@@ -1050,6 +1054,73 @@ class Worker:
                 paths.append(p)
                 seen.add(key)
     
+    def _register_cache_dataset(self, data_dir: Optional[Path], dataset_id: Optional[str]) -> None:
+        """
+        Tell the artifact cache which verified dataset copy this task runs on.
+
+        Uploads then leave out files identical to it, and downloads rebuild
+        such files from it. Only a dir that matched the backend's manifest
+        counts; otherwise uploads keep every file.
+        """
+        manager = getattr(self._two_level_cache, "manager", None)
+        if manager is None or not hasattr(manager, "register_dataset"):
+            return
+        manifest = self._dataset_manifest
+        if data_dir is None or not isinstance(manifest, dict) or dataset_id != manifest.get("content_id"):
+            manager.set_active_dataset(None)
+            return
+        info = self._dataset_info or {}
+        location = {
+            key: info.get(key)
+            for key in ("name", "variant", "minio_key", "manifest_minio_key")
+            if info.get(key)
+        }
+        manager.register_dataset(data_dir, manifest, location, active=True)
+
+    def _local_dataset_for_content(self, content_id: str, location: Dict[str, Any]) -> Optional[Path]:
+        """
+        A verified local copy of dataset content_id, syncing it from MinIO if
+        it is still published there (location comes from the artifact marker).
+        None makes the artifact download a cache miss.
+        """
+        known = [ctx["path"] for ctx in self._run_contexts.values()
+                 if (ctx.get("manifest") or {}).get("content_id") == content_id]
+        known += [path for path, manifest in self._resolved_datasets.values()
+                  if (manifest or {}).get("content_id") == content_id]
+        for path in known:
+            if Path(path).is_dir():
+                return Path(path)
+
+        name, variant, minio_key = location.get("name"), location.get("variant"), location.get("minio_key")
+        safe = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+        if not (minio_key and name and variant and safe.match(str(name)) and safe.match(str(variant))):
+            return None
+        minio = self._get_minio_store_for_dataset_downloads()
+        if minio is None:
+            return None
+        manifest_key = location.get("manifest_minio_key") or f"{str(minio_key).rstrip('/')}/{dsm.MANIFEST_NAME}"
+        remote = dsm.parse_manifest(minio.download_bytes(manifest_key)) if minio.exists(manifest_key) else None
+        if not remote or remote.get("content_id") != content_id:
+            logger.info(f"Dataset {content_id[:12]} is no longer published at {minio_key}")
+            return None
+        download_dir = self.cache_dir / "datasets" / str(name) / str(variant)
+        local = dsm.load_manifest(download_dir)
+        if local and local.get("content_id") != content_id:
+            # Another version lives there, possibly in use by a run: leave it.
+            logger.info(f"{download_dir} holds dataset {str(local.get('content_id'))[:12]}, not {content_id[:12]}")
+            return None
+        download_dir.parent.mkdir(parents=True, exist_ok=True)
+        # The sync records the manifest as the active one; keep the active run's.
+        active_manifest = self._dataset_manifest
+        try:
+            path = self._sync_dataset_from_minio(minio, str(minio_key), download_dir, manifest_key)
+        finally:
+            self._dataset_manifest = active_manifest
+        if path is None or (dsm.load_manifest(path) or {}).get("content_id") != content_id:
+            return None
+        self._two_level_cache.manager.register_dataset(path, remote, location, active=False)
+        return path
+
     def _dataset_identity(self, data_dir: Optional[Path]) -> tuple:
         """
         (content_id, provenance_id) of the dataset in data_dir.
@@ -1170,6 +1241,7 @@ class Worker:
                     error_message=self._dataset_mismatch,
                 )
             dataset_id, dataset_prov_id = self._dataset_identity(data_dir)
+            self._register_cache_dataset(data_dir, dataset_id)
 
             # Build parent_hashes (for cache key) and ancestor_dirs (ordered
             # output dirs from all upstream stages, earliest first) in one pass.
