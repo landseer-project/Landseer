@@ -6,20 +6,31 @@ Provides high-level interface for:
 - Downloading artifacts with local caching
 - Tracking artifact metadata in database
 
-Dataset de-duplication: many tools copy their whole input dataset into their
-output (CelebA: ~2.6 GB, 200k files per task). A file whose relative path,
-size and sha256 equal the same entry in the run's dataset manifest is not
-uploaded; the completion marker still lists it, with ``source: dataset`` and
-the dataset's ``dataset_content_id``. A download rebuilds such files from this
-worker's verified local copy of that dataset (hard link, else copy). Readers
-that predate this see them as missing and treat the artifact as a miss.
+De-duplication: many tools copy their inputs into their output unchanged
+(CelebA: the whole ~2.6 GB, 200k-file dataset; a filtered data.npy or
+wm_test_data.npy from an upstream tool). Such files are not uploaded; the
+completion marker still lists every file with size and sha256:
+
+- a file equal (relative path, size, sha256) to the entry in the run's dataset
+  manifest gets ``source: dataset`` and the dataset's ``dataset_content_id``;
+  a download rebuilds it from this worker's verified copy of the dataset.
+- a file equal to the same path in an ancestor artifact (found through the
+  parent_hashes of each artifact's manifest.json) gets ``source: artifact``
+  and ``artifact_cache_key``, the artifact whose objects hold the bytes; a
+  download fetches that artifact (local cache, else MinIO) and rebuilds the
+  file from it.
+
+Rebuilt files are hard links (copies across filesystems). Readers that predate
+this see them as missing and treat the artifact as a miss.
 Set LANDSEER_ARTIFACT_DATASET_DEDUP=0 to upload everything.
 """
 
 import hashlib
 import json
 import os
+import re
 import shutil
+import threading
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -42,6 +53,11 @@ logger = get_logger(__name__)
 
 # Marker ``source`` of a file left out of the upload because the dataset holds it.
 DATASET_SOURCE = "dataset"
+# ... because an ancestor artifact (``artifact_cache_key``) holds it.
+ARTIFACT_SOURCE = "artifact"
+_CACHE_KEY_RE = re.compile(r"^[0-9A-Za-z_-]{1,128}$")
+# Ancestor artifacts searched per upload (the lineage of one task is far smaller).
+_MAX_ANCESTORS = 64
 
 
 def dataset_dedup_enabled() -> bool:
@@ -126,6 +142,12 @@ class ArtifactManager:
         # (content_id, published location from the marker) -> local verified
         # dir, for datasets not registered here (the worker syncs from MinIO).
         self.dataset_resolver: Optional[Callable[[str, Dict[str, Any]], Optional[Path]]] = None
+        # cache_key -> (rel -> {sha256: holder key} for files stored as bytes,
+        # parent_hashes), from MinIO markers; complete artifacts do not change.
+        self._ancestor_memo: Dict[str, Tuple[Dict[str, Dict[str, str]], List[str]]] = {}
+        # Per thread: artifacts whose files are being rebuilt, outermost first.
+        # A marker naming one of them as holder would re-enter its entry lock.
+        self._rebuilding = threading.local()
         
         logger.info(f"Artifact manager initialized. Local cache: {self.local_cache_dir}")
     
@@ -268,6 +290,131 @@ class ArtifactManager:
         if methods:
             logger.info(f"Rebuilt dataset files from local copies: {methods}")
         return {rel for rels in by_dataset.values() for rel in rels}
+
+    def _ancestor_entry(self, cache_key: str) -> Optional[Tuple[Dict[str, Dict[str, str]], List[str]]]:
+        """
+        (rel -> {sha256: key of the artifact holding those bytes}, parent_hashes)
+        of a complete artifact in MinIO, or None. Dataset-sourced files are
+        left out (the dataset check covers them).
+        """
+        if cache_key in self._ancestor_memo:
+            return self._ancestor_memo[cache_key]
+        if not _CACHE_KEY_RE.match(cache_key):
+            return None
+        prefix = self.minio.get_artifact_key(cache_key)
+        files = self._marker_files(self._read_marker(prefix))
+        if files is None:
+            return None
+        parents = self._parent_hashes(self.minio.download_bytes(f"{prefix}{ARTIFACT_MANIFEST}"))
+        held: Dict[str, Dict[str, str]] = {}
+        for rel, entry in files.items():
+            sha = entry.get("sha256")
+            source = entry.get("source")
+            if not sha or source == DATASET_SOURCE:
+                continue
+            holder = entry.get("artifact_cache_key") if source == ARTIFACT_SOURCE else cache_key
+            if holder:
+                held[rel] = {sha: str(holder)}
+        if len(self._ancestor_memo) >= 4 * _MAX_ANCESTORS:
+            self._ancestor_memo.clear()
+        self._ancestor_memo[cache_key] = (held, parents)
+        return held, parents
+
+    @staticmethod
+    def _parent_hashes(raw: Optional[Any]) -> List[str]:
+        """parent_hashes of a cache manifest.json (bytes or text; [] if absent or unreadable)."""
+        try:
+            return [str(h) for h in json.loads(raw).get("parent_hashes") or []] if raw else []
+        except (ValueError, AttributeError, TypeError):
+            return []
+
+    def _ancestor_copies(
+        self,
+        cache_key: str,
+        parent_hashes: List[str],
+        files: Dict[str, Dict[str, Any]],
+    ) -> Dict[str, str]:
+        """
+        rel -> key of the ancestor artifact holding the same bytes at the same
+        path. Ancestors are searched breadth first through each artifact's
+        parent_hashes; every version of a path among them is a candidate.
+        """
+        if not dataset_dedup_enabled() or not parent_hashes or not files:
+            return {}
+        candidates: Dict[str, Dict[str, str]] = {}
+        queue, seen = list(parent_hashes), {cache_key}
+        while queue and len(seen) <= _MAX_ANCESTORS:
+            key = queue.pop(0)
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                entry = self._ancestor_entry(key)
+            except Exception as e:
+                logger.debug(f"Could not read ancestor artifact {key[:12]}: {e}")
+                entry = None
+            if entry is None:
+                continue
+            held, parents = entry
+            for rel in files.keys() & held.keys():
+                for sha, holder in held[rel].items():
+                    candidates.setdefault(rel, {}).setdefault(sha, holder)
+            queue.extend(parents)
+        copies = {}
+        for rel, entry in files.items():
+            if rel == ARTIFACT_MANIFEST:
+                continue
+            holder = candidates.get(rel, {}).get(entry["sha256"])
+            if holder and holder != cache_key:
+                copies[rel] = holder
+        return copies
+
+    def _restore_artifact_files(self, cache_key: str, output: Path, expected: Dict[str, Dict[str, Any]]) -> None:
+        """
+        Rebuild files the marker says an ancestor artifact holds, by hard link
+        from that artifact's local cache entry (fetched from MinIO if needed).
+        Their sha256 is checked afterwards with the rest of the download.
+        Raises when an artifact or file is unavailable (the download is a miss).
+        """
+        by_artifact: Dict[str, List[str]] = {}
+        for rel, entry in expected.items():
+            if entry.get("source") == ARTIFACT_SOURCE:
+                parts = Path(rel).parts
+                if not parts or Path(rel).is_absolute() or ".." in parts:
+                    raise RuntimeError(f"unsafe artifact file path in marker: {rel!r}")
+                holder = str(entry.get("artifact_cache_key"))
+                if holder == cache_key or not _CACHE_KEY_RE.match(holder):
+                    raise RuntimeError(f"bad artifact_cache_key in marker: {holder!r}")
+                by_artifact.setdefault(holder, []).append(rel)
+        if not by_artifact:
+            return
+        stack = getattr(self._rebuilding, "keys", None)
+        if stack is None:
+            stack = self._rebuilding.keys = []
+        cycle = [h for h in by_artifact if h in stack]
+        if cycle:
+            raise RuntimeError(f"markers of {cache_key[:12]} and {cycle[0][:12]} point at each other")
+        methods: Dict[str, int] = {}
+        stack.append(cache_key)
+        try:
+            for holder, rels in by_artifact.items():
+                if self.get_artifact(holder) is None:
+                    raise RuntimeError(f"artifact {holder[:12]} holding {len(rels)} files is not available")
+                # Under the holder's lock so eviction cannot remove it mid-link.
+                with self._entry_lock(holder):
+                    if not self.local_exists(holder):
+                        raise RuntimeError(f"artifact {holder[:12]} was evicted while rebuilding files")
+                    root = self.get_local_path(holder) / "output"
+                    for rel in rels:
+                        dest = output / rel
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        method = hardlink_or_copy(root / rel, dest)
+                        methods[method] = methods.get(method, 0) + 1
+                self.lru.touch(holder)
+        finally:
+            stack.pop()
+        if methods:
+            logger.info(f"Rebuilt files from ancestor artifacts: {methods}")
 
     # =========================================================================
     # Local Cache Operations
@@ -514,20 +661,28 @@ class ArtifactManager:
         prefix = self.minio.get_artifact_key(cache_key)
         files = self._describe_files(source_dir)
         from_dataset = self._dataset_copies(files)
-        if from_dataset:
-            count = self.minio.upload_directory(source_dir, prefix, exclude=set(from_dataset))
+        manifest_path = source_dir.parent / ARTIFACT_MANIFEST
+        from_ancestors = self._ancestor_copies(
+            cache_key,
+            self._parent_hashes(manifest_path.read_text()) if manifest_path.exists() else [],
+            {rel: e for rel, e in files.items() if rel not in from_dataset},
+        )
+        left_out = set(from_dataset) | set(from_ancestors)
+        if left_out:
+            count = self.minio.upload_directory(source_dir, prefix, exclude=left_out)
         else:
             count = self.minio.upload_directory(source_dir, prefix)
-        if count != len(files) - len(from_dataset):
+        if count != len(files) - len(left_out):
             logger.error(
-                f"Uploaded {count}/{len(files) - len(from_dataset)} files for {cache_key[:12]}; "
+                f"Uploaded {count}/{len(files) - len(left_out)} files for {cache_key[:12]}; "
                 "not marking artifact complete"
             )
             return False
         for rel, content_id in from_dataset.items():
             files[rel].update(source=DATASET_SOURCE, dataset_content_id=content_id)
+        for rel, holder in from_ancestors.items():
+            files[rel].update(source=ARTIFACT_SOURCE, artifact_cache_key=holder)
 
-        manifest_path = source_dir.parent / ARTIFACT_MANIFEST
         if manifest_path.exists():
             if not self.minio.upload_file(
                 manifest_path,
@@ -559,10 +714,12 @@ class ArtifactManager:
             self._artifacts[cache_key].storage_type = "both"
             self._artifacts[cache_key].minio_key = prefix
 
-        skipped = (
+        skipped = "".join([
             f", {len(from_dataset)} identical to dataset {self._active_dataset[:12]} left out"
-            if from_dataset else ""
-        )
+            if from_dataset else "",
+            f", {len(from_ancestors)} identical to ancestor artifacts left out"
+            if from_ancestors else "",
+        ])
         logger.info(f"Uploaded artifact to MinIO: {cache_key[:12]} ({count} files{skipped})")
         return True
 
@@ -620,6 +777,7 @@ class ArtifactManager:
                     restored = self._restore_dataset_files(
                         staging_output, expected, self._marker_datasets(marker)
                     )
+                    self._restore_artifact_files(cache_key, staging_output, expected)
                     # Restored files were checked against the dataset's digests.
                     check = {
                         rel: ({"size": e["size"]} if rel in restored else e)
@@ -667,8 +825,8 @@ class ArtifactManager:
 
         Each entry is ``{"size": int, "sha256": str}``. Markers written before
         checksums were added store only the size, so ``sha256`` may be absent.
-        Files left out as dataset copies also carry ``source`` and
-        ``dataset_content_id``.
+        Files left out as copies also carry ``source`` and
+        ``dataset_content_id`` or ``artifact_cache_key``.
         """
         files = marker.get("files") if marker else None
         if not isinstance(files, dict):
@@ -683,6 +841,9 @@ class ArtifactManager:
             if entry.get("source") == DATASET_SOURCE:
                 expected[str(rel)]["source"] = DATASET_SOURCE
                 expected[str(rel)]["dataset_content_id"] = str(entry.get("dataset_content_id"))
+            elif entry.get("source") == ARTIFACT_SOURCE:
+                expected[str(rel)]["source"] = ARTIFACT_SOURCE
+                expected[str(rel)]["artifact_cache_key"] = str(entry.get("artifact_cache_key"))
         return expected
 
     @staticmethod
