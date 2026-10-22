@@ -114,10 +114,10 @@ def main():
     if config_path.exists():
         config = json.loads(config_path.read_text())
     
-    method = config.get("method", "fairlearn")
+    method = config.get("method", "custom")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
-    # Check for required sensitive attributes
+    # # Check for required sensitive attributes
     sensitive_path = input_dir / "test_sensitive.npy"
     if not sensitive_path.exists():
         # Graceful skip
@@ -163,6 +163,15 @@ def main():
     X = np.load(input_dir / "test_data.npy")
     Y = np.load(input_dir / "test_labels.npy")
     sensitive_attrs = np.load(sensitive_path)
+
+    if not (len(X) == len(Y) == len(sensitive_attrs)):
+        raise ValueError(
+            "Fairness data mismatch: "
+            f"test_data={len(X)}, "
+            f"test_labels={len(Y)}, "
+            f"test_sensitive={len(sensitive_attrs)} "
+            f"from {sensitive_path}"
+        )
     
     test_X = torch.tensor(X).float()
     test_y = torch.tensor(Y).long()

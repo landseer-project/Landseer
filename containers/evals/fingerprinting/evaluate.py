@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""
-Fingerprinting Evaluator
+"""Dataset Inference Fingerprinting Evaluator.
 
-Evaluates model fingerprinting using MINGD attack.
+Primary metric:
+    fingerprinting = one-sided Welch p-value, lower is better.
 """
 
 import json
@@ -10,66 +10,78 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
 import torch
 from torch.utils.data import DataLoader, TensorDataset
+
 from model_loader import load_torch_model_for_eval
+from fingerprinting import evaluate_fingerprinting
 
 
-def loss_mingd(preds, target):
-    """MINGD loss function."""
-    return (preds.max(dim=1)[0] - preds[torch.arange(preds.shape[0], device=preds.device), target]).mean()
+def write_result(output_dir, result):
+    path = output_dir / "evaluation_results.json"
+    path.write_text(json.dumps(result, indent=2))
+    print(f"Results saved to {path}")
 
 
-def mingd(model, X, y, target, alpha=0.01, num_iter=20):
-    """
-    MINGD attack for fingerprinting evaluation.
-    """
-    model.eval()
-    delta = torch.zeros_like(X, requires_grad=True)
-    
-    for _ in range(num_iter):
-        preds = model(X + delta)
-        loss = -loss_mingd(preds, target)
-        loss.backward()
-        delta.data += alpha * delta.grad.sign()
-        delta.data = torch.min(torch.max(delta, -X), 1 - X)
-        delta.grad.zero_()
-    
-    return delta.detach()
+# def resolve_calibrator(input_dir):
+#     """Select the fixed Dataset Inference calibrator."""
+#     explicit = os.environ.get("FINGERPRINTING_CALIBRATOR", "").strip()
+#     if explicit:
+#         path = Path(explicit)
+#         return path if path.is_absolute() else input_dir / path
+
+#     dataset = os.environ.get("LANDSEER_DATASET", "").strip().lower()
+#     variant = os.environ.get("LANDSEER_DATASET_VARIANT", "").strip().lower()
+
+#     if dataset == "celeba":
+#         if variant == "clean":
+#             return input_dir / "celeba_clean_calibrator_final.pt"
+#         if variant in {"poisoned", "backdoor", "poison"}:
+#             return input_dir / "celeba_backdoor_calibrator_final.pt"
+
+#     raise ValueError(
+#         f"Could not determine fingerprinting calibrator. "
+#         f"LANDSEER_DATASET={dataset!r}, LANDSEER_DATASET_VARIANT={variant!r}. "
+#         "Set those variables or FINGERPRINTING_CALIBRATOR."
+#     )
+
+def resolve_calibrator(input_dir):
+    artifact_dir = input_dir / "fingerprinting"
+
+    explicit = os.environ.get("FINGERPRINTING_CALIBRATOR", "").strip()
+    if explicit:
+        path = Path(explicit)
+        return path if path.is_absolute() else artifact_dir / path
+
+    dataset = os.environ.get("LANDSEER_DATASET", "").strip().lower()
+    variant = os.environ.get("LANDSEER_DATASET_VARIANT", "").strip().lower()
+
+    if dataset == "celeba":
+        if variant == "clean":
+            return artifact_dir / "celeba_clean_calibrator_final.pt"
+        if variant in {"poisoned", "backdoor", "poison"}:
+            return artifact_dir / "celeba_backdoor_calibrator_final.pt"
+
+    if dataset == "cifar10":
+        return artifact_dir / "cifar10_backdoor_calibrator_final.pt"
+
+    raise ValueError(
+        f"No fingerprinting calibrator for dataset={dataset!r}, variant={variant!r}"
+    )
 
 
-def evaluate_fingerprinting_mingd(model, dataloader, device):
-    """
-    Evaluate fingerprinting using MINGD attack.
-    """
-    model = model.to(device)
-    model.eval()
-    
-    total = 0
-    correct_clean = 0
-    correct_mingd = 0
-    
-    for X, y in dataloader:
-        X, y = X.to(device), y.to(device)
-        total += X.size(0)
-        
-        # Clean prediction
-        with torch.no_grad():
-            pred_clean = model(X).max(1)[1]
-            correct_clean += (pred_clean == y).sum().item()
-        
-        # MINGD attack: target is original clean prediction
-        delta = mingd(model, X, y, pred_clean)
-        
-        with torch.no_grad():
-            pred_mingd = model(X + delta).max(1)[1]
-            correct_mingd += (pred_mingd == y).sum().item()
-    
-    clean_acc = correct_clean / total if total > 0 else 0.0
-    mingd_score = correct_mingd / total if total > 0 else 0.0
-    
-    return clean_acc, mingd_score
+def build_reference_loaders(calibrator, batch_size):
+    required = ["reference_member_x", "reference_member_y", "reference_public_x", "reference_public_y"]
+    missing = [k for k in required if k not in calibrator]
+    if missing:
+        raise ValueError("Calibrator missing reference data: " + ", ".join(missing))
+
+    member = TensorDataset(calibrator["reference_member_x"].float(), calibrator["reference_member_y"].long())
+    public = TensorDataset(calibrator["reference_public_x"].float(), calibrator["reference_public_y"].long())
+
+    member_loader = DataLoader(member, batch_size=batch_size, shuffle=False)
+    public_loader = DataLoader(public, batch_size=batch_size, shuffle=False)
+    return member_loader, public_loader
 
 
 def main():
@@ -77,95 +89,71 @@ def main():
     input_dir = workspace / "input"
     output_dir = workspace / "output"
     output_dir.mkdir(exist_ok=True, parents=True)
-    
-    config_path = input_dir / "config.json"
-    config = {}
-    if config_path.exists():
-        config = json.loads(config_path.read_text())
-    
-    batch_size = config.get("batch_size", 64)
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    
-    # Load model
     model_path = input_dir / "model.pt"
+
     if not model_path.exists():
-        results = {
-            "evaluator": "fingerprinting",
-            "success": False,
-            "error": "model.pt not found",
-            "metrics": {}
-        }
-        (output_dir / "evaluation_results.json").write_text(json.dumps(results, indent=2))
+        write_result(output_dir, {"evaluator": "fingerprinting", "success": False, "error": "model.pt not found", "metrics": {}})
         return
-    
+
     try:
         model = load_torch_model_for_eval(model_path, input_dir, device)
-    except Exception as e:
-        results = {
-            "evaluator": "fingerprinting",
-            "success": False,
-            "error": f"Failed to load model: {e}",
-            "metrics": {}
-        }
-        (output_dir / "evaluation_results.json").write_text(json.dumps(results, indent=2))
-        return
-    
-    # Load test data
-    test_data_path = input_dir / "test_data.npy"
-    test_labels_path = input_dir / "test_labels.npy"
-    
-    if not test_data_path.exists() or not test_labels_path.exists():
-        results = {
-            "evaluator": "fingerprinting",
-            "success": False,
-            "error": "Test data not found",
-            "metrics": {}
-        }
-        (output_dir / "evaluation_results.json").write_text(json.dumps(results, indent=2))
-        return
-    
-    X = np.load(test_data_path)
-    Y = np.load(test_labels_path)
-    
-    dataset = TensorDataset(
-        torch.tensor(X).float(),
-        torch.tensor(Y).long()
-    )
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
-    
-    print(f"Loaded {len(dataset)} test samples")
-    print(f"Evaluating fingerprinting with MINGD attack...")
-    
-    try:
-        clean_acc, mingd_score = evaluate_fingerprinting_mingd(model, loader, device)
-        
+        calibrator_path = resolve_calibrator(input_dir)
+
+        if not calibrator_path.exists():
+            raise FileNotFoundError(f"Calibrator not found: {calibrator_path}")
+
+        calibrator = torch.load(calibrator_path, map_location="cpu", weights_only=False)
+        batch_size = int(os.environ.get("FINGERPRINTING_BATCH_SIZE", calibrator.get("attack_batch_size", 100)))
+        member_loader, public_loader = build_reference_loaders(calibrator, batch_size)
+
+        print(f"Device: {device}")
+        print(f"LANDSEER_DATASET: {os.environ.get('LANDSEER_DATASET')}")
+        print(f"LANDSEER_DATASET_VARIANT: {os.environ.get('LANDSEER_DATASET_VARIANT')}")
+        print(f"Calibrator: {calibrator_path}")
+        print(f"Baseline: {calibrator.get('baseline_result')}")
+        print(f"Reference member samples: {len(member_loader.dataset)}")
+        print(f"Reference public samples: {len(public_loader.dataset)}")
+
+        result = evaluate_fingerprinting(
+            model=model,
+            train_loader=member_loader,
+            public_loader=public_loader,
+            calibrator_path=calibrator_path,
+            device=device,
+        )
+
         metrics = {
-            "clean_accuracy": clean_acc,
-            "mingd_score": mingd_score,
-            "fingerprint_accuracy": mingd_score
+            "fingerprinting": float(result["p_value"]),
+            "fingerprinting_effect": float(result["mean_difference"]),
+            "fingerprinting_evidence": float(result["evidence_score"]),
         }
-        
-        print(f"Clean accuracy: {clean_acc:.4f}")
-        print(f"MINGD score: {mingd_score:.4f}")
-        
+
+        print(f"Fingerprint p-value: {metrics['fingerprinting']:.6e}")
+        print(f"Fingerprint effect: {metrics['fingerprinting_effect']:.6f}")
+        print(f"Fingerprint evidence: {metrics['fingerprinting_evidence']:.6f}")
+
         results = {
             "evaluator": "fingerprinting",
             "success": True,
             "skipped": False,
             "metrics": metrics,
-            "timestamp": datetime.utcnow().isoformat() + "Z"
+            "parameters": {
+                "method": "dataset_inference_mingd",
+                "calibrator": calibrator_path.name,
+                "baseline_p_value": calibrator.get("baseline_result", {}).get("p_value"),
+                "split_index": calibrator.get("split_index"),
+                "pval_samples": calibrator.get("pval_samples"),
+                "num_iter": calibrator.get("num_iter"),
+            },
+            "timestamp": datetime.utcnow().isoformat() + "Z",
         }
-        
+
     except Exception as e:
-        results = {
-            "evaluator": "fingerprinting",
-            "success": False,
-            "error": str(e),
-            "metrics": {}
-        }
-    
-    (output_dir / "evaluation_results.json").write_text(json.dumps(results, indent=2))
-    print(f"Results saved to {output_dir / 'evaluation_results.json'}")
+        results = {"evaluator": "fingerprinting", "success": False, "error": str(e), "metrics": {}}
+
+    write_result(output_dir, results)
 
 
 if __name__ == "__main__":

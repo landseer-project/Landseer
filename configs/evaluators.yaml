@@ -57,13 +57,13 @@ evaluators:
   fairness:
     name: fairness
     container:
-      image: ghcr.io/landseer-project/evals/fairness:v3
+      image: ghcr.io/landseer-project/evals/fairness:v4
       command: ""
     required_artifacts:
       - test_sensitive.npy
     # in_fair writes test_sensitive.npy (and its own test split); no other tool does
-    applies_to:
-      tools: [in_fair]
+    # applies_to:
+    #   tools: [in_fair]
     metrics:
       - demographic_parity
       - equalized_odds_diff
@@ -73,12 +73,14 @@ evaluators:
   fingerprinting:
     name: fingerprinting
     container:
-      image: ghcr.io/landseer-project/evals/fingerprinting:v2
+      image: ghcr.io/landseer-project/evals/fingerprinting:v3
       command: ""
-    required_artifacts: []
+    required_artifacts: 
+      - fingerprinting 
     metrics:
-      - mingd_score
-      - fingerprint_accuracy
+      - fingerprinting
+      - fingerprinting_effect
+      - fingerprinting_evidence
     defense_types:
       - fingerprinting
 
