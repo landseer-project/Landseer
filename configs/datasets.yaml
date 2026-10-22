@@ -17,6 +17,13 @@ datasets:
         # already prepared under <data root>/cifar10/poisoned. An empty image
         # makes a missing dir fail instead of falling back to the clean loader.
         image: ""
+        # See celeba/poisoned: ship the poison ground truth with the dataset.
+        required_files:
+          - data.npy
+          - labels.npy
+          - test_data.npy
+          - test_labels.npy
+          - poisoning_metadata.json
         labels:
           landseer.dataset: cifar10
           landseer.variant: poisoned
@@ -41,6 +48,18 @@ datasets:
           landseer.variant: clean
       poisoned:
         image: ghcr.io/landseer-project/dataset_celeba_poisoned:v4
+        # poisoning_metadata.json must ship with the dataset: xgbod reads it as
+        # poison ground truth (without it xgbod silently keeps every sample) and
+        # the backdoor evaluator needs it. Listing it puts it in the manifest, so
+        # workers that sync the dataset from MinIO get it too.
+        required_files:
+          - data.npy
+          - labels.npy
+          - test_data.npy
+          - test_labels.npy
+          - filenames.npy
+          - test_filenames.npy
+          - poisoning_metadata.json
         labels:
           landseer.dataset: celeba
           landseer.variant: poisoned
