@@ -9,6 +9,7 @@ from src.pipeline.tasks import TaskStatus
 from src.backend.scheduler import Scheduler
 from src.backend.api.state import SchedulerState, get_scheduler, get_scheduler_state
 from src.backend.api.helpers import task_to_response
+from src.backend.scheduler.placement import get_placement
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -128,7 +129,7 @@ async def worker_claim_task(
         )
     except Exception:
         pass
-    task = scheduler.get_next_task()
+    task = scheduler.get_next_task(accept=get_placement().accepts(worker_id))
     progress = scheduler.get_progress()
     
     if task is None:

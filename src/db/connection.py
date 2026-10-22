@@ -6,7 +6,8 @@ Uses connection pooling and session management for efficient database access.
 """
 
 import os
-from contextlib import contextmanager
+import threading
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass, field
 from typing import Any, Generator, Optional
 
@@ -23,6 +24,12 @@ logger = get_logger(__name__)
 
 # Load environment variables
 load_dotenv()
+
+# SQLite runs on a single shared sqlite3 connection (StaticPool) used by every
+# FastAPI worker thread. sqlite3 connections are not safe for concurrent use, so
+# all SQLite sessions and engine-level work are serialized through this
+# process-wide re-entrant lock. MySQL uses a real pool and is not locked.
+_SQLITE_LOCK = threading.RLock()
 
 
 @dataclass
@@ -145,11 +152,18 @@ class Database:
             )
         
         logger.info(f"Database engine created: {self.config.db_type}")
+
+    def _lock(self) -> AbstractContextManager:
+        """Serialize access to the shared SQLite connection; no-op for MySQL."""
+        if self.config.db_type == "sqlite":
+            return _SQLITE_LOCK
+        return nullcontext()
     
     def create_tables(self) -> None:
         """Create all database tables."""
-        Base.metadata.create_all(bind=self.engine)
-        self._apply_migrations()
+        with self._lock():
+            Base.metadata.create_all(bind=self.engine)
+            self._apply_migrations()
         self._initialized = True
         logger.info("Database tables created")
 
@@ -162,7 +176,7 @@ class Database:
             "ALTER TABLE pipeline_runs ADD COLUMN tools_config JSON",
         ]
         from sqlalchemy import text
-        with self.engine.connect() as conn:
+        with self._lock(), self.engine.connect() as conn:
             for stmt in migrations:
                 try:
                     conn.execute(text(stmt))
@@ -174,7 +188,8 @@ class Database:
     
     def drop_tables(self) -> None:
         """Drop all database tables."""
-        Base.metadata.drop_all(bind=self.engine)
+        with self._lock():
+            Base.metadata.drop_all(bind=self.engine)
         logger.info("Database tables dropped")
     
     @contextmanager
@@ -183,25 +198,29 @@ class Database:
         Context manager for database sessions.
         
         Automatically commits on success and rolls back on exception.
+        For SQLite the whole session is held under a process-wide lock.
         
         Yields:
             Database session
         """
-        session = self.session_factory()
-        try:
-            yield session
-            session.commit()
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
+        with self._lock():
+            session = self.session_factory()
+            try:
+                yield session
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
     
     def get_session(self) -> Session:
         """
         Get a new database session.
         
         Caller is responsible for committing/closing the session.
+        Unlike ``session()``, this is not serialized for SQLite; prefer
+        ``session()`` / ``session_scope()`` in multi-threaded code.
         
         Returns:
             New database session
@@ -215,7 +234,8 @@ class Database:
     def close(self) -> None:
         """Close the database connection."""
         if self._engine:
-            self._engine.dispose()
+            with self._lock():
+                self._engine.dispose()
             self._engine = None
             self._session_factory = None
             logger.info("Database connection closed")

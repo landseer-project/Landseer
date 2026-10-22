@@ -1,0 +1,15 @@
+# Pin tools to workers. A task whose tool is listed here is handed only to
+# workers whose id starts with one of the given prefixes (simurgh-gpu0,
+# gilbreth-11984977, fabiha, ...); every other task goes to any worker.
+# Keys are tool registry keys or names ("deploy_explainshap_celeba").
+# The backend re-reads this file when it changes: no restart needed.
+# A pinned task waits while no matching worker is up.
+pins:
+  # 4-4.6 h on gilbreth (plus hours of input staging), where it also failed
+  # on the scratch quota; about 2.9 h on simurgh and 1.4 h on fabiha.
+  deploy_explainshap_celeba: [simurgh-, fabiha, vast-, gcp-]
+  # ghcr package is private: gilbreth (Apptainer pulls docker:// anonymously)
+  # cannot fetch it; simurgh and fabiha have the image locally. Drop this pin
+  # once an org owner makes evals/sanitization public. vast-4090-0 and gcp-l4-0
+  # (reverse-tunnelled from simurgh) have the image loaded from simurgh too.
+  sanitization: [simurgh-, fabiha, vast-, gcp-]

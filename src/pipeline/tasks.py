@@ -13,7 +13,7 @@ import hashlib
 import json
 from collections import Counter
 
-from .tools import ToolDefinition
+from .tools import ToolDefinition, adapter_task_config
 
 
 class TaskType(str, Enum):
@@ -395,6 +395,11 @@ class TaskFactory:
             raise ValueError(f"Unknown task type: {task_type}")
         
         task_class = cls._task_classes[task_type]
+        # A tool's input/output adapters run inside its task, so they are part
+        # of the task config (and therefore its hash, lineage and cache key).
+        adapter_config = adapter_task_config(tool)
+        if adapter_config:
+            config = {**(config or {}), **adapter_config}
         return task_class(
             tool=tool,
             config=config or {},

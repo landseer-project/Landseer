@@ -3,6 +3,10 @@
 # Published images: ghcr.io/landseer-project/evals/<name>:<tag>.
 # artifact_roots: optional host directories that contain evaluator sidecars.
 # Can be set globally (here) and/or per evaluator.
+# input: what the evaluator gets as /input. `final` (default) = dataset plus every
+#   upstream output; `training_input` = exactly the input of the workflow's
+#   in-training task (dataset plus pre-training outputs).
+# enabled_by_attacks: attack-config flags that select this evaluator.
 #
 artifact_roots:
   - /data/landseer/eval_artifacts
@@ -96,6 +100,28 @@ evaluators:
     defense_types:
       - outlier_removal
 
+  sanitization:
+    name: sanitization
+    container:
+      image: ghcr.io/landseer-project/evals/sanitization:v2
+      command: ""
+    required_artifacts: []
+    input: training_input
+    enabled_by_attacks:
+      - backdoor
+      - outlier
+    applies_to:
+      dataset_variants:
+        - poisoned
+      tools:
+        - pre-xgbod
+        - pre-xgbod-celeba
+    metrics:
+      - xgbod_train_roc_auc
+      - xgbod_train_precision_at_n
+    defense_types:
+      - outlier_removal
+
   watermark:
     name: watermark
     container:
@@ -150,8 +176,13 @@ evaluators:
     container:
       image: ghcr.io/landseer-project/evals/privacy:v4
       command: ""
-    required_artifacts:
-      - celeba_shadows
+    # Shadow models are built into the image (/app/celeba_shadows, identical to
+    # /data/landseer/eval_artifacts/celeba_shadows); requiring a host copy made
+    # privacy fail on every worker that was not set up by hand. They are CelebA
+    # models, so privacy cannot evaluate other datasets.
+    required_artifacts: []
+    applies_to:
+      datasets: [celeba]
     metrics:
       - mia_auc
     defense_types:

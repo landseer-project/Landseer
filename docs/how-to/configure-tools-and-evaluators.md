@@ -7,6 +7,10 @@ Each tool includes:
 - `name`: display/tool identity
 - `is_baseline`: whether this is the baseline/noop option
 - `container`: image, command, runtime
+- `framework` (optional): framework the tool works in when it is not PyTorch
+- `adapters` (optional): `input`/`output` adapter keys from the top-level
+  `adapters:` section, run in the same task to convert to and from the tool's
+  format; see [Adapter layers](adapter-layers.md)
 
 Use baseline tools to keep stage options explicit and enable null-equivalent workflows.
 

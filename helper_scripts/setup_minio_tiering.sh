@@ -28,7 +28,10 @@ TIER_NAME="${TIER_NAME:-GCS-COLD}"
 REMOTE_BUCKET="${REMOTE_BUCKET:?set REMOTE_BUCKET in .env.db}"
 # Unique prefix inside the GCS bucket (avoids "tier already in use")
 REMOTE_PREFIX="${REMOTE_PREFIX:-landseer/artifacts/}"
-TRANSITION_DAYS=0
+# Days an artifact stays on local disk before moving to GCS. Every read of a
+# moved artifact is billed GCS egress, so keep it local while runs still read it.
+TRANSITION_DAYS="${TRANSITION_DAYS:-5}"
+[[ "$TRANSITION_DAYS" =~ ^[0-9]+$ ]] || { echo "TRANSITION_DAYS must be a whole number of days" >&2; exit 1; }
 
 GCS_CREDS="${REMOTE_GCS_CREDENTIALS_FILE:?set REMOTE_GCS_CREDENTIALS_FILE in .env.db}"
 [[ "$GCS_CREDS" == /* ]] || GCS_CREDS="${REPO_ROOT}/${GCS_CREDS}"
@@ -57,7 +60,8 @@ for _ in $(seq 1 30); do
 done
 
 echo "Configuring bucket + GCS tier (hot ${HOT_PREFIX} -> gs://${REMOTE_BUCKET}/${REMOTE_PREFIX})..."
-docker run --rm --network host \
+# Status messages go to stderr; stdout is the bucket's current lifecycle rules (JSON).
+ILM_JSON="$(docker run --rm --network host \
   -v "${GCS_CREDS}:/tmp/gcs.json:ro" \
   --entrypoint /bin/sh minio/mc -c "
     set -e
@@ -66,14 +70,48 @@ docker run --rm --network host \
     mc ilm tier add gcs hot '${TIER_NAME}' \
       --credentials-file /tmp/gcs.json \
       --bucket '${REMOTE_BUCKET}' \
-      --prefix '${REMOTE_PREFIX}' 2>/dev/null \
-      || echo 'Tier ${TIER_NAME} already present'
-    mc ilm rule add \
-      --prefix '${HOT_PREFIX}' \
-      --transition-days '${TRANSITION_DAYS}' \
-      --transition-tier '${TIER_NAME}' \
-      'hot/${HOT_BUCKET}' >/dev/null 2>&1 \
-      || echo 'Transition rule already present'
+      --prefix '${REMOTE_PREFIX}' >&2 2>/dev/null \
+      || echo 'Tier ${TIER_NAME} already present' >&2
+    mc ilm rule export 'hot/${HOT_BUCKET}' 2>/dev/null || true
+  ")"
+
+# One transition rule per prefix: edit the first existing one, remove extra
+# copies (older runs of this script added a duplicate each time), else add one.
+RULE_IDS=$(python3 -c '
+import json, sys
+try:
+    rules = json.loads(sys.argv[1]).get("Rules") or []
+except ValueError:
+    rules = []
+for r in rules:
+    if (r.get("Filter") or {}).get("Prefix", r.get("Prefix")) == sys.argv[2] and r.get("Transition"):
+        print(r["ID"])
+' "$ILM_JSON" "$HOT_PREFIX")
+KEEP_ID="$(echo "$RULE_IDS" | head -n 1)"
+EXTRA_IDS="$(echo "$RULE_IDS" | tail -n +2 | tr '\n' ' ')"
+
+docker run --rm --network host \
+  --entrypoint /bin/sh minio/mc -c "
+    set -e
+    mc alias set hot '${HOT_URL}' '${ROOT_USER}' '${ROOT_PASSWORD}' >/dev/null
+    if [ -n '${KEEP_ID}' ]; then
+      mc ilm rule edit --id '${KEEP_ID}' \
+        --transition-days '${TRANSITION_DAYS}' \
+        --transition-tier '${TIER_NAME}' \
+        'hot/${HOT_BUCKET}' >/dev/null
+      echo 'Transition rule ${KEEP_ID} set to ${TRANSITION_DAYS} days'
+    else
+      mc ilm rule add \
+        --prefix '${HOT_PREFIX}' \
+        --transition-days '${TRANSITION_DAYS}' \
+        --transition-tier '${TIER_NAME}' \
+        'hot/${HOT_BUCKET}' >/dev/null
+      echo 'Transition rule added (${TRANSITION_DAYS} days)'
+    fi
+    for id in ${EXTRA_IDS}; do
+      mc ilm rule rm --id \"\$id\" 'hot/${HOT_BUCKET}' >/dev/null
+      echo \"Removed duplicate transition rule \$id\"
+    done
     mc ilm tier ls hot
     mc ilm rule ls 'hot/${HOT_BUCKET}'
   "

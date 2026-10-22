@@ -6,7 +6,7 @@ scheduler implementations must follow.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from ...pipeline.tasks import Task, TaskStatus
 from ...pipeline.pipeline import Pipeline
@@ -90,16 +90,17 @@ class Scheduler(ABC):
         ]
     
     @abstractmethod
-    def get_next_task(self) -> Optional[Task]:
+    def get_next_task(self, accept: Optional[Callable[[Task], bool]] = None) -> Optional[Task]:
         """
         Get the next task to execute.
-        
+
         This method should:
         1. Find tasks that are ready to execute (dependencies satisfied)
+           and, when given, accepted by ``accept`` (e.g. placement pins)
         2. Select the highest priority task among ready tasks
         3. Update the task's status to RUNNING
         4. Return the task
-        
+
         Returns:
             Next task to execute, or None if no tasks are ready
         """

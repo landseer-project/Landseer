@@ -759,6 +759,42 @@ class Worker:
 
         return ancestry, task_info
 
+    def _training_input_ancestors(self, task: TaskInfo) -> tuple[list[Path], Optional[str]]:
+        """Ancestor dirs that formed the input of the nearest upstream in-training task.
+
+        The in-training task's input was the run dataset plus its ancestors' outputs,
+        merged earliest-first. Rebuilding that list from backend task metadata with
+        the same ancestry walk used for every task (``_collect_remote_ancestry``) and
+        merging it over the same dataset reproduces that input exactly, on any worker.
+        Returns (dirs, error); a missing in-training task or ancestor output is an error.
+        """
+        frontier = list(task.dependency_ids)
+        seen: set[str] = set()
+        training_task_id: Optional[str] = None
+        while frontier and training_task_id is None:
+            next_frontier: list[str] = []
+            for dep_id in frontier:
+                if dep_id in seen:
+                    continue
+                seen.add(dep_id)
+                dep_task = self._client.get_task(dep_id)
+                if dep_task is None:
+                    return [], f"training_input scope: upstream task {dep_id} unknown to backend"
+                if str(dep_task.task_type) == "in_training":
+                    training_task_id = dep_id
+                    break
+                next_frontier.extend(dep_task.dependency_ids)
+            frontier = next_frontier
+        if training_task_id is None:
+            return [], "training_input scope: workflow has no in-training task upstream"
+        missing: List[str] = []
+        ancestry, _ = self._collect_remote_ancestry(training_task_id, missing=missing)
+        if missing:
+            return [], "training_input scope: dependency output missing: " + "; ".join(missing)
+        dirs: List[Path] = []
+        self._append_unique_paths(dirs, ancestry)
+        return dirs, None
+
     def _parent_dataset_error(
         self,
         dep_id: str,
@@ -1219,6 +1255,23 @@ class Worker:
                         "dataset_provenance_id": dataset_prov_id,
                     },
                 )
+
+            if task.task_type == "evaluation" and (task.config or {}).get("input_scope") == "training_input":
+                # Evaluator asked for the in-training task's input, not the full chain.
+                scoped_dirs, scope_error = self._training_input_ancestors(task)
+                if scope_error:
+                    logger.error(f"Refusing to run {task.id}: {scope_error}")
+                    return ExecutionResult(
+                        success=False,
+                        exit_code=-1,
+                        execution_time_ms=0,
+                        error_message=scope_error,
+                        artifacts={
+                            "dataset_content_id": dataset_id,
+                            "dataset_provenance_id": dataset_prov_id,
+                        },
+                    )
+                ancestor_dirs = scoped_dirs
 
             cache_context = self._build_cache_context(data_dir)
             cache_key = self._compute_cache_key(task, parent_hashes, cache_context)

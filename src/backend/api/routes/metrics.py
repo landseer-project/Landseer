@@ -596,11 +596,12 @@ async def get_workflow_metrics(
     # Try to get from database
     if state.db_service and state.db_service.is_available():
         try:
+            from src.db import session_scope
             from src.db.models import EvaluationResultModel
-            session = state.db_service.get_session()
-            results = session.query(EvaluationResultModel).filter(
-                EvaluationResultModel.workflow_id == workflow.id
-            ).all()
+            with session_scope() as session:
+                results = session.query(EvaluationResultModel).filter(
+                    EvaluationResultModel.workflow_id == workflow.id
+                ).all()
             
             for r in results:
                 if r.skipped:
