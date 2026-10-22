@@ -242,6 +242,9 @@ class ArtifactManager:
         by_dataset: Dict[str, List[str]] = {}
         for rel, entry in expected.items():
             if entry.get("source") == DATASET_SOURCE:
+                parts = Path(rel).parts
+                if not parts or Path(rel).is_absolute() or ".." in parts:
+                    raise RuntimeError(f"unsafe dataset file path in marker: {rel!r}")
                 by_dataset.setdefault(str(entry.get("dataset_content_id")), []).append(rel)
         methods: Dict[str, int] = {}
         for content_id, rels in by_dataset.items():
