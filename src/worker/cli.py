@@ -1713,6 +1713,12 @@ class Worker:
                     
                 else:
                     idle_count += 1
+
+                    # Nothing runs on this worker while it is idle, so stale
+                    # workspaces can be pruned now instead of waiting for the
+                    # next task (rate-limited inside the runner).
+                    if self._runner is not None:
+                        self._runner._maybe_prune_stale_storage()
                     
                     # Check if all tasks are done
                     progress = self._client.get_progress()

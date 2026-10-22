@@ -784,8 +784,11 @@ class TaskRunner:
         self._init_container_runner()
         self._last_prune_ts = 0.0
 
-    def _maybe_prune_stale_storage(self) -> None:
-        """Best-effort pruning of stale worker storage to avoid disk quota failures."""
+    def _maybe_prune_stale_storage(self, keep: Optional[str] = None) -> None:
+        """Best-effort pruning of stale worker storage to avoid disk quota failures.
+
+        ``keep`` names a task dir that must survive (the task being set up).
+        """
         now = time.time()
         # Run at most once every 10 minutes per worker process.
         if now - self._last_prune_ts < 600:
@@ -803,7 +806,7 @@ class TaskRunner:
 
         # Prune stale task directories in workspace.
         for p in self.workspace_dir.iterdir():
-            if not p.is_dir() or not _is_task_dir_name(p.name):
+            if not p.is_dir() or not _is_task_dir_name(p.name) or p.name == keep:
                 continue
             try:
                 st = p.stat()
@@ -861,7 +864,7 @@ class TaskRunner:
         Returns:
             Tuple of (task_dir, input_dir, output_dir)
         """
-        self._maybe_prune_stale_storage()
+        self._maybe_prune_stale_storage(keep=task.id)
         task_dir = self.workspace_dir / task.id
         input_dir = task_dir / "input"
         output_dir = task_dir / "output"
