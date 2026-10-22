@@ -174,8 +174,13 @@ evaluators:
     container:
       image: ghcr.io/landseer-project/evals/privacy:v4
       command: ""
-    required_artifacts:
-      - celeba_shadows
+    # Shadow models are built into the image (/app/celeba_shadows, identical to
+    # /data/landseer/eval_artifacts/celeba_shadows); requiring a host copy made
+    # privacy fail on every worker that was not set up by hand. They are CelebA
+    # models, so privacy cannot evaluate other datasets.
+    required_artifacts: []
+    applies_to:
+      datasets: [celeba]
     metrics:
       - mia_auc
     defense_types:
