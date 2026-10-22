@@ -305,3 +305,99 @@ def test_markers_pointing_at_each_other_are_a_miss(tmp_path, chain):
     assert not t.is_alive(), "download deadlocked"
     assert result == [None]
     assert _tmp_dirs(reader.local_cache_dir) == []
+
+
+# ----------------------------------------------------------------------------
+# Worker end to end: parent and child tasks
+# ----------------------------------------------------------------------------
+
+def _chain_task(task_id, deps, task_type) -> "TaskInfo":
+    from src.worker.client import TaskInfo
+    return TaskInfo(
+        id=task_id, tool_name=f"tool_{task_id}", tool_image="img:1", tool_command="run",
+        tool_runtime=None, tool_is_baseline=False, config={}, priority=1,
+        status="pending", task_type=task_type, counter=1, workflows=[],
+        pipeline_id="pl", dependency_ids=deps,
+    )
+
+
+def _chain_worker(tmp_path, name, store, dataset):
+    from unittest.mock import MagicMock
+    from src.worker.cli import Worker
+    w = Worker(workspace_dir=tmp_path / name / "ws", cache_dir=tmp_path / name / "cache", use_cache=True)
+    w._client = MagicMock()
+    w._client.get_pipeline_info.return_value = {}
+    w._runner = MagicMock()
+    w._runner.workspace_dir = tmp_path / name / "ws"
+    manager = ArtifactManager(local_cache_dir=tmp_path / name / "cache", minio_store=store, use_minio=True)
+    manager.dataset_resolver = w._local_dataset_for_content
+    w._two_level_cache = MagicMock()
+    w._two_level_cache.manager = manager
+    w._two_level_cache.get.side_effect = manager.get_artifact
+    w._two_level_cache.put.side_effect = lambda **kw: manager.store_artifact(**kw)
+    w._dataset_path = dataset[0]
+    w._dataset_manifest = dataset[1]
+    w._dataset_info = dict(LOCATION, available=True)
+    return w
+
+
+def test_worker_parent_child_tasks_then_hits_elsewhere(tmp_path, dataset):
+    """
+    Worker A runs pre (filters data.npy) and in (copies it, adds model.pt);
+    the in task's artifact points at the pre artifact for data.npy. Worker B
+    then gets cache hits for both with identical workspace outputs.
+    """
+    from src.worker.runner import ExecutionResult
+
+    d, manifest = dataset
+    store = InMemoryMinio()
+    a = _chain_worker(tmp_path, "a", store, dataset)
+    produced = {}
+
+    def run_task(task, **kwargs):
+        out = tmp_path / "a" / "ws" / task.id / "output"
+        shutil.copytree(d, out, ignore=shutil.ignore_patterns(dsm.MANIFEST_NAME, dsm.HASH_SIDECAR))
+        (out / "data.npy").write_bytes(b"\x05" * 4096)  # filtered by pre, passed on by in
+        if task.id == "in":
+            (out / "model.pt").write_bytes(b"trained" * 20)
+        produced[task.id] = _files(out)
+        return ExecutionResult(success=True, exit_code=0, execution_time_ms=1, output_path=out)
+
+    a._runner.run_task.side_effect = run_task
+    pre, inn = _chain_task("pre", [], "pre_training"), _chain_task("in", ["pre"], "in_training")
+    assert a._execute_task(pre).success
+    assert a._execute_task(inn).success
+
+    keys = {tid: a._task_outputs[tid][0] for tid in ("pre", "in")}
+    assert keys["pre"] != keys["in"]
+    in_files = _marker_of(store, keys["in"])["files"]
+    assert in_files["data.npy"]["source"] == ARTIFACT_SOURCE
+    assert in_files["data.npy"]["artifact_cache_key"] == keys["pre"]
+    assert in_files["labels.npy"]["source"] == DATASET_SOURCE
+    prefix = f"artifacts/{keys['in']}/"
+    assert {k[len(prefix):] for k in store.objects if k.startswith(prefix)} == {
+        "model.pt", ARTIFACT_MANIFEST, ARTIFACT_COMPLETE_MARKER}
+
+    b = _chain_worker(tmp_path, "b", store, dataset)
+    for task in (_chain_task("pre", [], "pre_training"), _chain_task("in", ["pre"], "in_training")):
+        result = b._execute_task(task)
+        assert result.success and result.artifacts["cache_hit"] is True
+        assert b._task_outputs[task.id][0] == keys[task.id]
+        assert _files(tmp_path / "b" / "ws" / task.id / "output") == produced[task.id]
+    b._runner.run_task.assert_not_called()
+
+    # Worker C has run nothing: no dataset registered, no parent local. While the
+    # dataset is not in MinIO the child is a miss; once published, C syncs it
+    # and fetches the parent, and the child hits.
+    from tests.store.test_artifact_dataset_dedup import _publish
+    c = _chain_worker(tmp_path, "c", store, dataset)
+    assert c._two_level_cache.manager.get_artifact(keys["in"]) is None
+    _publish(store, dataset)
+    out = c._two_level_cache.manager.get_artifact(keys["in"])
+    assert out is not None and _files(out) == produced["in"]
+    synced = tmp_path / "c" / "cache" / "datasets" / LOCATION["name"] / LOCATION["variant"]
+    assert os.stat(out / "labels.npy").st_ino == os.stat(synced / "labels.npy").st_ino
+
+
+def _marker_of(store, key):
+    return json.loads(store.objects[f"artifacts/{key}/{ARTIFACT_COMPLETE_MARKER}"])
