@@ -145,14 +145,17 @@ def test_poisoning_params_are_passed_once(world):
     assert world.manager.calls == [("cifar10", "poisoned", {"rate": 0.1}, {"seed": 3})]
 
 
-def test_failed_publish_is_retried_by_next_run(world):
+def test_failed_publish_fails_the_run_and_next_run_retries(world):
+    # A run must not start when its dataset cannot reach MinIO (e.g. storage
+    # full): its tasks would run without the dataset, or on LANDSEER_DATA_PATH.
     reg = RunDatasetRegistry()
     real = world.store.upload_file
     world.store.upload_file = lambda p, k, **kw: False
-    prepare_run_dataset(reg, "run_a", _ds("cifar10"), None, world.manager, world.store)
+    with pytest.raises(RuntimeError, match="could not be published to MinIO"):
+        prepare_run_dataset(reg, "run_a", _ds("cifar10"), None, world.manager, world.store)
     world.store.upload_file = real
     b = prepare_run_dataset(reg, "run_b", _ds("cifar10"), None, world.manager, world.store)
-    assert len(world.manager.calls) == 2
+    assert len(world.manager.calls) == 2  # nothing was registered, so it was prepared again
     assert b["minio_key"] == "datasets/cifar10/clean"
 
 
