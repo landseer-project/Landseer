@@ -320,7 +320,9 @@ def main():
     pgd_steps = config.get("pgd_steps", 10)
     pgd_alpha = config.get("pgd_alpha", 2/255)
     batch_size = config.get("batch_size", 64)
-    carlini_sample_size = config.get("carlini_sample_size", 500)
+    # Carlini L2 is off unless a task asks for it (carlini_sample_size > 0):
+    # the final runs report clean/PGD/FGSM only.
+    carlini_sample_size = config.get("carlini_sample_size", 0)
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
@@ -389,9 +391,12 @@ def main():
     metrics["fgsm_accuracy"] = evaluate_fgsm(model, loader, device, eps=eps)
     print(f"  FGSM accuracy: {metrics['fgsm_accuracy']:.4f}")
     
-    print(f"Evaluating Carlini L2 robustness (sample_size={carlini_sample_size})...")
-    metrics["carlini_l2_accuracy"] = evaluate_carlini_l2(model, loader, device, sample_size=carlini_sample_size)
-    print(f"  Carlini L2 accuracy: {metrics['carlini_l2_accuracy']:.4f}")
+    if carlini_sample_size > 0:
+        print(f"Evaluating Carlini L2 robustness (sample_size={carlini_sample_size})...")
+        metrics["carlini_l2_accuracy"] = evaluate_carlini_l2(model, loader, device, sample_size=carlini_sample_size)
+        print(f"  Carlini L2 accuracy: {metrics['carlini_l2_accuracy']:.4f}")
+    else:
+        print("Carlini L2 skipped (carlini_sample_size=0)")
     
     # Write results
     results = {
