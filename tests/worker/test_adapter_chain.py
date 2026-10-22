@@ -333,7 +333,8 @@ class TestTaskRunnerDispatch:
         result = task_runner.run_task(_task({"adapters": {"output": OUT_ADAPTER}}))
         assert not result.success
         assert result.exit_code == 5
-        assert result.error_message == "Output adapter 'tf-to-torch' exited with code 5"
+        # The reason comes first; the end of the tool output follows (failure_summary).
+        assert result.error_message.startswith("Output adapter 'tf-to-torch' exited with code 5")
 
     def test_apptainer_runs_all_three_containers(self, tmp_path):
         """Same chain under Apptainer: three `apptainer exec` calls with the same binds, no docker pull."""

@@ -93,6 +93,32 @@ def _is_task_dir_name(name: str) -> bool:
     return bool(_TASK_DIR_RE.match(name))
 
 
+FAILURE_LOG_LINES = 40
+FAILURE_LOG_CHARS = 4000
+
+
+def failure_summary(message: str, logs: Optional[str]) -> str:
+    """``message`` plus the end of the tool's output, for a failed task's error.
+
+    The task workspace (with the full log) can be pruned soon after a failure,
+    e.g. gilbreth keeps node-local workspaces for hours only, so the reason has
+    to travel with the failure report. Keeps the last FAILURE_LOG_LINES non-empty
+    lines, starting at the last traceback when it fits, capped at
+    FAILURE_LOG_CHARS characters.
+    """
+    lines = [l.rstrip() for l in (logs or "").splitlines() if l.strip()]
+    if not lines:
+        return message
+    tail = lines[-FAILURE_LOG_LINES:]
+    tb = max((i for i, l in enumerate(lines) if l.startswith("Traceback (most recent call last)")), default=None)
+    if tb is not None and len(lines) - tb <= FAILURE_LOG_LINES:
+        tail = lines[tb:]
+    text = "\n".join(tail)
+    if len(text) > FAILURE_LOG_CHARS:
+        text = "..." + text[-FAILURE_LOG_CHARS:]
+    return f"{message}\n--- last lines of tool output ---\n{text}"
+
+
 @dataclass
 class ExecutionResult:
     """Result of a task execution."""
@@ -1350,7 +1376,9 @@ class TaskRunner:
                 execution_time_ms=execution_time_ms,
                 output_path=output_dir if success else None,
                 logs=logs,
-                error_message=None if success else (failure_message or f"Container exited with code {exit_code}")
+                error_message=None if success else failure_summary(
+                    failure_message or f"Container exited with code {exit_code}", logs
+                )
             )
             
             # Write log with Docker command
