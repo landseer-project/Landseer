@@ -784,14 +784,15 @@ class TaskRunner:
         self._init_container_runner()
         self._last_prune_ts = 0.0
 
-    def _maybe_prune_stale_storage(self, keep: Optional[str] = None) -> None:
+    def _maybe_prune_stale_storage(self, keep: Optional[str] = None, force: bool = False) -> None:
         """Best-effort pruning of stale worker storage to avoid disk quota failures.
 
-        ``keep`` names a task dir that must survive (the task being set up).
+        ``keep`` names a task dir that must survive (the task being set up);
+        ``force`` skips the rate limit (the worker is low on disk).
         """
         now = time.time()
         # Run at most once every 10 minutes per worker process.
-        if now - self._last_prune_ts < 600:
+        if not force and now - self._last_prune_ts < 600:
             return
         self._last_prune_ts = now
 

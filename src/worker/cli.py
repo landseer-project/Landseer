@@ -1679,20 +1679,57 @@ class Worker:
         except Exception as e:
             logger.error(f"Failed to report result for task {task.id}: {e}")
     
+    def _free_gb(self) -> float:
+        """Free space (GB) on the fuller of the workspace and cache filesystems."""
+        paths = [p for p in (getattr(self._runner, "workspace_dir", None), self.cache_dir) if p]
+        free = []
+        for p in paths:
+            try:
+                free.append(shutil.disk_usage(p).free / 1e9)
+            except OSError:
+                pass
+        return min(free) if free else float("inf")
+
+    def _pause(self, seconds: float, reason: str) -> None:
+        """Stop claiming for a while, still heartbeating so the backend keeps the worker."""
+        logger.error(f"Not claiming tasks for {seconds / 60:.0f} min: {reason}")
+        deadline = time.time() + seconds
+        while self._running and time.time() < deadline:
+            time.sleep(min(30.0, max(0.0, deadline - time.time())))
+            self._send_heartbeat()
+
     def _work_loop(self) -> None:
         """Main work loop - claim and execute tasks."""
         idle_count = 0
         max_idle = 10  # Number of idle polls before longer wait
+        # A worker that cannot run tasks (full disk, broken GPU driver, inputs it
+        # cannot fetch) fails every task it claims within seconds and drains the
+        # queue for all workers. Don't claim on a nearly full disk, and stop
+        # claiming for a while after several fast failures in a row.
+        min_free_gb = float(os.environ.get("LANDSEER_WORKER_MIN_FREE_GB", "25"))
+        fast_fail_s = float(os.environ.get("LANDSEER_WORKER_FAST_FAIL_SECONDS", "120"))
+        fast_fail_limit = int(os.environ.get("LANDSEER_WORKER_FAST_FAIL_LIMIT", "3"))
+        fast_fail_pause_s = float(os.environ.get("LANDSEER_WORKER_FAST_FAIL_PAUSE_SECONDS", "900"))
+        fast_failures = 0
         
         while self._running:
             self._send_heartbeat()
             
             try:
+                if self._free_gb() < min_free_gb:
+                    if self._runner is not None:
+                        self._runner._maybe_prune_stale_storage(force=True)
+                    free = self._free_gb()
+                    if free < min_free_gb:
+                        self._pause(60, f"only {free:.0f} GB free (< {min_free_gb:.0f} GB)")
+                        continue
+
                 # Try to claim a task
                 task = self._client.claim_task()
                 
                 if task:
                     idle_count = 0
+                    started = time.time()
                     
                     try:
                         # Execute the task
@@ -1710,6 +1747,18 @@ class Worker:
                     
                     # Report result (success/failure)
                     self._report_result(task, result)
+
+                    if result.success or time.time() - started >= fast_fail_s:
+                        fast_failures = 0
+                    else:
+                        fast_failures += 1
+                        if fast_failures >= fast_fail_limit:
+                            self._pause(
+                                fast_fail_pause_s,
+                                f"{fast_failures} tasks in a row failed within {fast_fail_s:.0f}s "
+                                f"(last: {(result.error_message or '')[:200]})",
+                            )
+                            fast_failures = 0
                     
                 else:
                     idle_count += 1
