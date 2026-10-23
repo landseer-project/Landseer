@@ -47,14 +47,14 @@ evaluators:
   adversarial:
     name: adversarial
     container:
-      image: ghcr.io/landseer-project/evals/adversarial:v2
+      image: ghcr.io/landseer-project/evals/adversarial:v3
       command: ""
     required_artifacts: []
     metrics:
       - clean_accuracy
       - pgd_accuracy
       - fgsm_accuracy
-      - carlini_l2_accuracy
+      # carlini_l2_accuracy: opt-in since v3 (carlini_sample_size > 0)
     defense_types:
       - adversarial
 
