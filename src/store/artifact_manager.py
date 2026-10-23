@@ -761,6 +761,15 @@ class ArtifactManager:
                     rel = obj.object_name[len(prefix):].lstrip("/")
                     if not rel or rel == ARTIFACT_COMPLETE_MARKER:
                         continue
+                    # The marker is the source of truth: objects it rebuilds from a
+                    # local copy, or doesn't list, are leftovers of an earlier upload
+                    # of this key that failed partway (hard-linking the copy over a
+                    # downloaded leftover then failed with EEXIST).
+                    if expected is not None and rel != ARTIFACT_MANIFEST and (
+                        rel not in expected
+                        or expected[rel].get("source") in (DATASET_SOURCE, ARTIFACT_SOURCE)
+                    ):
+                        continue
                     if rel == ARTIFACT_MANIFEST:
                         dest = staging / ARTIFACT_MANIFEST
                     else:
