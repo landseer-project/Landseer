@@ -201,6 +201,18 @@ tools:
       command: python3 main.py --scale 0.1 --epoch 200 --batch_size 64 --embed_dim 256
       runtime: null
 
+  # Same code as v3 (it trains the pipeline model on data.npy/labels.npy); v4 only
+  # adds celeba to the image's supported-datasets label. A separate entry keeps
+  # the CIFAR-10 runs on v3 and their cache keys unchanged.
+  in_watermarkinguchida_celeba:
+    name: in-watermarkinguchida-celeba
+    defense_stage: during_training
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/in_watermarkinguchida:v4
+      command: python3 main.py --scale 0.1 --epoch 200 --batch_size 64 --embed_dim 256
+      runtime: null
+
   # Free adversarial training stays in TensorFlow; the adapters convert the
   # pipeline's PyTorch model to Keras and the trained model back to model.pt.
   in_freeat:

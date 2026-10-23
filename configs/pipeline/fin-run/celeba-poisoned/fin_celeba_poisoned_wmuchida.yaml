@@ -21,7 +21,7 @@ pipeline:
       # Generic: trains the pipeline model (CelebA ResNet20, 2 classes) and embeds
       # the 256-bit Uchida watermark in layer1.0.conv2, which the watermark
       # evaluator's weight_based check reads.
-      - in_watermarkinguchida
+      - in_watermarkinguchida_celeba
   post_training:
     tools:
       - post_noop
