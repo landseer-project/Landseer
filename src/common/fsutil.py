@@ -48,8 +48,20 @@ def same_content(src: PathLike, dst: PathLike) -> bool:
         return False
 
 
+def _reflink_or_copy(src: Path, dst: Path) -> None:
+    """Copy ``src`` to ``dst`` as a copy-on-write reflink where the filesystem allows.
+
+    A reflink behaves like a full copy (the source never changes) but shares the
+    data blocks. Task inputs are mostly unchanged copies of the dataset and of
+    ancestor outputs, so full copies cost ~2.8 GB per CelebA task on btrfs and
+    filled /data on 2026-10-23. Other filesystems get the plain copy as before.
+    """
+    if not _reflink(src, dst):
+        shutil.copy2(src, dst)
+
+
 def link_or_copy(src: PathLike, dst: PathLike) -> None:
-    """Copy a file, or hard-link when the hardlink macro is enabled.
+    """Copy a file (reflink where possible), or hard-link when the hardlink macro is enabled.
 
     When the destination already exists and has identical content, replace it
     with a hard link to avoid rewriting bytes. ``shutil.copytree`` may pass
@@ -59,7 +71,7 @@ def link_or_copy(src: PathLike, dst: PathLike) -> None:
     src_path = Path(src)
     dst_path = Path(dst)
     if not hardlink_macro_enabled():
-        shutil.copy2(src_path, dst_path)
+        _reflink_or_copy(src_path, dst_path)
         return
 
     if dst_path.exists() and dst_path.is_file() and same_content(src_path, dst_path):
@@ -69,7 +81,7 @@ def link_or_copy(src: PathLike, dst: PathLike) -> None:
             return
         except OSError as exc:
             if exc.errno in (errno.EXDEV, errno.EPERM, errno.EACCES):
-                shutil.copy2(src_path, dst_path)
+                _reflink_or_copy(src_path, dst_path)
                 return
             raise
 
@@ -77,7 +89,7 @@ def link_or_copy(src: PathLike, dst: PathLike) -> None:
         os.link(src_path, dst_path)
     except OSError as exc:
         if exc.errno in (errno.EXDEV, errno.EPERM, errno.EACCES):
-            shutil.copy2(src_path, dst_path)
+            _reflink_or_copy(src_path, dst_path)
         else:
             raise
 
