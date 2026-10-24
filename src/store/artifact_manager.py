@@ -885,6 +885,15 @@ class ArtifactManager:
         local_path = self.get_local_artifact(cache_key)
         if local_path:
             logger.debug(f"Cache hit (local): {cache_key[:12]}")
+            # A local entry whose upload failed (e.g. MinIO's disk was full) is a
+            # hit here but missing for every other worker, whose dependents then
+            # fail with "Dependency output missing". Publish it now.
+            if self.use_minio and self.minio and self.minio.is_available:
+                try:
+                    if not self.minio_exists(cache_key) and not self.upload_to_minio(cache_key):
+                        logger.warning(f"Local-only artifact {cache_key[:12]} could not be republished to MinIO")
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"Republishing local-only artifact {cache_key[:12]} failed: {e}")
             return local_path
         
         # Try MinIO

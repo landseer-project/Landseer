@@ -5,6 +5,7 @@ Provides S3-compatible object storage for artifact caching and sharing
 between workers.
 """
 
+import time
 import io
 import json
 import os
@@ -291,17 +292,28 @@ class MinioStore:
         local_path = Path(local_path)
         local_path.parent.mkdir(parents=True, exist_ok=True)
         
-        try:
-            self._client.fget_object(
-                self.config.bucket,
-                object_key,
-                str(local_path)
-            )
-            logger.debug(f"Downloaded: {object_key} -> {local_path}")
-            return True
-        except S3Error as e:
-            logger.error(f"Failed to download {object_key}: {e}")
-            return False
+        # Cloud workers reach MinIO through an SSH tunnel; a dropped connection
+        # ("Connection broken: IncompleteRead") used to fail the whole task.
+        attempts = 3
+        for attempt in range(1, attempts + 1):
+            try:
+                self._client.fget_object(
+                    self.config.bucket,
+                    object_key,
+                    str(local_path)
+                )
+                logger.debug(f"Downloaded: {object_key} -> {local_path}")
+                return True
+            except S3Error as e:
+                logger.error(f"Failed to download {object_key}: {e}")
+                return False
+            except Exception as e:  # noqa: BLE001 - urllib3 ProtocolError, ConnectionError, ...
+                if attempt == attempts:
+                    logger.error(f"Failed to download {object_key} after {attempts} attempts: {e}")
+                    return False
+                logger.warning(f"Download of {object_key} interrupted ({e}); retrying ({attempt}/{attempts})")
+                time.sleep(2 * attempt)
+        return False
     
     def download_bytes(self, object_key: str) -> Optional[bytes]:
         """

@@ -815,10 +815,28 @@ class TaskRunner:
                     continue
                 size = self._dir_size_bytes(p)
                 shutil.rmtree(p, ignore_errors=True)
+                if p.exists():
+                    self._remove_as_root(p)
                 reclaimed_workspace += size
                 removed_workspace += 1
             except Exception:
                 continue
+
+    def _remove_as_root(self, path: Path) -> None:
+        """Delete what rmtree left behind: files tool containers wrote as root.
+
+        Workers that don't run as root (simurgh, fabiha, GCP, AWS) cannot delete
+        those, so retention silently kept them until the disk filled.
+        """
+        if self.runtime != "docker":
+            return
+        try:
+            subprocess.run(
+                ["docker", "run", "--rm", "-v", f"{path.parent}:/w", "alpine", "rm", "-rf", f"/w/{path.name}"],
+                capture_output=True, timeout=1800, check=False,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Could not remove root-owned files in {path}: {e}")
 
     @staticmethod
     def _dir_size_bytes(path: Path) -> int:
