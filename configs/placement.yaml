@@ -13,3 +13,7 @@ pins:
   # once an org owner makes evals/sanitization public. vast-4090-0 and gcp-l4-0
   # (reverse-tunnelled from simurgh) have the image loaded from simurgh too.
   sanitization: [simurgh-, fabiha, vast-, gcp-]
+  # in_fair:v6 turns ~200k CelebA images into sketches in memory; on smaller
+  # workers the step was OOM-killed (SIGKILL) or left sketches missing.
+  # simurgh has 503 GB RAM.
+  in_fair: [simurgh-]
