@@ -11,7 +11,10 @@ pipeline:
     tools:
       - pre_noop
       - pre_xgbod_celeba
-      - pre_watermarkbn_celeba
+      # class 0, as in the poisoned configs (where BadNets targets 1), so the
+      # watermark results compare directly between clean and poisoned
+      - tool: pre_watermarkbn_celeba
+        command: python3 main.py --trigger_label 0 --exclude_target_class --trigger_size 10 --wm_rate 0.1
 
   during_training:
     tools:
