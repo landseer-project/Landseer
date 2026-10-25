@@ -68,6 +68,10 @@ evaluators:
     # in_fair writes test_sensitive.npy (and its own test split); no other tool does
     # applies_to:
     #   tools: [in_fair]
+    # The shared eval_artifacts/test_sensitive.npy holds CelebA's gender attribute
+    # (aligned with CelebA's test split); CIFAR-10 has no sensitive attribute.
+    applies_to:
+      datasets: [celeba]
     metrics:
       - demographic_parity
       - equalized_odds_diff

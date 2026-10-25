@@ -391,6 +391,7 @@ class Worker:
         if not isinstance(dataset_info, dict):
             dataset_info = {}
         self._dataset_info = dataset_info
+        self._export_run_dataset_env()
         self._model_script_path = self._resolve_model_script(dataset_info, run_id)
 
         name, variant = dataset_info.get("name"), dataset_info.get("variant")
@@ -523,6 +524,7 @@ class Worker:
         if remembered and remembered["path"].exists():
             logger.info(f"Run changed ({self._active_run_id} -> {run_id}); restoring its dataset/model context")
             self._dataset_info = remembered["info"]
+            self._export_run_dataset_env()
             self._dataset_manifest = remembered["manifest"]
             self._dataset_path = remembered["path"]
             self._model_script_path = remembered["model"]
@@ -1679,6 +1681,19 @@ class Worker:
         except Exception as e:
             logger.error(f"Failed to report result for task {task.id}: {e}")
     
+    def _export_run_dataset_env(self) -> None:
+        """Set LANDSEER_DATASET/_VARIANT from the run being executed.
+
+        The runner hands these to every task (the fingerprinting evaluator picks
+        its calibrator from them). Taken from the worker's startup env they forced
+        every worker onto one dataset; from the run, one worker serves CelebA and
+        CIFAR-10 runs side by side.
+        """
+        info = self._dataset_info or {}
+        for key, field in (("LANDSEER_DATASET", "name"), ("LANDSEER_DATASET_VARIANT", "variant")):
+            if info.get(field):
+                os.environ[key] = str(info[field])
+
     def _free_gb(self) -> float:
         """Free space (GB) on the fuller of the workspace and cache filesystems."""
         paths = [p for p in (getattr(self._runner, "workspace_dir", None), self.cache_dir) if p]
