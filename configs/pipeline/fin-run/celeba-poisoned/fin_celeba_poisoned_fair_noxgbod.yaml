@@ -1,0 +1,36 @@
+dataset:
+  name: celeba
+  variant: poisoned
+
+model:
+  script: configs/model/config_model_resnet20_celeba.py
+  framework: pytorch
+
+pipeline:
+  pre_training:
+    tools:
+      - pre_noop
+      # class 0: the BadNets target is 1 (Smiling)
+      - tool: pre_watermarkbn_celeba
+        command: python3 main.py --trigger_label 0 --exclude_target_class --trigger_size 10 --wm_rate 0.1
+
+  during_training:
+    tools:
+      - in_noop_celeba
+      - in_fair
+  post_training:
+    tools:
+      - post_noop
+      - post_neuronprune_celeba
+  deployment:
+    tools:
+      - deploy_noop
+      - deploy_explainshap_celeba
+      - deploy_dataset_inference
+
+# in_noop_celeba combos run in fin_celeba_poisoned_noop.yaml
+# pre_xgbod_celeba left out for now: in_fair:v6 indexes the full CelebA list and
+# crashes on xgbod-filtered data (see fin_celeba_poisoned_fair.yaml).
+combinations:
+  exclude:
+    - during_training: in_noop_celeba
