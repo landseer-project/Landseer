@@ -628,7 +628,10 @@ class Worker:
         def _loop() -> None:
             interval = max(1.0, self.heartbeat_interval / 2.0)
             while not self._task_heartbeat_stop.wait(interval):
-                if not self._running or self._current_task is None:
+                # Keep heartbeating while a task runs even after SIGTERM: a
+                # draining worker finishes its task first, and a silent one gets
+                # its task handed to another worker (it then runs twice).
+                if self._current_task is None:
                     continue
                 try:
                     self._client.heartbeat(status="busy")
