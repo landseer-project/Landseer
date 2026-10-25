@@ -17,3 +17,8 @@ pins:
   # workers the step was OOM-killed (SIGKILL) or left sketches missing.
   # simurgh has 503 GB RAM.
   in_fair: [simurgh-]
+  # TEMPORARY (2026-10-25): fingerprinting picks its calibrator from
+  # LANDSEER_DATASET_VARIANT, which workers older than 85d0675 take from their
+  # env file (celeba/poisoned). Keep it on workers already on 85d0675 until every
+  # worker restarted, so clean CelebA runs never get the backdoor calibrator.
+  fingerprinting: [vast-4090b, vast-4090az, vast-3090b, vast-3090-0, gcp-, aws-, fabiha]
