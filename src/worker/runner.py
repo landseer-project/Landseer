@@ -493,62 +493,72 @@ class DockerRunner:
                 except Exception:
                     pass
 
-        try:
-            proc = subprocess.Popen(
-                docker_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                shell=False,
-                bufsize=1,  # line-buffered
-            )
-            t_stdout = threading.Thread(target=read_pipe, args=(proc.stdout, stdout_chunks, "stdout"))
-            t_stderr = threading.Thread(target=read_pipe, args=(proc.stderr, stderr_chunks, "stderr"))
-            t_stdout.daemon = True
-            t_stderr.daemon = True
-            t_stdout.start()
-            t_stderr.start()
+        for attempt in range(1, 4):
+            stdout_chunks.clear()
+            stderr_chunks.clear()
+            try:
+                proc = subprocess.Popen(
+                    docker_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    shell=False,
+                    bufsize=1,  # line-buffered
+                )
+                t_stdout = threading.Thread(target=read_pipe, args=(proc.stdout, stdout_chunks, "stdout"))
+                t_stderr = threading.Thread(target=read_pipe, args=(proc.stderr, stderr_chunks, "stderr"))
+                t_stdout.daemon = True
+                t_stderr.daemon = True
+                t_stdout.start()
+                t_stderr.start()
 
-            start = time.monotonic()
-            while proc.poll() is None:
-                elapsed = time.monotonic() - start
-                if self.timeout > 0 and elapsed >= self.timeout:
-                    proc.kill()
-                    proc.wait()
-                    t_stdout.join(timeout=2.0)
-                    t_stderr.join(timeout=2.0)
-                    logger.error(f"Container execution timed out after {self.timeout}s")
-                    logs = "".join(stdout_chunks) + "".join(stderr_chunks)
-                    return -1, f"Timeout after {self.timeout} seconds", cmd_str
-                time.sleep(1)
-            t_stdout.join(timeout=5.0)
-            t_stderr.join(timeout=5.0)
-            logs = "".join(stdout_chunks) + "".join(stderr_chunks)
-            returncode = proc.returncode
+                start = time.monotonic()
+                while proc.poll() is None:
+                    elapsed = time.monotonic() - start
+                    if self.timeout > 0 and elapsed >= self.timeout:
+                        proc.kill()
+                        proc.wait()
+                        t_stdout.join(timeout=2.0)
+                        t_stderr.join(timeout=2.0)
+                        logger.error(f"Container execution timed out after {self.timeout}s")
+                        logs = "".join(stdout_chunks) + "".join(stderr_chunks)
+                        return -1, f"Timeout after {self.timeout} seconds", cmd_str
+                    time.sleep(1)
+                t_stdout.join(timeout=5.0)
+                t_stderr.join(timeout=5.0)
+                logs = "".join(stdout_chunks) + "".join(stderr_chunks)
+                returncode = proc.returncode
 
-            # Check for GPU-related errors and provide helpful diagnostics
-            if returncode != 0 and self.gpu_id is not None:
-                error_lower = logs.lower()
-                if "no cuda gpus are available" in error_lower or ("cuda" in error_lower and "not available" in error_lower):
-                    logger.error(
-                        f"❌ GPU ACCESS FAILED in container!\n"
-                        f"   GPU ID: {self.gpu_id}\n"
-                        f"   Runtime: nvidia\n"
-                        f"   NVIDIA_VISIBLE_DEVICES: {self.gpu_id}\n"
-                        f"   CUDA_VISIBLE_DEVICES: {self.gpu_id}\n"
-                        f"   Docker Command: {cmd_str[:300]}...\n"
-                        f"   This may indicate:\n"
-                        f"   1. nvidia-container-runtime not properly installed/configured\n"
-                        f"   2. Docker daemon not configured for GPU access\n"
-                        f"   3. GPU {self.gpu_id} not accessible to Docker\n"
-                        f"   4. nvidia runtime not available (check: docker info | grep -i runtime)\n"
-                        f"   Container output: {logs[:500]}"
-                    )
-            return returncode, logs, cmd_str
+                # Check for GPU-related errors and provide helpful diagnostics
+                if returncode != 0 and self.gpu_id is not None:
+                    error_lower = logs.lower()
+                    if "no cuda gpus are available" in error_lower or ("cuda" in error_lower and "not available" in error_lower):
+                        logger.error(
+                            f"❌ GPU ACCESS FAILED in container!\n"
+                            f"   GPU ID: {self.gpu_id}\n"
+                            f"   Runtime: nvidia\n"
+                            f"   NVIDIA_VISIBLE_DEVICES: {self.gpu_id}\n"
+                            f"   CUDA_VISIBLE_DEVICES: {self.gpu_id}\n"
+                            f"   Docker Command: {cmd_str[:300]}...\n"
+                            f"   This may indicate:\n"
+                            f"   1. nvidia-container-runtime not properly installed/configured\n"
+                            f"   2. Docker daemon not configured for GPU access\n"
+                            f"   3. GPU {self.gpu_id} not accessible to Docker\n"
+                            f"   4. nvidia runtime not available (check: docker info | grep -i runtime)\n"
+                            f"   Container output: {logs[:500]}"
+                        )
+                # Exit 125 = docker failed before the tool started. On simurgh the NVIDIA
+                # container hook intermittently fails to symlink a library ("failed to
+                # create link ... bad file descriptor"); a retry a few seconds later works.
+                if returncode == 125 and attempt < 3 and ("failed to create link" in logs or "OCI runtime create failed" in logs):
+                    logger.warning(f"docker run failed before the tool started (exit 125); retrying ({attempt}/3)")
+                    time.sleep(10 * attempt)
+                    continue
+                return returncode, logs, cmd_str
 
-        except Exception as e:
-            logger.error(f"Container execution failed: {e}")
-            return -1, str(e), cmd_str
+            except Exception as e:
+                logger.error(f"Container execution failed: {e}")
+                return -1, str(e), cmd_str
 
 
 class ApptainerRunner:

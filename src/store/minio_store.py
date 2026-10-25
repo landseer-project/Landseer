@@ -329,15 +329,26 @@ class MinioStore:
             logger.warning("MinIO not available, skipping download")
             return None
         
-        try:
-            response = self._client.get_object(self.config.bucket, object_key)
-            data = response.read()
-            response.close()
-            response.release_conn()
-            return data
-        except S3Error as e:
-            logger.error(f"Failed to download bytes {object_key}: {e}")
-            return None
+        # Same tunnel drops as download_file (e.g. the 27 MB dataset manifest).
+        attempts = 3
+        for attempt in range(1, attempts + 1):
+            try:
+                response = self._client.get_object(self.config.bucket, object_key)
+                try:
+                    return response.read()
+                finally:
+                    response.close()
+                    response.release_conn()
+            except S3Error as e:
+                logger.error(f"Failed to download bytes {object_key}: {e}")
+                return None
+            except Exception as e:  # noqa: BLE001 - urllib3 ProtocolError, ConnectionError, ...
+                if attempt == attempts:
+                    logger.error(f"Failed to download bytes {object_key} after {attempts} attempts: {e}")
+                    return None
+                logger.warning(f"Download of {object_key} interrupted ({e}); retrying ({attempt}/{attempts})")
+                time.sleep(2 * attempt)
+        return None
     
     def download_directory(
         self,
