@@ -677,6 +677,27 @@ class Worker:
                 logger.warning(f"Failed to fetch cached output {cache_key[:12]}: {e}")
         return None
 
+    def _cache_key_for_output(self, path: Optional[Path]) -> Optional[str]:
+        """Cache key of the task whose workspace output dir is ``path`` (.../<task_id>/output).
+
+        Ancestors are remembered by path; once retention prunes that workspace,
+        the key is what lets _usable_output fall back to the cache/MinIO copy.
+        """
+        if path is None or Path(path).name != "output":
+            return None
+        task_id = Path(path).parent.name
+        if not re.fullmatch(r"(task_\d+|[0-9a-f]{8}-[0-9a-f]{12}(-\d+)?)", task_id):
+            return None
+        known = self._task_outputs.get(task_id)
+        if known and known[0]:
+            return known[0]
+        try:
+            info = self._client.get_task(task_id)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Could not look up cache key of {task_id}: {e}")
+            return None
+        return info.cache_key if info and info.cache_key else None
+
     def _usable_output(self, path: Optional[Path], cache_key: Optional[str]) -> Optional[Path]:
         """
         Return a dependency output dir that still has its files.
@@ -1267,7 +1288,8 @@ class Worker:
                         parent_hashes.append(dep_key)
                     resolved_anc: List[Path] = []
                     for anc in dep_anc:
-                        usable = self._usable_output(anc, key_by_output.get(str(anc)))
+                        anc_key = key_by_output.get(str(anc)) or self._cache_key_for_output(anc)
+                        usable = self._usable_output(anc, anc_key)
                         if usable is None:
                             missing_deps.append(f"ancestor of {dep_id} ({anc})")
                         else:
