@@ -8,6 +8,7 @@ This module provides a client class that handles:
 - Worker heartbeat
 """
 
+import math
 import socket
 import time
 from dataclasses import dataclass, field
@@ -19,6 +20,21 @@ import httpx
 from ..common import get_logger
 
 logger = get_logger(__name__)
+
+
+def _json_safe(value: Any) -> Any:
+    """Replace NaN/inf (not valid JSON) with None, recursively.
+
+    Evaluator metrics can be NaN (e.g. an empty class); httpx refuses to encode them,
+    which used to leave the finished task RUNNING in the backend forever.
+    """
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
 
 
 @dataclass
@@ -167,7 +183,7 @@ class LandseerClient:
                 response = self._client.request(
                     method=method,
                     url=endpoint,
-                    json=json_data,
+                    json=_json_safe(json_data),
                     params=params
                 )
                 response.raise_for_status()
