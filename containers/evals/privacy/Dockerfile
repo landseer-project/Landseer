@@ -29,6 +29,6 @@ RUN pip install --no-cache-dir \
 
 COPY common/model_loader.py ./model_loader.py
 COPY privacy/evaluate.py ./evaluate.py
-COPY privacy/celeba_shadows ./celeba_shadows
+# COPY privacy/celeba_shadows ./celeba_shadows
 
 ENTRYPOINT ["python", "evaluate.py"]

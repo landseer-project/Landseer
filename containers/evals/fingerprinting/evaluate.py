@@ -23,28 +23,6 @@ def write_result(output_dir, result):
     print(f"Results saved to {path}")
 
 
-# def resolve_calibrator(input_dir):
-#     """Select the fixed Dataset Inference calibrator."""
-#     explicit = os.environ.get("FINGERPRINTING_CALIBRATOR", "").strip()
-#     if explicit:
-#         path = Path(explicit)
-#         return path if path.is_absolute() else input_dir / path
-
-#     dataset = os.environ.get("LANDSEER_DATASET", "").strip().lower()
-#     variant = os.environ.get("LANDSEER_DATASET_VARIANT", "").strip().lower()
-
-#     if dataset == "celeba":
-#         if variant == "clean":
-#             return input_dir / "celeba_clean_calibrator_final.pt"
-#         if variant in {"poisoned", "backdoor", "poison"}:
-#             return input_dir / "celeba_backdoor_calibrator_final.pt"
-
-#     raise ValueError(
-#         f"Could not determine fingerprinting calibrator. "
-#         f"LANDSEER_DATASET={dataset!r}, LANDSEER_DATASET_VARIANT={variant!r}. "
-#         "Set those variables or FINGERPRINTING_CALIBRATOR."
-#     )
-
 def resolve_calibrator(input_dir):
     artifact_dir = input_dir / "fingerprinting"
 
@@ -63,7 +41,11 @@ def resolve_calibrator(input_dir):
             return artifact_dir / "celeba_backdoor_calibrator_final.pt"
 
     if dataset == "cifar10":
-        return artifact_dir / "cifar10_backdoor_calibrator_final.pt"
+        if variant == "clean":
+            return artifact_dir / "cifar10_clean_calibrator_final.pt"
+        if variant in {"poisoned", "backdoor", "poison"}:
+            return artifact_dir / "cifar10_backdoor_calibrator_final.pt"
+        raise ValueError(f"No CIFAR-10 fingerprinting calibrator for variant={variant!r}")
 
     raise ValueError(
         f"No fingerprinting calibrator for dataset={dataset!r}, variant={variant!r}"

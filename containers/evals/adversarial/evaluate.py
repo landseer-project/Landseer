@@ -320,7 +320,7 @@ def main():
     pgd_steps = config.get("pgd_steps", 10)
     pgd_alpha = config.get("pgd_alpha", 2/255)
     batch_size = config.get("batch_size", 64)
-    carlini_sample_size = config.get("carlini_sample_size", 500)
+    # carlini_sample_size = config.get("carlini_sample_size", 500)
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
@@ -349,10 +349,68 @@ def main():
         (output_dir / "evaluation_results.json").write_text(json.dumps(results, indent=2))
         return
     
+    # # Load test data
+    # test_data_path = input_dir / "test_data.npy"
+    # test_labels_path = input_dir / "test_labels.npy"
+    
+    # if not test_data_path.exists() or not test_labels_path.exists():
+    #     results = {
+    #         "evaluator": "adversarial",
+    #         "success": False,
+    #         "error": "Test data not found",
+    #         "metrics": {}
+    #     }
+    #     (output_dir / "evaluation_results.json").write_text(json.dumps(results, indent=2))
+    #     return
+    
+    # X = np.load(test_data_path)
+    # Y = np.load(test_labels_path)
+    
+    # dataset = TensorDataset(
+    #     torch.tensor(X).float(),
+    #     torch.tensor(Y).long()
+    # )
+    # loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+
+    # Detect optional runtime defense
+    defense = None
+    defense_path = input_dir / "defense.json"
+
+    if defense_path.exists():
+        try:
+            defense = json.loads(defense_path.read_text())
+            print(f"Loaded defense metadata: {defense}")
+        except Exception as e:
+            print(f"Warning: failed to load defense.json: {e}")
+
+    is_dds = bool(defense and defense.get("defense") == "dds")
+
+    if is_dds:
+        from dds_runtime.dds import DDSProtectedModel
+
+        sigma = float(defense.get("sigma", 0.25))
+        classifier_expects_normalized = defense.get("input_space") == "cifar10_normalized"
+
+        model = DDSProtectedModel(
+            model,
+            sigma=sigma,
+            classifier_expects_normalized=classifier_expects_normalized
+        ).to(device)
+        model.eval()
+
+        batch_size = min(batch_size, 32)
+
+        print(
+            f"DDS runtime enabled: sigma={sigma}, "
+            f"classifier_expects_normalized={classifier_expects_normalized}"
+        )
+    else:
+        print("No DDS runtime defense detected.")
+
     # Load test data
     test_data_path = input_dir / "test_data.npy"
     test_labels_path = input_dir / "test_labels.npy"
-    
+
     if not test_data_path.exists() or not test_labels_path.exists():
         results = {
             "evaluator": "adversarial",
@@ -362,17 +420,37 @@ def main():
         }
         (output_dir / "evaluation_results.json").write_text(json.dumps(results, indent=2))
         return
-    
+
     X = np.load(test_data_path)
     Y = np.load(test_labels_path)
-    
+
+    print(
+        f"Test data before evaluator preprocessing: "
+        f"shape={X.shape}, min={X.min():.4f}, max={X.max():.4f}"
+    )
+
+    # DDSProtectedModel expects raw [0,1] pixels.
+    # The DDS stage records whether the incoming classifier artifacts were
+    # stored in CIFAR-10 normalized space.
+    if is_dds and defense.get("input_space") == "cifar10_normalized":
+        mean = np.array([0.4914, 0.4822, 0.4465], dtype=np.float32).reshape(1, 3, 1, 1)
+        std = np.array([0.2023, 0.1994, 0.2010], dtype=np.float32).reshape(1, 3, 1, 1)
+
+        X = np.clip(X * std + mean, 0.0, 1.0)
+
+        print(
+            f"DDS input converted to raw [0,1]: "
+            f"min={X.min():.4f}, max={X.max():.4f}"
+        )
+
     dataset = TensorDataset(
         torch.tensor(X).float(),
         torch.tensor(Y).long()
     )
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+
+    print(f"Loaded {len(dataset)} test samples (batch_size={batch_size})")
     
-    print(f"Loaded {len(dataset)} test samples")
     
     # Evaluate
     metrics = {}
@@ -389,9 +467,9 @@ def main():
     metrics["fgsm_accuracy"] = evaluate_fgsm(model, loader, device, eps=eps)
     print(f"  FGSM accuracy: {metrics['fgsm_accuracy']:.4f}")
     
-    print(f"Evaluating Carlini L2 robustness (sample_size={carlini_sample_size})...")
-    metrics["carlini_l2_accuracy"] = evaluate_carlini_l2(model, loader, device, sample_size=carlini_sample_size)
-    print(f"  Carlini L2 accuracy: {metrics['carlini_l2_accuracy']:.4f}")
+    # print(f"Evaluating Carlini L2 robustness (sample_size={carlini_sample_size})...")
+    # metrics["carlini_l2_accuracy"] = evaluate_carlini_l2(model, loader, device, sample_size=carlini_sample_size)
+    # print(f"  Carlini L2 accuracy: {metrics['carlini_l2_accuracy']:.4f}")
     
     # Write results
     results = {
@@ -403,8 +481,11 @@ def main():
             "eps": float(eps),
             "pgd_steps": pgd_steps,
             "pgd_alpha": float(pgd_alpha),
-            "carlini_sample_size": carlini_sample_size,
-            "device": device
+            # "carlini_sample_size": carlini_sample_size,
+            "device": device,
+            "dds_enabled": is_dds,
+            "dds_sigma": float(defense.get("sigma", 0.25)) if is_dds else None,
+            "input_space": defense.get("input_space") if is_dds else None
         },
         "timestamp": datetime.utcnow().isoformat() + "Z"
     }

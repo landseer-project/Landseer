@@ -47,14 +47,14 @@ evaluators:
   adversarial:
     name: adversarial
     container:
-      image: ghcr.io/landseer-project/evals/adversarial:v2
+      image: ghcr.io/landseer-project/evals/adversarial:v3
       command: ""
     required_artifacts: []
     metrics:
       - clean_accuracy
       - pgd_accuracy
       - fgsm_accuracy
-      - carlini_l2_accuracy
+      # - carlini_l2_accuracy
     defense_types:
       - adversarial
 
@@ -68,6 +68,8 @@ evaluators:
     # in_fair writes test_sensitive.npy (and its own test split); no other tool does
     # applies_to:
     #   tools: [in_fair]
+    applies_to:
+      datasets: [celeba]
     metrics:
       - demographic_parity
       - equalized_odds_diff
@@ -77,7 +79,7 @@ evaluators:
   fingerprinting:
     name: fingerprinting
     container:
-      image: ghcr.io/landseer-project/evals/fingerprinting:v3
+      image: ghcr.io/landseer-project/evals/fingerprinting:v4
       command: ""
     required_artifacts: 
       - fingerprinting 
@@ -125,9 +127,10 @@ evaluators:
   watermark:
     name: watermark
     container:
-      image: ghcr.io/landseer-project/evals/watermark:v4
+      image: ghcr.io/landseer-project/evals/watermark:v5
       command: ""
-    required_artifacts: []
+    required_artifacts:
+      - watermark
       # - watermark_key.json
     metrics:
       - watermark_accuracy
@@ -174,15 +177,16 @@ evaluators:
   privacy:
     name: privacy
     container:
-      image: ghcr.io/landseer-project/evals/privacy:v4
+      image: ghcr.io/landseer-project/evals/privacy:v5
       command: ""
     # Shadow models are built into the image (/app/celeba_shadows, identical to
     # /data/landseer/eval_artifacts/celeba_shadows); requiring a host copy made
     # privacy fail on every worker that was not set up by hand. They are CelebA
     # models, so privacy cannot evaluate other datasets.
-    required_artifacts: []
+    required_artifacts: 
+      - privacy
     applies_to:
-      datasets: [celeba]
+      datasets: [celeba, cifar10]
     metrics:
       - mia_auc
     defense_types:

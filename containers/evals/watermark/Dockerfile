@@ -32,10 +32,10 @@ COPY common/model_loader.py ./model_loader.py
 COPY watermark/evaluate.py ./evaluate.py
 
 # Include all watermark trigger files in the evaluator image
-COPY watermark/watermark_triggers/ ./watermark_triggers/
+# COPY watermark/watermark_triggers/ ./watermark_triggers/
 
-# Baked-in Uchida weight watermark reference
-COPY watermark/watermark_weights/ ./watermark_weights/
+# # Baked-in Uchida weight watermark reference
+# COPY watermark/watermark_weights/ ./watermark_weights/
 
 
 ENTRYPOINT ["python", "evaluate.py"]

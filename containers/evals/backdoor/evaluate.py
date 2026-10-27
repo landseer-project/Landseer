@@ -24,34 +24,10 @@ def add_trigger(images, trigger_info):
     Apply trigger pattern to images based on attack info.
     """
     technique = trigger_info.get("technique", "badnets")
-    
-    # if technique == "badnets":
-    #     trigger_size = trigger_info.get("trigger_size", 3)
-    #     trigger_value = trigger_info.get("trigger_value", 1.0)
-    #     trigger_position = trigger_info.get("trigger_position", "bottom_right")
+ 
         
-    #     triggered = images.copy()
-    #     _, c, h, w = triggered.shape
-        
-    #     if trigger_position == "bottom_right":
-    #         triggered[:, :, h-trigger_size:, w-trigger_size:] = trigger_value
-    #     elif trigger_position == "top_left":
-    #         triggered[:, :, :trigger_size, :trigger_size] = trigger_value
-    #     elif trigger_position == "bottom_left":
-    #         triggered[:, :, h-trigger_size:, :trigger_size] = trigger_value
-    #     elif trigger_position == "top_right":
-    #         triggered[:, :, :trigger_size, w-trigger_size:] = trigger_value
-    #     else:
-    #         triggered[:, :, h-trigger_size:, w-trigger_size:] = trigger_value
-        
-    #     return triggered
     if technique == "badnets":
         trigger_size = int(trigger_info.get("trigger_size", 3))
-
-        # if "trigger_value" not in trigger_info:
-        #     raise ValueError(
-        #         "BadNets evaluation requires trigger_value in poisoning metadata."
-        #     )
 
         # trigger_value = float(trigger_info["trigger_value"])
         trigger_value = resolve_eval_trigger_value(images) 

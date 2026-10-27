@@ -170,7 +170,7 @@ tools:
     defense_stage: during_training
     is_baseline: false
     container:
-      image: ghcr.io/landseer-project/in_fair:v6
+      image: ghcr.io/landseer-project/in_fair:v7
       command: python3 main.py
       runtime: null
 
@@ -200,6 +200,18 @@ tools:
       image: ghcr.io/landseer-project/in_watermarkinguchida:v3
       command: python3 main.py --scale 0.1 --epoch 200 --batch_size 64 --embed_dim 256
       runtime: null
+
+  in_watermarkinguchida_cifar10:
+    name: in-watermarkinguchida-cifar10
+    defense_stage: during_training
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/in_watermarkinguchida:v3
+      command: python3 main.py --scale 0.1
+      runtime: null
+
+
+    
 
   # Free adversarial training stays in TensorFlow; the adapters convert the
   # pipeline's PyTorch model to Keras and the trained model back to model.pt.
@@ -301,14 +313,14 @@ tools:
       command: python3 main.py
       runtime: null
 
-  post_inference:
-    name: post_inference
-    defense_stage: post_training
-    is_baseline: false
-    container:
-      image: ghcr.io/landseer-project/post_inference:v1
-      command: python3 main.py
-      runtime: null
+  # post_inference:
+  #   name: post_inference
+  #   defense_stage: post_training
+  #   is_baseline: false
+  #   container:
+  #     image: ghcr.io/landseer-project/post_inference:v1
+  #     command: python3 main.py
+  #     runtime: null
 
   post_neuronprune:
     name: post_neuronprune
@@ -325,7 +337,7 @@ tools:
     is_baseline: false
     container:
       image: ghcr.io/landseer-project/post_neuronprune:v3
-      command: python3 main.py --clean_threshold 0.55 --pruning-by number --pruning-max 16 --pruning-step 1 --export-number 12
+      command: python3 main.py --clean_threshold 0.55 --pruning-by threshold --pruning-max 0.9 --pruning-step 0.05 --export-threshold 0.25
       runtime: null
 
 
@@ -383,6 +395,17 @@ tools:
       image: ghcr.io/landseer-project/deploy_dataset_inference:v3
       command: python3 main.py
       runtime: null
+
+  deploy_dds:
+    name: deploy_dds
+    defense_stage: deployment
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/deploy_dds:v1
+      command: python3 main.py
+      runtime: null
+
+    
   
 
 

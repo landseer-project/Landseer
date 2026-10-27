@@ -357,16 +357,72 @@ def evaluate_di_features(
         member_scores=classifier(member_x).squeeze(1).cpu().numpy()
         public_scores=classifier(public_x).squeeze(1).cpu().numpy()
 
-    t_stat,p_value=ttest_ind(
-        public_scores,
-        member_scores,
-        alternative="greater",
-        equal_var=False,
+    print(
+        "DI scores | "
+        f"member mean={member_scores.mean():.8f} std={member_scores.std():.8f} "
+        f"min={member_scores.min():.8f} max={member_scores.max():.8f} | "
+        f"public mean={public_scores.mean():.8f} std={public_scores.std():.8f} "
+        f"min={public_scores.min():.8f} max={public_scores.max():.8f}",
+        flush=True,
     )
 
-    p_value=float(p_value)
-    mean_difference=float(public_scores.mean()-member_scores.mean())
+    # t_stat,p_value=ttest_ind(
+    #     public_scores,
+    #     member_scores,
+    #     alternative="greater",
+    #     equal_var=False,
+    # )
+
+    member_mean=float(member_scores.mean())
+    public_mean=float(public_scores.mean())
+    mean_difference=public_mean-member_mean
+    member_std=float(member_scores.std())
+    public_std=float(public_scores.std())
+    eps=1e-12
+
+    if member_std<eps and public_std<eps:
+        if abs(mean_difference)<eps:
+            # Both score distributions are effectively identical constants.
+            t_stat=0.0
+            p_value=1.0
+        elif mean_difference>0:
+            # Public scores are uniformly greater than member scores.
+            t_stat=1e300
+            p_value=1e-300
+        else:
+            # Direction is opposite to the one-sided DI hypothesis.
+            t_stat=-1e300
+            p_value=1.0
+    else:
+        t_stat,p_value=ttest_ind(
+            public_scores,
+            member_scores,
+            alternative="greater",
+            equal_var=False,
+        )
+        t_stat=float(t_stat)
+        p_value=float(p_value)
+
+        if not math.isfinite(t_stat) or not math.isfinite(p_value):
+            print(
+                f"Non-finite Welch result: "
+                f"effect={mean_difference:.8e}, "
+                f"member_std={member_std:.8e}, public_std={public_std:.8e}",
+                flush=True,
+            )
+
+            if abs(mean_difference)<eps:
+                t_stat=0.0
+                p_value=1.0
+            elif mean_difference>0:
+                t_stat=1e300
+                p_value=1e-300
+            else:
+                t_stat=-1e300
+                p_value=1.0
+
     evidence_score=-math.log10(max(p_value,1e-300))
+
 
     return {
         "p_value":p_value,

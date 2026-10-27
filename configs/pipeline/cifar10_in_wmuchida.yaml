@@ -1,0 +1,30 @@
+dataset:
+  name: cifar10
+  variant: poisoned
+
+model:
+  script: configs/model/config_model_resnet20.py
+  framework: pytorch
+
+pipeline:
+  pre_training:
+    tools:
+      - pre_noop
+      - pre_watermarkbn
+      - pre_xgbod
+  
+
+  during_training:
+    tools:
+      - in_noop
+      - in_watermarkinguchida_cifar10
+  post_training:
+    tools:
+      - post_noop
+      - post_neuronprune
+  deployment:
+    tools:
+      - deploy_noop
+      - deploy_explainshap
+      - deploy_dataset_inference
+      - deploy_dds
