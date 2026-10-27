@@ -70,7 +70,7 @@ tools:
     defense_stage: pre_training
     is_baseline: false
     container:
-      image: ghcr.io/landseer-project/pre_xgbod:v4
+      image: ghcr.io/landseer-project/pre_xgbod:v5
       command: python3 main.py
       runtime: null
 
@@ -79,7 +79,7 @@ tools:
     defense_stage: pre_training
     is_baseline: false
     container:
-      image: ghcr.io/landseer-project/pre_xgbod_celeba:v3
+      image: ghcr.io/landseer-project/pre_xgbod_celeba:v4
       command: python3 main.py
       runtime: null
   
@@ -337,7 +337,9 @@ tools:
     is_baseline: false
     container:
       image: ghcr.io/landseer-project/post_neuronprune:v3
-      command: python3 main.py --clean_threshold 0.55 --pruning-by number --pruning-max 16 --pruning-step 1 --export-number 12
+      # 2026-10-26: prune by threshold. Previously:
+      #   --pruning-by number --pruning-max 16 --pruning-step 1 --export-number 12
+      command: python3 main.py --clean_threshold 0.55 --pruning-by threshold --pruning-max 0.9 --pruning-step 0.05 --export-threshold 0.25
       runtime: null
 
 
