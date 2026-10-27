@@ -759,6 +759,8 @@ class TestEvaluatorAppliesTo:
         )
         assert sorted(t.tool.name for t in tasks) == ["backdoor", "clean"]
 
-    def test_repo_yaml_schedules_backdoor_and_fairness_narrowly(self, repo_evaluators):
+    def test_repo_yaml_schedules_backdoor_on_poisoned_only(self, repo_evaluators):
         assert repo_evaluators["backdoor"].applies_to == {"dataset_variants": ["poisoned"]}
-        assert repo_evaluators["fairness"].applies_to == {"tools": ["in_fair"]}
+        # Fairness runs on every workflow: tools other than in_fair get
+        # test_sensitive.npy from the evaluator artifacts (39ba741).
+        assert repo_evaluators["fairness"].applies_to == {}

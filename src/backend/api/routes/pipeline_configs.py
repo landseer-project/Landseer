@@ -123,8 +123,9 @@ def _prepare_run_dataset(
     for GET /dataset?run_id= (src/backend/run_datasets.py).
 
     Uses the built pipeline's dataset/model config, so request overrides are
-    already applied. Best-effort: a failure is logged and the run still starts.
-    Needs the backend context (MinIO store); without one nothing is prepared.
+    already applied. A failure (e.g. MinIO full) is raised so the run is marked
+    FAILED instead of starting tasks without their dataset. Needs the backend
+    context (MinIO store); without one nothing is prepared.
     """
     ctx = get_backend_context()
     if not ctx:
@@ -147,8 +148,8 @@ def _prepare_run_dataset(
         )
         logger.info(f"Dataset for run {run_id} ready after {time.time() - t_prepare_start:.1f}s")
     except Exception as e:
-        logger.warning(f"Dataset context setup failed for run {run_id}: {e}")
-        return None
+        logger.error(f"Dataset context setup failed for run {run_id}: {e}")
+        raise
     ctx.dataset_manager = manager
     # Legacy single-dataset view (GET /dataset without run_id): the latest run.
     ctx.dataset_info = info
@@ -215,8 +216,9 @@ async def start_pipeline_run(
                 pipeline, run_id, use_cache=bool(request_data.get("use_cache", True))
             )
 
-            # Step 3: This run's own dataset (best-effort). Prepared and published
-            # before the tasks are scheduled so workers can fetch it by run_id.
+            # Step 3: This run's own dataset. Prepared and published before the
+            # tasks are scheduled so workers can fetch it by run_id; a failure
+            # fails the run (handled below) rather than scheduling its tasks.
             ctx = get_backend_context()
             if ctx:
                 ctx.pipeline = pipeline

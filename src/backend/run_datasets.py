@@ -120,7 +120,6 @@ def _ensure_dataset(
             raise RuntimeError(f"Dataset preparation returned no dataset info for {name}/{variant}")
         info = ds_info.to_dict()
 
-        published = True
         if store is not None and getattr(store, "is_available", False):
             # The output dir name ("clean", "poisoned", ...) keeps variants apart in MinIO.
             minio_key = f"datasets/{name}/{Path(info['output_dir']).name}"
@@ -131,11 +130,13 @@ def _ensure_dataset(
                 if not publish_dataset(store, info, minio_key):
                     raise RuntimeError(f"dataset upload to {minio_key} incomplete")
             except Exception as e:
-                published = False
-                logger.warning(f"Failed to upload dataset to MinIO: {e}")
-        # A failed publish is retried by the next run that needs this dataset.
-        if published:
-            registry.put_dataset(key, info)
+                # Refuse the run: workers that sync the dataset from MinIO would
+                # otherwise start its tasks with no dataset, or fall back to
+                # whatever LANDSEER_DATA_PATH holds (e.g. the clean variant).
+                raise RuntimeError(
+                    f"Dataset {name}/{variant} could not be published to MinIO: {e}"
+                ) from e
+        registry.put_dataset(key, info)
         return info
 
 
