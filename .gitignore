@@ -47,3 +47,4 @@ landseer.*.db
 
 # Model weights
 *.pt
+containers/evals/adversarial/dds_runtime/*.pt

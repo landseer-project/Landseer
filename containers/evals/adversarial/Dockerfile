@@ -29,5 +29,6 @@ RUN pip install --no-cache-dir \
 
 COPY common/model_loader.py ./model_loader.py
 COPY adversarial/evaluate.py ./evaluate.py
+COPY adversarial/dds_runtime ./dds_runtime
 
 ENTRYPOINT ["python", "evaluate.py"]

@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
+
 """
 Watermark Verification Evaluator
 
-Evaluates watermark detection and extraction accuracy.
-Supports both:
-1. Weight-based watermarking (Uchida-style) - extracts watermark from Conv2D weights
-2. Trigger-based watermarking (WatermarkNN) - tests on trigger images
-
-This matches the original functionality from src_old/landseer_pipeline/evaluator/model_evaluator.py
+Supports:
+1. Weight-based Uchida watermarking -> bit_accuracy
+2. Trigger-based watermarking -> wmacc_badnets
 """
 
 import json
@@ -18,10 +16,8 @@ from glob import glob
 
 import numpy as np
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 from model_loader import load_torch_model_for_eval
-
 
 
 def find_uchida_style_conv2d(model):
@@ -45,31 +41,23 @@ def decode_watermark(conv_layer, wm_matrix, wm_bits, device):
             flat = mean_weight.view(1, -1)
 
             print(
-                f"Watermark decode shapes: "
-                f"weight={tuple(weight.shape)}, "
-                f"flat={tuple(flat.shape)}, "
-                f"wm_matrix={tuple(wm_matrix.shape)}, "
+                f"Watermark decode shapes: weight={tuple(weight.shape)}, "
+                f"flat={tuple(flat.shape)}, wm_matrix={tuple(wm_matrix.shape)}, "
                 f"wm_bits={tuple(wm_bits.shape)}"
             )
 
             if flat.shape[1] != wm_matrix.shape[0]:
                 raise ValueError(
-                    f"Watermark dimension mismatch: "
-                    f"layer produces {flat.shape[1]} features, "
-                    f"but wm_matrix expects {wm_matrix.shape[0]}"
+                    f"Watermark dimension mismatch: layer produces {flat.shape[1]} "
+                    f"features, but wm_matrix expects {wm_matrix.shape[0]}"
                 )
 
             projection = torch.sigmoid(flat @ wm_matrix)
             decoded_bits = (projection > 0.5).float()
             wm_bits = wm_bits.reshape_as(decoded_bits)
-
             accuracy = (decoded_bits == wm_bits).float().mean().item()
 
-            print(
-                f"Decoded {int(decoded_bits.sum().item())}/"
-                f"{decoded_bits.numel()} bits as 1"
-            )
-
+            print(f"Decoded {int(decoded_bits.sum().item())}/{decoded_bits.numel()} bits as 1")
             return accuracy, decoded_bits.cpu().numpy()
 
     except Exception as e:
@@ -78,51 +66,118 @@ def decode_watermark(conv_layer, wm_matrix, wm_bits, device):
 
 
 def evaluate_weight_based_watermark(model, wm_matrix_path, wm_bits_path, device):
-    """
-    Evaluate weight-based watermarking (Uchida-style).
-    """
     print("Evaluating weight-based watermarking...")
-    
-    # Load watermark matrix and bits
+    print(f"Watermark matrix: {wm_matrix_path}")
+    print(f"Watermark bits: {wm_bits_path}")
+
     wm_matrix = torch.tensor(np.load(wm_matrix_path), dtype=torch.float32).to(device)
     wm_bits = torch.tensor(np.load(wm_bits_path), dtype=torch.float32).to(device)
-    
-    # Find appropriate Conv2D layer
+
     layer_name, conv_layer = find_uchida_style_conv2d(model)
     if conv_layer is None:
-        print("No Conv2D layer found for watermark evaluation")
         return 0.0, None
-    
-    # Decode watermark
-    accuracy, decoded_bits = decode_watermark(conv_layer, wm_matrix, wm_bits, device)
+
+    accuracy, _ = decode_watermark(conv_layer, wm_matrix, wm_bits, device)
     print(f"Weight-based watermark decoding accuracy: {accuracy * 100:.2f}%")
-    
+
     return accuracy, {
         "method": "weight_based",
         "layer_name": layer_name,
-        "expected_bits": len(wm_bits.view(-1))
+        "expected_bits": len(wm_bits.view(-1)),
+        "wm_matrix": str(wm_matrix_path),
+        "wm_bits": str(wm_bits_path),
     }
 
 
-
-def evaluate_trigger_based_watermark(model, triggers_path, device):
+def resolve_watermark_artifacts(input_dir):
     """
-    Evaluate BadNets-style trigger watermark accuracy.
+    Resolve dataset-specific reference watermark artifacts.
 
-    Supported numpy formats:
-      CIFAR-10: (N,3,32,32), [0,1]
-      CelebA:   (N,3,64,64), [0,1]
+    Landseer mounts the required 'watermark' artifact directory at:
+        input/watermark/
+
+    Expected layout:
+        input/watermark/
+            cifar10/
+                wm_matrix.npy
+                wm_bits.npy
+                wm_images.npy
+                wm_labels.npy
+            celeba/
+                wm_matrix.npy
+                wm_bits.npy
+                wm_images.npy
+                wm_labels.npy
     """
+    artifact_dir = input_dir / "watermark"
+
+    dataset = os.environ.get("LANDSEER_DATASET", "").strip().lower()
+    variant = os.environ.get("LANDSEER_DATASET_VARIANT", "").strip().lower()
+
+    if dataset == "cifar10":
+        dataset_dir = artifact_dir / "cifar10"
+    elif dataset == "celeba":
+        dataset_dir = artifact_dir / "celeba"
+    else:
+        raise ValueError(
+            f"No watermark artifacts configured for dataset={dataset!r}, "
+            f"variant={variant!r}"
+        )
+
+    return {
+        "dataset": dataset,
+        "variant": variant,
+        "dataset_dir": dataset_dir,
+        "wm_matrix": dataset_dir / "wm_matrix.npy",
+        "wm_bits": dataset_dir / "wm_bits.npy",
+        "triggers": dataset_dir,
+    }
+
+
+def resolve_watermark_sources(input_dir):
+    artifacts = resolve_watermark_artifacts(input_dir)
+
+    # Uchida priority:
+    # 1. Upstream Uchida tool output
+    # 2. Dataset-specific reference artifacts
+    if (input_dir / "wm_matrix.npy").exists() and (input_dir / "wm_bits.npy").exists():
+        wm_matrix_path = input_dir / "wm_matrix.npy"
+        wm_bits_path = input_dir / "wm_bits.npy"
+        print("Using upstream Uchida wm_matrix.npy / wm_bits.npy")
+    else:
+        wm_matrix_path = artifacts["wm_matrix"]
+        wm_bits_path = artifacts["wm_bits"]
+        print(f"Using reference Uchida weights: {wm_matrix_path.parent}")
+
+    # Trigger priority:
+    # 1. Upstream trigger watermark tool output
+    # 2. Upstream watermark_triggers directory
+    # 3. Dataset-specific reference artifacts
+    if (input_dir / "wm_test_data.npy").exists() and (input_dir / "wm_test_labels.npy").exists():
+        triggers_path = input_dir
+        print("Using upstream BadNets wm_test_data.npy / wm_test_labels.npy")
+    elif (input_dir / "watermark_triggers").exists():
+        triggers_path = input_dir / "watermark_triggers"
+        print("Using upstream watermark_triggers directory")
+    else:
+        triggers_path = artifacts["triggers"]
+        print(f"Using reference trigger watermark: {triggers_path}")
+
+    return artifacts["dataset"], wm_matrix_path, wm_bits_path, triggers_path
+
+
+def evaluate_trigger_based_watermark(model, triggers_path, device, dataset_type):
+    """Evaluate trigger-based watermark accuracy."""
     from torchvision import transforms
 
     print(f"Evaluating trigger-based watermarking from: {triggers_path}")
+    print(f"LANDSEER_DATASET: {dataset_type}")
 
     trigger_images = None
     trigger_labels = None
     image_file = None
     label_file = None
 
-    # Numpy trigger files
     for img_name in ["wm_test_data.npy", "trigger_images.npy", "watermark_images.npy", "wm_images.npy"]:
         img_path = triggers_path / img_name
         if img_path.exists():
@@ -137,7 +192,6 @@ def evaluate_trigger_based_watermark(model, triggers_path, device):
             label_file = label_name
             break
 
-    # WatermarkNN text labels
     if trigger_labels is None:
         for labels_txt in ["labels.txt", "labels-cifar.txt"]:
             txt_path = triggers_path / labels_txt
@@ -146,7 +200,6 @@ def evaluate_trigger_based_watermark(model, triggers_path, device):
                 label_file = labels_txt
                 break
 
-    # WatermarkNN image-folder format
     if trigger_images is None:
         image_files = glob(str(triggers_path / "*.png")) + glob(str(triggers_path / "pics/*.png"))
 
@@ -154,19 +207,13 @@ def evaluate_trigger_based_watermark(model, triggers_path, device):
             try:
                 from PIL import Image
 
-                transform = transforms.Compose([
-                    transforms.Resize((32, 32)),
-                    transforms.ToTensor(),
-                ])
-
                 images = []
                 for img_file in sorted(image_files)[:len(trigger_labels)]:
                     img = Image.open(img_file).convert("RGB")
-                    images.append(transform(img).numpy())
+                    images.append(transforms.ToTensor()(img).numpy())
 
                 trigger_images = np.stack(images).astype(np.float32)
                 image_file = "PNG trigger images"
-
             except Exception as e:
                 print(f"Failed to load images from folder: {e}")
 
@@ -178,9 +225,11 @@ def evaluate_trigger_based_watermark(model, triggers_path, device):
         raise ValueError(f"Expected trigger images (N,3,H,W), got {trigger_images.shape}")
 
     if len(trigger_images) != len(trigger_labels):
-        raise ValueError(f"Trigger image/label count mismatch: {len(trigger_images)} vs {len(trigger_labels)}")
+        raise ValueError(
+            f"Trigger image/label count mismatch: "
+            f"{len(trigger_images)} vs {len(trigger_labels)}"
+        )
 
-    H, W = trigger_images.shape[2:]
     data_min = float(trigger_images.min())
     data_max = float(trigger_images.max())
 
@@ -192,33 +241,28 @@ def evaluate_trigger_based_watermark(model, triggers_path, device):
 
     if data_min < -1e-6 or data_max > 1.0001:
         raise ValueError(
-            f"Expected trigger images in [0,1], got range [{data_min:.3f},{data_max:.3f}]"
+            f"Expected trigger images in [0,1], "
+            f"got range [{data_min:.3f},{data_max:.3f}]"
         )
 
-    # Detect dataset from current Landseer data format and match test preprocessing.
-    if (H, W) == (64, 64):
-        dataset_type = "celeba"
+    # Dataset comes from Landseer, not image dimensions.
+    if dataset_type == "celeba":
         preprocess = transforms.Compose([
             transforms.Resize((32, 32)),
             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
         ])
-
-    elif (H, W) == (32, 32):
-        dataset_type = "cifar10"
+    elif dataset_type == "cifar10":
         preprocess = transforms.Normalize(
             (0.4914, 0.4822, 0.4465),
-            (0.2023, 0.1994, 0.2010)
+            (0.2023, 0.1994, 0.2010),
         )
-
     else:
-        raise ValueError(
-            f"Unsupported trigger format: shape={(H, W)}, range=[{data_min:.3f},{data_max:.3f}]. "
-            "Expected CIFAR-10 (32x32, [0,1]) or CelebA (64x64, [0,1])."
-        )
+        raise ValueError(f"Unsupported watermark dataset: {dataset_type!r}")
 
-    print(f"Detected trigger dataset: {dataset_type}")
-
-    dataset = TensorDataset(torch.tensor(trigger_images).float(), torch.tensor(trigger_labels).long())
+    dataset = TensorDataset(
+        torch.tensor(trigger_images).float(),
+        torch.tensor(trigger_labels).long()
+    )
     loader = DataLoader(dataset, batch_size=128, shuffle=False)
 
     model.eval()
@@ -229,8 +273,6 @@ def evaluate_trigger_based_watermark(model, triggers_path, device):
     with torch.no_grad():
         for data, targets in loader:
             data, targets = data.to(device), targets.to(device)
-
-            # Match deterministic test preprocessing used by the trainer.
             data = preprocess(data)
 
             outputs = model(data)
@@ -254,7 +296,7 @@ def evaluate_trigger_based_watermark(model, triggers_path, device):
         "trigger_source": str(triggers_path),
         "trigger_images": image_file,
         "trigger_labels": label_file,
-        "n_triggers": total
+        "n_triggers": total,
     }
 
 
@@ -263,179 +305,148 @@ def main():
     input_dir = workspace / "input"
     output_dir = workspace / "output"
     output_dir.mkdir(exist_ok=True, parents=True)
-    
-    config_path = input_dir / "config.json"
-    config = {}
-    if config_path.exists():
-        config = json.loads(config_path.read_text())
-    
-    device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # Legacy watermark key
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model_path = input_dir / "model.pt"
     watermark_key_path = input_dir / "watermark_key.json"
 
-    # Uchida weight source priority:
-    # 1. Upstream Uchida tool output
-    # 2. Upstream watermark_weights/
-    # 3. Baked-in reference weights
-    if (input_dir / "wm_matrix.npy").exists() and (input_dir / "wm_bits.npy").exists():
-        wm_matrix_path = input_dir / "wm_matrix.npy"
-        wm_bits_path = input_dir / "wm_bits.npy"
-        print("Using upstream Uchida wm_matrix.npy / wm_bits.npy")
-    elif (input_dir / "watermark_weights" / "wm_matrix.npy").exists() and (input_dir / "watermark_weights" / "wm_bits.npy").exists():
-        wm_matrix_path = input_dir / "watermark_weights" / "wm_matrix.npy"
-        wm_bits_path = input_dir / "watermark_weights" / "wm_bits.npy"
-        print("Using upstream watermark_weights directory")
-    else:
-        wm_matrix_path = Path("/app/watermark_weights/wm_matrix.npy")
-        wm_bits_path = Path("/app/watermark_weights/wm_bits.npy")
-        print("Using baked-in Uchida watermark weights")
-
-    # Trigger source priority:
-    # 1. Upstream BadNets wm_test_*
-    # 2. Upstream watermark_triggers/
-    # 3. Baked-in trigger set
-    if (input_dir / "wm_test_data.npy").exists() and (input_dir / "wm_test_labels.npy").exists():
-        triggers_path = input_dir
-        print("Using upstream BadNets wm_test_data.npy / wm_test_labels.npy")
-    elif (input_dir / "watermark_triggers").exists():
-        triggers_path = input_dir / "watermark_triggers"
-        print("Using upstream watermark_triggers directory")
-    else:
-        triggers_path = Path("/app/watermark_triggers")
-        print("Using baked-in watermark trigger set")
-
-    has_weight_based = wm_matrix_path.exists() and wm_bits_path.exists()
-
-    has_trigger_based = any([
-        (triggers_path / "wm_test_data.npy").exists() and (triggers_path / "wm_test_labels.npy").exists(),
-        (triggers_path / "wm_images.npy").exists() and (triggers_path / "wm_labels.npy").exists(),
-        (triggers_path / "trigger_images.npy").exists() and (triggers_path / "trigger_labels.npy").exists(),
-        (triggers_path / "watermark_images.npy").exists() and (triggers_path / "watermark_labels.npy").exists(),
-    ])
-
-    has_watermark_key = watermark_key_path.exists()
-    
-    if not (has_weight_based or has_trigger_based or has_watermark_key):
-        # Graceful skip - no watermarking data found
-        results = {
-            "evaluator": "watermark",
-            "success": True,
-            "skipped": True,
-            "skip_reason": "No watermark data found (watermark_key.json, wm_matrix.npy/wm_bits.npy, or watermark_triggers/)",
-            "metrics": {
-                "watermark_accuracy": None,
-                "bit_accuracy": None,
-                "detection_rate": None,
-                "wmacc_badnets": None,
-            }
-        }
-        (output_dir / "evaluation_results.json").write_text(json.dumps(results, indent=2))
-        print("Skipping: No watermark data found")
-        return
-    
-    # Load model
-    model_path = input_dir / "model.pt"
     if not model_path.exists():
         results = {
             "evaluator": "watermark",
             "success": False,
             "error": "model.pt not found",
-            "metrics": {}
+            "metrics": {},
         }
         (output_dir / "evaluation_results.json").write_text(json.dumps(results, indent=2))
         return
-    
+
     try:
+        dataset_type, wm_matrix_path, wm_bits_path, triggers_path = resolve_watermark_sources(input_dir)
+
+        print(f"Device: {device}")
+        print(f"LANDSEER_DATASET: {os.environ.get('LANDSEER_DATASET')}")
+        print(f"LANDSEER_DATASET_VARIANT: {os.environ.get('LANDSEER_DATASET_VARIANT')}")
+        print(f"Resolved wm_matrix: {wm_matrix_path}")
+        print(f"Resolved wm_bits: {wm_bits_path}")
+        print(f"Resolved triggers: {triggers_path}")
+
+        has_weight_based = wm_matrix_path.exists() and wm_bits_path.exists()
+
+        has_trigger_based = any([
+            (triggers_path / "wm_test_data.npy").exists() and (triggers_path / "wm_test_labels.npy").exists(),
+            (triggers_path / "wm_images.npy").exists() and (triggers_path / "wm_labels.npy").exists(),
+            (triggers_path / "trigger_images.npy").exists() and (triggers_path / "trigger_labels.npy").exists(),
+            (triggers_path / "watermark_images.npy").exists() and (triggers_path / "watermark_labels.npy").exists(),
+        ])
+
+        has_watermark_key = watermark_key_path.exists()
+
+        if not (has_weight_based or has_trigger_based or has_watermark_key):
+            results = {
+                "evaluator": "watermark",
+                "success": True,
+                "skipped": True,
+                "skip_reason": "No watermark artifacts found",
+                "metrics": {
+                    "watermark_accuracy": None,
+                    "bit_accuracy": None,
+                    "detection_rate": None,
+                    "wmacc_badnets": None,
+                },
+            }
+            (output_dir / "evaluation_results.json").write_text(json.dumps(results, indent=2))
+            print("Skipping: No watermark data found")
+            return
+
         model = load_torch_model_for_eval(model_path, input_dir, device)
+
+        weight_based_accuracy = None
+        trigger_based_accuracy = None
+        weight_info = None
+        trigger_info = None
+
+        if has_weight_based:
+            weight_based_accuracy, weight_info = evaluate_weight_based_watermark(
+                model, str(wm_matrix_path), str(wm_bits_path), device
+            )
+
+        if has_trigger_based:
+            trigger_based_accuracy, trigger_info = evaluate_trigger_based_watermark(
+                model, triggers_path, device, dataset_type
+            )
+
+        # Legacy watermark_key.json fallback only if no Uchida key exists.
+        if has_watermark_key and weight_based_accuracy is None:
+            try:
+                watermark_key = json.loads(watermark_key_path.read_text())
+                expected_watermark = watermark_key.get("watermark", [])
+
+                if expected_watermark:
+                    layer_name, conv_layer = find_uchida_style_conv2d(model)
+
+                    if conv_layer:
+                        weights = conv_layer.weight.data.cpu().numpy().flatten()
+                        watermark_length = len(expected_watermark)
+
+                        if len(weights) >= watermark_length:
+                            extracted = (weights[:watermark_length] > 0).astype(int)
+                            correct_bits = np.sum(extracted == np.array(expected_watermark))
+                            weight_based_accuracy = correct_bits / watermark_length
+                            weight_info = {
+                                "method": "weight_sign",
+                                "watermark_length": watermark_length,
+                                "layer_name": layer_name,
+                            }
+            except Exception as e:
+                print(f"Failed to parse watermark_key.json: {e}")
+
+        # Legacy/general watermark score.
+        if weight_based_accuracy is not None:
+            watermark_accuracy = weight_based_accuracy
+        elif trigger_based_accuracy is not None:
+            watermark_accuracy = trigger_based_accuracy
+        else:
+            watermark_accuracy = 0.0
+
+        detection_threshold = 0.7
+        detected = watermark_accuracy >= detection_threshold
+        detection_rate = 1.0 if detected else 0.0
+
+        metrics = {
+            "watermark_accuracy": float(watermark_accuracy),
+            "bit_accuracy": float(weight_based_accuracy) if weight_based_accuracy is not None else None,
+            "detection_rate": float(detection_rate),
+            "wmacc_badnets": float(trigger_based_accuracy) if trigger_based_accuracy is not None else None,
+        }
+
+        print(f"\nUchida bit accuracy: {weight_based_accuracy}")
+        print(f"Trigger watermark accuracy: {trigger_based_accuracy}")
+        print(f"Final watermark accuracy: {watermark_accuracy:.4f}")
+        print(f"Detection: {'YES' if detected else 'NO'}")
+
+        results = {
+            "evaluator": "watermark",
+            "success": True,
+            "skipped": False,
+            "metrics": metrics,
+            "parameters": {
+                "dataset": dataset_type,
+                "detection_threshold": detection_threshold,
+                "weight_based": weight_info,
+                "trigger_based": trigger_info,
+            },
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+        }
+
     except Exception as e:
         results = {
             "evaluator": "watermark",
             "success": False,
-            "error": f"Failed to load model: {e}",
-            "metrics": {}
+            "error": str(e),
+            "metrics": {},
         }
-        (output_dir / "evaluation_results.json").write_text(json.dumps(results, indent=2))
-        return
+        print(f"Watermark evaluation failed: {e}")
 
-    # Evaluate weight-based and trigger-based watermarks independently
-    weight_based_accuracy = None
-    trigger_based_accuracy = None
-    weight_info = None
-    trigger_info = None
-
-    if has_weight_based:
-        weight_based_accuracy, weight_info = evaluate_weight_based_watermark(
-            model, str(wm_matrix_path), str(wm_bits_path), device
-        )
-
-    if has_trigger_based:
-        trigger_based_accuracy, trigger_info = evaluate_trigger_based_watermark(
-            model, triggers_path, device
-        )
-
-    # Optional legacy watermark_key.json fallback only if no Uchida result exists
-    if has_watermark_key and weight_based_accuracy is None:
-        try:
-            watermark_key = json.loads(watermark_key_path.read_text())
-            expected_watermark = watermark_key.get("watermark", [])
-
-            if expected_watermark:
-                layer_name, conv_layer = find_uchida_style_conv2d(model)
-
-                if conv_layer:
-                    weights = conv_layer.weight.data.cpu().numpy().flatten()
-                    watermark_length = len(expected_watermark)
-
-                    if len(weights) >= watermark_length:
-                        extracted = (weights[:watermark_length] > 0).astype(int)
-                        correct_bits = np.sum(extracted == np.array(expected_watermark))
-                        weight_based_accuracy = correct_bits / watermark_length
-                        weight_info = {
-                            "method": "weight_sign",
-                            "watermark_length": watermark_length,
-                            "layer_name": layer_name
-                        }
-        except Exception as e:
-            print(f"Failed to parse watermark_key.json: {e}")
-
-    # Legacy/general score: prefer Uchida, otherwise trigger-based
-    if weight_based_accuracy is not None:
-        watermark_accuracy = weight_based_accuracy
-    elif trigger_based_accuracy is not None:
-        watermark_accuracy = trigger_based_accuracy
-    else:
-        watermark_accuracy = 0.0
-
-    detection_threshold = 0.7
-    detected = watermark_accuracy >= detection_threshold
-    detection_rate = 1.0 if detected else 0.0
-
-    metrics = {
-        "watermark_accuracy": float(watermark_accuracy),
-        "bit_accuracy": float(weight_based_accuracy) if weight_based_accuracy is not None else None,
-        "detection_rate": float(detection_rate),
-        "wmacc_badnets": float(trigger_based_accuracy) if trigger_based_accuracy is not None else None,
-    }
-
-    print(f"\nUchida bit accuracy: {weight_based_accuracy}")
-    print(f"Trigger watermark accuracy: {trigger_based_accuracy}")
-    print(f"Final watermark accuracy: {watermark_accuracy:.4f}")
-    print(f"Detection: {'YES' if detected else 'NO'}")
-    
-    results = {
-        "evaluator": "watermark",
-        "success": True,
-        "skipped": False,
-        "metrics": metrics,
-        "parameters": {
-            "detection_threshold": detection_threshold,
-            "weight_based": weight_info,
-            "trigger_based": trigger_info,
-        },
-        "timestamp": datetime.utcnow().isoformat() + "Z"
-    }
-    
     (output_dir / "evaluation_results.json").write_text(json.dumps(results, indent=2))
     print(f"Results saved to {output_dir / 'evaluation_results.json'}")
 

@@ -81,7 +81,7 @@ evaluators:
   fingerprinting:
     name: fingerprinting
     container:
-      image: ghcr.io/landseer-project/evals/fingerprinting:v3
+      image: ghcr.io/landseer-project/evals/fingerprinting:v4
       command: ""
     required_artifacts: 
       - fingerprinting 
@@ -129,9 +129,10 @@ evaluators:
   watermark:
     name: watermark
     container:
-      image: ghcr.io/landseer-project/evals/watermark:v4
+      image: ghcr.io/landseer-project/evals/watermark:v5
       command: ""
-    required_artifacts: []
+    required_artifacts:
+      - watermark
       # - watermark_key.json
     metrics:
       - watermark_accuracy
@@ -178,15 +179,16 @@ evaluators:
   privacy:
     name: privacy
     container:
-      image: ghcr.io/landseer-project/evals/privacy:v4
+      image: ghcr.io/landseer-project/evals/privacy:v5
       command: ""
     # Shadow models are built into the image (/app/celeba_shadows, identical to
     # /data/landseer/eval_artifacts/celeba_shadows); requiring a host copy made
     # privacy fail on every worker that was not set up by hand. They are CelebA
     # models, so privacy cannot evaluate other datasets.
-    required_artifacts: []
+    required_artifacts: 
+      - privacy
     applies_to:
-      datasets: [celeba]
+      datasets: [celeba, cifar10]
     metrics:
       - mia_auc
     defense_types:

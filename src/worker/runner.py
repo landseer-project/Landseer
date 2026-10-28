@@ -424,7 +424,7 @@ class DockerRunner:
         # process. The value never appears on the command line or in the log.
         if env:
             for key, value in _subprocess_env(env).items():
-                if key in {"JUDGE_API_KEY", "LANDSEER_DATASET", "LANDSEER_DATASET_VARIANT"}:
+                if key in {"JUDGE_API_KEY", "LANDSEER_DATASET", "LANDSEER_DATASET_VARIANT", "FINGERPRINTING_CALIBRATOR"}:
                     docker_cmd.extend(["-e", key])
                 else:
                     docker_cmd.extend(["-e", f"{key}={value}"])
@@ -1324,7 +1324,7 @@ class TaskRunner:
                 if judge_api_key:
                     task_env["JUDGE_API_KEY"] = judge_api_key
 
-            for key in ("LANDSEER_DATASET", "LANDSEER_DATASET_VARIANT"):
+            for key in ("LANDSEER_DATASET", "LANDSEER_DATASET_VARIANT", "FINGERPRINTING_CALIBRATOR"):
                 value = os.environ.get(key, "").strip()
                 if value:
                     task_env[key] = value

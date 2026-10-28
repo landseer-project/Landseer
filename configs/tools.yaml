@@ -214,6 +214,15 @@ tools:
       command: python3 main.py --scale 0.1 --epoch 200 --batch_size 64 --embed_dim 256
       runtime: null
 
+  in_watermarkinguchida_cifar10:
+    name: in-watermarkinguchida-cifar10
+    defense_stage: during_training
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/in_watermarkinguchida:v3
+      command: python3 main.py --scale 0.1
+      runtime: null
+
   # Free adversarial training stays in TensorFlow; the adapters convert the
   # pipeline's PyTorch model to Keras and the trained model back to model.pt.
   in_freeat:
@@ -314,14 +323,14 @@ tools:
       command: python3 main.py
       runtime: null
 
-  post_inference:
-    name: post_inference
-    defense_stage: post_training
-    is_baseline: false
-    container:
-      image: ghcr.io/landseer-project/post_inference:v1
-      command: python3 main.py
-      runtime: null
+  # post_inference:
+  #   name: post_inference
+  #   defense_stage: post_training
+  #   is_baseline: false
+  #   container:
+  #     image: ghcr.io/landseer-project/post_inference:v1
+  #     command: python3 main.py
+  #     runtime: null
 
   post_neuronprune:
     name: post_neuronprune
@@ -398,6 +407,17 @@ tools:
       image: ghcr.io/landseer-project/deploy_dataset_inference:v3
       command: python3 main.py
       runtime: null
+
+  deploy_dds:
+    name: deploy_dds
+    defense_stage: deployment
+    is_baseline: false
+    container:
+      image: ghcr.io/landseer-project/deploy_dds:v1
+      command: python3 main.py
+      runtime: null
+
+    
   
 
 

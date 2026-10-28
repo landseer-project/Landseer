@@ -121,7 +121,8 @@ def main() -> None:
         help="Host-mounted CelebA download root (CSV + img_align_celeba)",
     )
     parser.add_argument("--target-attribute", default="Smiling")
-    parser.add_argument("--image-size", type=int, default=64)
+    # parser.add_argument("--image-size", type=int, default=64)
+    parser.add_argument("--image-size", type=int, default=32)
     parser.add_argument("--test-size", type=float, default=0.2)
     parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument(
